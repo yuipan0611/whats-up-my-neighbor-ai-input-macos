@@ -318,6 +318,8 @@ Mac 在執行前與貼上後都會重新確認焦點。若 App、視窗或輸入
 
 ## 從原始碼建置
 
+雲端文件與變更準備流程見 [Codex Cloud 開發指南](docs/CLOUD_DEVELOPMENT.md)。
+
 需要安裝 Xcode Command Line Tools：
 
 ```bash
