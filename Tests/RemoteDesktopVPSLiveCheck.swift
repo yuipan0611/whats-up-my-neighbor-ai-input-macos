@@ -27,12 +27,16 @@ enum RemoteDesktopVPSLiveCheck {
     static func main() {
         var sshConfigPath: String?
         var holdSeconds = 20
+        var hostAlias = "127.0.0.1"
 
         var index = 1
         while index < CommandLine.arguments.count {
             let arg = CommandLine.arguments[index]
             if arg == "--ssh-config", index + 1 < CommandLine.arguments.count {
                 sshConfigPath = CommandLine.arguments[index + 1]
+                index += 2
+            } else if arg == "--alias", index + 1 < CommandLine.arguments.count {
+                hostAlias = CommandLine.arguments[index + 1]
                 index += 2
             } else if arg == "--hold", index + 1 < CommandLine.arguments.count {
                 if let val = Int(CommandLine.arguments[index + 1]) {
@@ -58,7 +62,7 @@ enum RemoteDesktopVPSLiveCheck {
         }
 
         do {
-            try controller.start(.linuxVPS(hostAlias: "127.0.0.1"))
+            try controller.start(.linuxVPS(hostAlias: hostAlias))
         } catch {
             print("start failed: \(error)")
             print("final state: \(controller.state)")

@@ -34,7 +34,7 @@ status: 進行中，只在本機分支；不 push、不 merge、不發布
 | T5a | 本機假 VNC 伺服器與螢幕共享 loopback 檢查工具；任務說明見 [tasks/T5a-loopback-check.md](tasks/T5a-loopback-check.md) | **Antigravity**（Gemini，`agy` CLI） | `scripts/fake-rfb-server.py`、`Tests/RemoteDesktopLiveCheck.swift`、`scripts/check-screen-sharing-loopback.sh` | R1 | 完成；R2 補 RFB 3.3 握手，Claude 修腳本並實測 |
 | T5b | VPS 路徑本機 sshd 端到端檢查；任務說明見 [tasks/T5b-vps-path-loopback.md](tasks/T5b-vps-path-loopback.md) | **Antigravity**（Gemini，`agy` CLI） | `scripts/check-vps-path-loopback.sh`、`Tests/RemoteDesktopVPSLiveCheck.swift` | R2 | 完成，實測結束碼 0 |
 | R3 | 15901 佔用檢查改成判斷有沒有程式在監聽，避免 TIME_WAIT 誤報；任務說明見 [tasks/R3-port-check-time-wait.md](tasks/R3-port-check-time-wait.md) | **Antigravity**（Gemini，`agy` CLI） | 核心、測試檔 | T5b | 完成，重現測試在舊實作下會失敗 |
-| T5 | 真機驗證（第二使用者先，VPS 等資料） | 使用者＋Claude | 驗證紀錄 `reports/REMOTE_DESKTOP_HANDOFF_<日期>.md` | T4、遠端設定完成 | 可由 agent 完成的部分已全部完成：UI 點擊、螢幕共享 loopback、VPS 路徑本機 sshd 模擬。只剩使用者才能做的：在密碼框輸入、選第二使用者的伺服器並建帳號、提供真實 VPS |
+| T5 | 真機驗證（第二使用者先，VPS 等資料） | 使用者＋Claude | 驗證紀錄 `reports/REMOTE_DESKTOP_HANDOFF_<日期>.md` | T4、遠端設定完成 | **VPS 完成（2026-10-21）**：真實 Hostinger VPS 端到端與預覽 App 都通過，見 `reports/REMOTE_DESKTOP_VPS_2026-10-21.md`。第二使用者仍待決定要用哪個伺服器 |
 
 ## 規則（所有 agent）
 
@@ -69,3 +69,5 @@ status: 進行中，只在本機分支；不 push、不 merge、不發布
 - 2026-10-20｜Claude｜T5 UI｜完成｜—｜使用者第二次授權預覽 App。選「本機第二使用者」→ 按接手控制 → 面板顯示成功文案，真實螢幕共享跳出 127.0.0.1:5901 密碼框 → 按結束接手 → 顯示結束文案；server.log 記到探測與 RFB 3.3 連入｜密碼框依安全規則未輸入，按了取消
 - 2026-10-20｜Gemini｜T5b｜完成｜新增 check-vps-path-loopback.sh、RemoteDesktopVPSLiveCheck.swift｜Claude 先用原型證實一般使用者權限可跑 sshd；第一次執行抓到 TIME_WAIT 誤報｜—
 - 2026-10-20｜Gemini｜R3、R3b｜完成｜SystemLocalPort.isFree 改用 connect；TIME_WAIT 重現測試照 Claude 原型的順序改寫｜33 情境通過；舊的 bind 實作在新測試下失敗；VPS 路徑模擬重跑結束碼 0，結束後 15901 立刻空出｜—
+- 2026-10-21｜Claude｜T5 VPS｜完成｜Tests/RemoteDesktopVPSLiveCheck.swift 加 `--alias`（預設不變）；新增 scripts/check-real-vps.sh、scripts/vps-bootstrap-ubuntu.sh；SETUP.md 補 2.8／2.9 與 tigervnc-tools 說明；PRD 第 9、10 節｜真實 Hostinger VPS：check-real-vps.sh 結束碼 0，使用者確認桌面、滑鼠、鍵盤；TigerVNC log 記探測為 Clean disconnection；預覽 App Linux VPS 接手／結束，15901 釋放｜SSH 收緊與 VNC 開機自動啟動待使用者以 root 執行（SETUP 2.9）；第二使用者伺服器仍待決定
+- 2026-10-21｜Claude｜T5c｜暫停｜—｜已由真實 VPS 取代。Gemini 的 `fake-rfb-server.py`、`check-screen-sharing-loopback.sh` 修改與 docker-vps 檔案保留在工作目錄，未提交｜要不要繼續做 Docker 版（例如當 CI 用的重現環境），之後再決定

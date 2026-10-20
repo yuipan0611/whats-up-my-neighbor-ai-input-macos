@@ -187,11 +187,11 @@ VPS 的本機埠用 15901，避免跟第二使用者的 5901 撞埠。網址只�
 **真機（需要使用者配合）**
 
 - [ ] 第二使用者裝好 Vine Server 後，按按鈕會開出螢幕共享，並看到該帳號的桌面。
-- [ ] VPS 依 SETUP.md 設定後，透過別名接手成功。
+- [x] VPS 依 SETUP.md 設定後，透過別名接手成功（2026-10-21，Hostinger Ubuntu 26.04；見 `reports/REMOTE_DESKTOP_VPS_2026-10-21.md`）。
 
 ## 10. 未確認事項
 
-- **螢幕共享 App 連同一台 Mac 的 loopback：已部分確認（2026-10-20 實測）。** 以本機假 RFB 伺服器測試：螢幕共享會連進 127.0.0.1:5901，使用 RFB 3.3，即使伺服器選 None 仍會跳出密碼對話框。這表示 loopback 沒有被擋。仍待確認的有兩件事：登入後的畫面傳輸，以及真正的 Vine Server 在另一個帳號裡是否可用。另外，用本機 sshd 模擬 VPS 時，SSH 轉送這條路也已端到端走通。見 `reports/REMOTE_DESKTOP_HANDOFF_2026-10-20.md`。
+- **螢幕共享 App 連同一台 Mac 的 loopback：已部分確認（2026-10-20 實測）。** 以本機假 RFB 伺服器測試：螢幕共享會連進 127.0.0.1:5901，使用 RFB 3.3，即使伺服器選 None 仍會跳出密碼對話框。這表示 loopback 沒有被擋。登入後的畫面傳輸已在 2026-10-21 由真實 VPS 確認：使用者看到 XFCE 桌面，滑鼠鍵盤可用，伺服器 log 記到 42 個畫面區塊。仍待確認的只剩真正的 Vine Server 在另一個帳號裡是否可用。另外，用本機 sshd 模擬 VPS 時，SSH 轉送這條路也已端到端走通。見 `reports/REMOTE_DESKTOP_HANDOFF_2026-10-20.md`。
   - 如果被擋：加入 TigerVNC Viewer 當備援（cask 名稱為 `tigervnc`，2026-10-20 查 Homebrew API；舊名 `tigervnc-viewer` 已查無），bundle ID 以安裝後的 Info.plist 為準。
 - **待使用者決定：第二使用者要用哪一個 VNC 伺服器。** Homebrew 的 `vine-server` 自 2026-09-01 起停用，原因是 `fails_gatekeeper_check`，`brew install` 會失敗。可選的做法有三種：
   - 手動下載並繞過 Gatekeeper。風險最高，因為它還要拿到螢幕錄製與輔助使用權限。
@@ -199,8 +199,8 @@ VPS 的本機埠用 15901，避免跟第二使用者的 5901 撞埠。網址只�
   - 先只用 VPS。
 
   App 端不需要修改：任何在 127.0.0.1:5901 回應 RFB 的伺服器都能用。詳見 [SETUP.md](SETUP.md) 第 3.3 節。
-- **macOS 螢幕共享與 TigerVNC 伺服器的相容性：** 需要使用 `-SecurityTypes VncAuth`；由 SETUP.md 查證官方依據。
-- 探測讀完開頭訊息就斷線，是否會被某些伺服器記為失敗的認證，真機時要確認。
+- **macOS 螢幕共享與 TigerVNC 伺服器的相容性：已確認（2026-10-21）。** Ubuntu 26.04 的 TigerVNC 以 `-SecurityTypes VncAuth` 啟動，螢幕共享走 RFB 3.3，密碼登入後可正常操作。
+- 探測讀完開頭訊息就斷線：TigerVNC 記為 `Clean disconnection`，沒有認證失敗（2026-10-21 確認）。Vine Server 仍未確認。
 
 ## 11. 後續（不在本版）
 

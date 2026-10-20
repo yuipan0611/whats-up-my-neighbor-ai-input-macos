@@ -25,8 +25,10 @@
 
 ```bash
 sudo apt update
-sudo apt install -y tigervnc-standalone-server xfce4 xfce4-goodies
+sudo apt install -y tigervnc-standalone-server tigervnc-tools xfce4 xfce4-goodies
 ```
+
+> `vncpasswd` 在 Debian 12 屬於 `tigervnc-tools` 套件。`tigervnc-standalone-server` 只把它列為 Recommends，如果 apt 設定了不安裝 recommends，就會出現 `vncpasswd: command not found`，所以上面明確列出來。2026-10-20 已在 Debian bookworm 容器中實測。
 
 ### 2.2 設定 VNC 密碼
 以執行分身的使用者身分執行：
@@ -87,6 +89,50 @@ Host <your-vps-alias>
 ```
 
 App 面板在選擇「Linux VPS」時，只需輸入此別名 `<your-vps-alias>`。
+
+### 2.8 Ubuntu 26.04 實測與一次性設定腳本（2026-10-21）
+
+在 Hostinger KVM 2（Ubuntu 26.04 LTS）上照本節實際設定，並以真實螢幕共享端到端通過，紀錄見 `reports/REMOTE_DESKTOP_VPS_2026-10-21.md`。
+
+- `scripts/vps-bootstrap-ubuntu.sh`：在全新 VPS 上以 root 執行一次。它會：
+  - 建立**無 sudo**、只能用指定金鑰登入的 `neighbor` 帳號。
+  - 安裝 2.1 節的套件，外加 `dbus-x11`。
+  - 寫入 2.3 節的 xstartup。
+  - 啟用 ufw，只開 22。
+  - 印出主機金鑰指紋。
+  
+  腳本裡的 `PUBKEY` 換成自己的公鑰。從 Mac 執行時，首次連線的指紋要先在服務商的 Web console 核對：
+  ```bash
+  ssh root@<vps-ip> 'bash -s' < scripts/vps-bootstrap-ubuntu.sh
+  ```
+- 2.1 節的套件名稱在 Ubuntu 26.04 都存在。
+- Ubuntu 26.04 的 `vncpasswd` 把密碼檔寫在 `~/.config/tigervnc/passwd`，不是 `~/.vnc/passwd`；`vncserver` 會自動找到它。log 仍在 `~/.vnc/<hostname>:1.log`。
+- 預設解析度是 1920x1200。要改的話，啟動時加 `-geometry 1440x900`。
+- 設定完成後，在 Mac 執行 `CHECK_WAIT=120 ./scripts/check-real-vps.sh`，會依序做三件事：
+  1. 前置檢查：金鑰登入、5901 只監聽在 loopback。
+  2. 開通道並打開螢幕共享。
+  3. 結束後確認 15901 已釋放。
+
+### 2.9 收緊 SSH 與開機自動啟動 VNC（root，在 2.8 驗證通過之後）
+
+一定要先確認 `ssh <alias>` 能用金鑰登入，而且服務商的 Web console 可以救援。在 Web console 以 root 執行：
+
+```bash
+printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\n' > /etc/ssh/sshd_config.d/10-neighbor-hardening.conf
+sshd -t && systemctl reload ssh
+```
+
+用 Mac 確認：`ssh -o PreferredAuthentications=none root@<vps-ip>` 的錯誤訊息應該只剩 `(publickey)`。
+
+開機自動啟動 VNC，要先停掉手動啟動的那一個：
+
+```bash
+su - neighbor -c 'vncserver -kill :1'
+echo ':1=neighbor' >> /etc/tigervnc/vncserver.users
+systemctl enable --now tigervncserver@:1
+```
+
+`-localhost` 與 `SecurityTypes` 改寫在 `/etc/tigervnc/vncserver-config-defaults`，或 neighbor 的 `~/.config/tigervnc/config`，各寫一行：`localhost=yes`、`SecurityTypes=VncAuth`。啟動後一樣用 2.6 節自我檢查。這段 systemd 設定**尚未實測**。
 
 ---
 
@@ -184,5 +230,5 @@ App 端不受影響。只要 `127.0.0.1:5901` 上有任何回應 RFB 的 VNC 伺
 
 1. **macOS「螢幕共享」連至本機 loopback（第二使用者）的相容性 [部分確認]**：2026-10-20 用 `scripts/check-screen-sharing-loopback.sh` 和本機假 RFB 伺服器實測，螢幕共享會連進 `127.0.0.1:5901`，並跳出密碼對話框，所以 loopback 沒有被擋。登入後的畫面傳輸，以及真正的 Vine Server 是否可用，仍待驗證。原本的說明如下：
    macOS 內建螢幕共享通常會拒絕連線至自己的 loopback（連向同一使用者）。連線至同一台 Mac 另一個使用者帳號監聽的 Vine Server（`127.0.0.1:5901`）是否會被 macOS 系統機制攔截，目前尚未在實機上確認。若被攔截，備用方案為安裝第三方檢視器（Homebrew cask `tigervnc`）。
-2. **RFB 探測中斷對伺服器認證計數的影響 [未確認]**：
-   App 的探測機制在讀取前 12 位元組（`RFB 003.00x\n`）後即主動關閉 TCP 連線。某些嚴格的 VNC 伺服器是否會將此未完成握手記為連線異常或認證失敗，有待真機測試確認。
+2. **RFB 探測中斷對伺服器認證計數的影響 [TigerVNC 已確認]**：
+   App 的探測機制在讀取前 12 位元組（`RFB 003.00x\n`）後即主動關閉 TCP 連線。2026-10-21 在 Ubuntu 26.04 的 TigerVNC 實測，log 記為 `Closing ...: Clean disconnection`，沒有認證失敗字樣。其他 VNC 伺服器（例如 Vine Server）仍未確認。

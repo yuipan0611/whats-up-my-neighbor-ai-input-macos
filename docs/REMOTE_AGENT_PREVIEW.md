@@ -62,7 +62,10 @@
 - 預覽 App 的 UI 點擊已實際操作（使用者授權）：按鈕、狀態文字、「結束接手」都符合 PRD。
 - `scripts/check-vps-path-loopback.sh`：用本機 sshd 模擬 VPS，SSH 轉送這條路端到端通過。這次執行也抓到並修好了 TIME_WAIT 誤報「15901 被佔用」的 bug。
 
+- **真實 VPS 端到端（2026-10-21）**：Hostinger Ubuntu 26.04＋TigerVNC。
+  - `scripts/check-real-vps.sh` 結束碼 0：使用者在螢幕共享輸入 VNC 密碼，看到 XFCE 桌面，滑鼠與鍵盤可用；stop 後 15901 已釋放。
+  - 預覽 App 選「Linux VPS」並輸入 `neighbor-vps` 之後：按接手控制，顯示「已開啟螢幕共享」；按結束接手，顯示「SSH 通道已關閉」，15901 也已釋放。
+  - 紀錄見 [reports/REMOTE_DESKTOP_VPS_2026-10-21.md](../reports/REMOTE_DESKTOP_VPS_2026-10-21.md)。
+
 **尚未驗證**
-- 真實 VNC 伺服器、螢幕共享實際開啟、VPS 端到端。
-- 登入後的畫面傳輸：需要有人在密碼框輸入。
 - 真正的 Vine Server：Homebrew cask 已停用，待使用者決定（見 PRD 第 10 節）。
