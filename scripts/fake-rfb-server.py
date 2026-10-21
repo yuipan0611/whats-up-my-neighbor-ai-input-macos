@@ -99,7 +99,7 @@ def render_frame_pixels(w, h, pf):
     return top_pixels + bottom_pixels
 
 
-def handle_client(conn, addr, args, logger, deadline):
+def handle_client(conn, addr, args, logger, deadline, stats=None):
     pixel_format = {
         "bpp": 32,
         "depth": 24,
@@ -247,6 +247,8 @@ def handle_client(conn, addr, args, logger, deadline):
             rect_header = struct.pack(">HHHHi", 0, 0, 640, 400, 0)
             conn.sendall(fb_header + rect_header + pixels)
             frame_count += 1
+            if stats is not None:
+                stats["frames_sent"] = frame_count
             logger.log(f"frame {frame_count} sent")
 
         elif msg_type == 4:
@@ -312,8 +314,9 @@ def main():
                 continue
 
             logger.log(f"connection accepted from {addr[0]}:{addr[1]}")
+            stats = {"frames_sent": 0}
             try:
-                res = handle_client(conn, addr, args, logger, deadline)
+                res = handle_client(conn, addr, args, logger, deadline, stats)
                 conn.close()
                 if res == "client_done":
                     logger.log("server exiting normally (client session ended)")
@@ -323,14 +326,18 @@ def main():
                 elif res == "probe_done":
                     continue
             except (ConnectionResetError, BrokenPipeError):
-                logger.log("client disconnected")
                 try:
                     conn.close()
                 except Exception:
                     pass
-                server_sock.close()
-                logger.close()
-                sys.exit(0)
+                if stats["frames_sent"] > 0:
+                    logger.log("client disconnected")
+                    server_sock.close()
+                    logger.close()
+                    sys.exit(0)
+                else:
+                    logger.log("client disconnected before any frame; still listening")
+                    continue
             except Exception as e:
                 logger.log(f"error handling client: {e}")
                 try:

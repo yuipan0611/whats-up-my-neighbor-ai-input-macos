@@ -35,7 +35,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 rm -f "$LOG_FILE"
-python3 "$ROOT/scripts/fake-rfb-server.py" --port 5901 --log "$LOG_FILE" --timeout $(( CHECK_WAIT + 30 )) &
+python3 "$ROOT/scripts/fake-rfb-server.py" --port 5901 --log "$LOG_FILE" --timeout $(( CHECK_WAIT + 30 )) --security "${CHECK_SECURITY:-vncauth}" &
 SERVER_PID=$!
 
 SERVER_READY=0
