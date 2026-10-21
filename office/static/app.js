@@ -25,6 +25,14 @@ function renderList() {
     b.addEventListener('click',()=>{selected=task.id;lastDetail='';renderList();refreshDetail().catch(e=>message(e.message,true));}); $('task-list').append(b);
   }
 }
+let liveState=null;
+function tickLive(){
+  if(!liveState||!liveState.pulse.isConnected)return;
+  const seconds=Math.max(0,Math.round((Date.now()-liveState.lastAt)/1000));
+  liveState.pulse.textContent=seconds>45?`已 ${seconds} 秒沒有收到 VPS 的消息，可能是連線中斷或服務停住。`:`VPS ${seconds} 秒前有回報，仍在工作。`;
+  liveState.pulse.className='live-pulse'+(seconds>45?' warn':'');
+}
+setInterval(tickLive,1000);
 async function refreshDetail() {
   if(!selected)return;
   const id=selected, task=await api('/api/tasks/'+id); if(id!==selected)return;
@@ -39,7 +47,28 @@ async function refreshDetail() {
     const b=node('button','停止這件任務','secondary');b.type='button';b.onclick=async()=>{try{await api('/api/tasks/'+id+'/cancel',{});await refresh();}catch(e){message(e.message,true);}};box.append(b);
   }
   const continuation=node('button','接續這件工作','secondary');continuation.type='button';continuation.onclick=()=>{parentId=id;$('parent-context').textContent='將附上這件工作的交接：'+task.prompt.slice(0,60);$('parent-context').hidden=false;$('clear-parent').hidden=false;$('executor').value='codex';privacy();$('prompt').focus();$('command-form').scrollIntoView({behavior:'smooth'});};box.append(continuation);
-  const events=node('ol',undefined,'events');for(const e of task.events)events.append(node('li',date(e.at)+' · '+e.message));box.append(events);
+  const active=['queued','planning','running','saving'].includes(task.status);
+  const noteLabels={thinking:'思考',message:'回報',tool:'工具'};
+  const isPulse=e=>e.status==='running'&&/^Codex (處理中：|正在處理，已等待)/.test(e.message);
+  const notes=task.events.filter(e=>noteLabels[e.status]);
+  if(active){
+    const last=notes[notes.length-1];
+    const live=node('div',undefined,'live'+(/可能卡住/.test(task.stage)?' stalled':''));
+    live.append(node('strong',notes.length?`已做 ${notes.length} 個步驟`:'還沒有步驟回報'));
+    if(last)live.append(node('p','最新：'+last.message.split('\n')[0].slice(0,120)));
+    const pulse=node('p','','live-pulse');live.append(pulse);box.append(live);
+    const latest=task.events[task.events.length-1];liveState={pulse,lastAt:latest?Date.parse(latest.at):Date.now()};tickLive();
+  } else liveState=null;
+  const events=node('ol',undefined,'events');let step=0,previous='';
+  for(const e of task.events){
+    const label=noteLabels[e.status];
+    if(!label&&(isPulse(e)||e.message===previous))continue;
+    const li=node('li');
+    if(label){step+=1;li.className='note '+e.status;li.append(node('span',`步驟 ${step} · ${label}`,'note-label'),node('span',date(e.at),'note-time'),node('div',e.message,'note-text'));previous='';}
+    else{li.textContent=date(e.at)+' · '+e.message;previous=e.message;}
+    events.append(li);
+  }
+  box.append(events);if(active)events.scrollTop=events.scrollHeight;
   if(task.result!==null) {
     box.append(node('h3',task.status==='needs_external'?'交接單':'保存的內容','result-title'),node('pre',task.result));
     const a=node('a','下載 Markdown');a.href='/api/tasks/'+id+'/download';a.setAttribute('download',task.status==='needs_external'?'brief.md':'result.md');box.append(a);

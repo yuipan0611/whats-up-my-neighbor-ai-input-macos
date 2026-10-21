@@ -18,7 +18,7 @@ def uid():
 class Agent:
     model = 'synthetic-agent'
     def __init__(self): self.calls = []
-    def run(self, task, check, progress):
+    def run(self, task, check, progress, note=None):
         check(); self.calls.append(task); progress('合成測試事件')
         return {'kind': 'completed', 'content': '外部測試成果', 'next_step': '人工核對'}, {'provider': 'fixture'}
     def health(self): return {'name': 'fixture', 'authenticated': True, 'installed': True}
@@ -84,7 +84,7 @@ class PersistenceV2(unittest.TestCase):
         self.assertEqual(self.store.get(first['id'])['status'], 'completed')
         second = office.command({'id': uid(), 'prompt': '第二件'})['task']
         claim = self.store.claim()
-        office.agent.run = lambda task, check, progress: (self.store.cancel(task['id']), check())
+        office.agent.run = lambda task, check, progress, note=None: (self.store.cancel(task['id']), check())
         with self.assertRaises(app.Cancelled): office.execute(claim)
         self.assertFalse((self.root/'tasks'/second['id']).exists())
     def test_missing_login_keeps_task_without_fabricated_result(self):
