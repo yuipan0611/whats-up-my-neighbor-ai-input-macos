@@ -1,0 +1,41 @@
+{
+  "source_sha256": {
+    "app/office.py": "ffaa3db1db61778c32c8b8d4f16ee73f53bfcdbc06cf502ca65b2b438479048b",
+    "app/static/ARTWORK.md": "7c9b6c839ce816573d9c8800b7c284f6298b2a8561a68fdedb145b7d8c6bf46a",
+    "app/static/cat.svg": "d11226b2103f5358e5cdd464cfea03d4041df190e5935147369df1dc70e613ee",
+    "app/static/style.css": "d409312f8f0e3443b2967fb1d1d0a2097f424f4ab0eded8a2720849df8412bbd",
+    "app/static/app.js": "a0b85ed0da5094640a724f53961dd3af442f70e2941370ff875ea931e128825a",
+    "app/static/index.html": "b048ee00e9a51d8e3e3a7cf38fccf4abac15e9e7dab5b00d7c10801fe12dcfa1",
+    "services/neighbor-office.service": "dc8c304a565876bb5b6e8bfc472f9d9eaa7f5c1e761d37802d39a44d6b45e107",
+    "services/neighbor-ollama.service": "055cf9c3eb08ae8560e8f970286ec4abe22b4706041ad1012dc919abfca348ad"
+  },
+  "health": {
+    "service": "neighbor-office",
+    "version": "0.2.0",
+    "model": {
+      "ready": false,
+      "name": "gemma3:4b",
+      "digest": null
+    },
+    "provider": {
+      "name": "Codex",
+      "installed": true,
+      "authenticated": true,
+      "tool_host_installed": true,
+      "last_success": "2026-10-21T12:59:21+00:00"
+    },
+    "paused": false,
+    "external_connected": true,
+    "worker_running": true
+  },
+  "at": "2026-10-21T13:04:10.252607+00:00",
+  "git_head": "cb60121c6319ee6806f650b6438c0ea663c77bef",
+  "native_bundle_id": "tw.panh.NeighborOfficePreview",
+  "native_signing": "ad-hoc verification passed",
+  "native_binary_sha256": "24a69bb026909d1bbba4f370cdbf2243fbb235de9c97826f4421b4bbe920ac7a",
+  "native_sources": {
+    "Previews/RemoteAgent/OfficePreviewMain.swift": "56bcaa9c4e29afb046b241f20e2c43ddced9096836701861227f345b569c38e5",
+    "Previews/RemoteAgent/OfficePanelView.swift": "7495d01a0c8b3ee487970f95d54ad90197ff60da8b67c812f3e0532a1c788a8f"
+  },
+  "source_matches_vps": true
+}

@@ -1,0 +1,32 @@
+ActiveState=active
+MainPID=35145
+MemoryCurrent=18063360
+ActiveState=active
+MemoryCurrent=5675155456
+MemoryPeak=5767168000
+low 0
+high 0
+max 4872
+oom 0
+oom_kill 0
+oom_group_kill 0
+sock_throttled 0
+{"models":[{"name":"gemma3:4b","model":"gemma3:4b","size":3053956627,"digest":"68ceab7e468a31c988b44d5a4984a0e21f58c4f7158c6ce29c1804babac38df7","details":{"parent_model":"","format":"gguf","family":"gemma3","families":["gemma3","clip"],"parameter_size":"3.9B","quantization_level":"Q4_K_M"},"expires_at":"2026-10-21T11:25:22.08076985Z","size_vram":0,"context_length":8192,"runner":"llamacpp"}]}               total        used        free      shared  buff/cache   available
+Mem:           7.7Gi       5.0Gi       415Mi        26Mi       2.6Gi       2.7Gi
+Swap:             0B          0B          0B
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sda1        96G  9.1G   87G  10% /
+State  Recv-Q Send-Q Local Address:Port  Peer Address:Port
+LISTEN 0      4096   127.0.0.53%lo:53         0.0.0.0:*   
+LISTEN 0      5          127.0.0.1:5901       0.0.0.0:*   
+LISTEN 0      4096      127.0.0.54:53         0.0.0.0:*   
+LISTEN 0      5          127.0.0.1:8421       0.0.0.0:*   
+LISTEN 0      512        127.0.0.1:44951      0.0.0.0:*   
+LISTEN 0      4096       127.0.0.1:65529      0.0.0.0:*   
+LISTEN 0      4096       127.0.0.1:11434      0.0.0.0:*   
+LISTEN 0      4096         0.0.0.0:22         0.0.0.0:*   
+LISTEN 0      5              [::1]:5901          [::]:*   
+LISTEN 0      4096            [::]:22            [::]:*   
+Linger=yes
+enabled
+enabled

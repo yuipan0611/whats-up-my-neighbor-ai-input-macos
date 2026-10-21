@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>貓咪辦公室</title><link rel="stylesheet" href="/style.css"><script defer src="/app.js"></script></head>
+<body><main>
+<header><div><p class="eyebrow">NEIGHBOR · VPS</p><h1>貓咪辦公室 <img class="mascot" src="/cat.svg" alt="YUI Neko 黑貓" width="64" height="64"></h1><p>交代一件事，貓咪會把進度和成果留在這裡。</p></div><span id="connection" role="status">正在連線…</span></header>
+<nav aria-label="辦公室功能"><button id="show-work" class="secondary" type="button" aria-pressed="true">工作與交接</button><button id="show-life" class="secondary" type="button" aria-pressed="false">生活紀錄</button></nav>
+<div id="work-page">
+<section class="compose" aria-labelledby="compose-title"><h2 id="compose-title">今天交給貓咪什麼事？</h2>
+<form id="command-form"><label for="prompt">用自己的話交代</label><textarea id="prompt" rows="5" maxlength="5000" placeholder="例如：幫我把這份筆記整理成三個重點，保留日期與待辦。" required></textarea>
+<p id="parent-context" class="hint" hidden></p><button id="clear-parent" type="button" class="secondary" hidden>取消接續</button>
+<div class="source-row"><label for="executor">交給誰處理</label><select id="executor"><option value="codex">Codex · 外部 Agent</option><option value="gemma">Gemma · VPS 本機（選配）</option></select></div>
+<div class="source-row"><label for="source">來源文字檔</label><select id="source"><option value="">直接處理上面貼的內容</option></select><label class="upload-label" for="upload">放入文字檔</label><input id="upload" type="file" accept=".txt,.md,text/plain,text/markdown"></div>
+<div class="actions"><button id="submit" type="submit">交給貓咪</button><button id="pause" type="button" class="secondary">先停一下</button><button id="resume" type="button" class="secondary">繼續工作</button></div>
+<details><summary>選取生活紀錄供這次工作使用 <span id="context-count"></span></summary><div id="journal-context"></div></details>
+<p id="privacy-hint" class="hint">交辦、選定來源與選取的交接／生活紀錄會交給 OpenAI 處理。其他生活紀錄不會自動附加。</p>
+</form><p id="message" role="status" aria-live="polite"></p></section>
+<div class="work"><section class="tasks" aria-labelledby="tasks-title"><div class="section-title"><h2 id="tasks-title">交辦紀錄</h2><span id="mode"></span></div><div id="task-list"><p class="hint">還沒有交辦，從一小段文字開始。</p></div></section>
+<section class="detail" aria-labelledby="detail-title"><h2 id="detail-title">進度與成果</h2><div id="task-detail"><p class="hint">選一件任務，查看貓咪做到哪裡。</p></div>
+<details id="handoff-area" hidden><summary>工作交接</summary><pre id="handoff-text"></pre><a id="handoff-download">下載交接 Markdown</a>
+<form id="handoff-form"><label for="handoff-note">交接補充</label><textarea id="handoff-note" rows="3" maxlength="6000" placeholder="已確認什麼、目前卡在哪裡？"></textarea><label for="next-step">下一步</label><textarea id="next-step" rows="2" maxlength="6000" placeholder="下次從哪裡繼續？"></textarea><button type="submit">保存交接</button><p id="handoff-message" role="status"></p></form></details>
+</section></div></div>
+<section id="life-page" hidden aria-labelledby="life-title"><h2 id="life-title">生活紀錄</h2><p class="hint">先留下原話，不經模型處理。保存在 VPS，可選取後交給 Agent 整理。</p>
+<form id="journal-form"><label for="journal-day">日期</label><input id="journal-day" type="date" required><label for="journal-text">想記下什麼？</label><textarea id="journal-text" rows="6" maxlength="12000" placeholder="今天發生的事、想法，或下次想接著聊的內容。" required></textarea><div class="actions"><button id="journal-save" type="submit">保存生活紀錄</button><a href="/api/journal/download" download="journal.md">匯出最近 200 筆 Markdown</a></div><p id="journal-message" role="status"></p></form><div id="journal-list"></div></section>
+<footer><span id="model">正在確認 Agent 狀態…</span><span>關掉面板後，VPS 仍會處理已交辦的工作。文字與成果保存在 VPS。</span></footer>
+</main></body></html>

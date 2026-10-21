@@ -1,0 +1,23 @@
+[Unit]
+Description=Neighbor Office private CPU model
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/opt/neighbor-ollama/bin/ollama serve
+Environment=OLLAMA_HOST=127.0.0.1:11434
+Environment=OLLAMA_MODELS=%h/neighbor-office/runtime/models
+Environment=OLLAMA_NUM_PARALLEL=1
+Environment=OLLAMA_MAX_LOADED_MODELS=1
+Environment=OLLAMA_CONTEXT_LENGTH=8192
+Environment=OLLAMA_NO_CLOUD=1
+Environment=OLLAMA_KEEP_ALIVE=10m
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+MemoryMax=5500M
+CPUQuota=180%
+
+[Install]
+WantedBy=default.target

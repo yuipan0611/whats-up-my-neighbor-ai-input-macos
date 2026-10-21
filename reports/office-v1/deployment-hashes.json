@@ -1,0 +1,8 @@
+{
+  "office.py": "1ef98f5697bf140c7a7b7ba143f4f1fedf8f79dcdd0f1823944f64732497b0ee",
+  "static/index.html": "9685dcad071384a7ca9f67597e14653397db6004f406c9bb61bc60ab8d4fac70",
+  "static/app.js": "ca06419e6af47bca242922740f72bf668e428d50172dc833319988d23fc859a5",
+  "static/style.css": "c78fb2c80cee6a82f1d8ddba2ca4035768e5fca299d213ba8e64aff78b322aec",
+  "static/cat.svg": "d11226b2103f5358e5cdd464cfea03d4041df190e5935147369df1dc70e613ee",
+  "tests/test_office.py": "204dd172894af255cba2e1661084beebdd5c95836c5c49610ad6f91f0a645f82"
+}

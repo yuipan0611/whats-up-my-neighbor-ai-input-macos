@@ -1,0 +1,109 @@
+{
+  "id": "920e2c06-288c-4af1-a75a-570d1e9d1019",
+  "prompt": "幫我把下面這段整理成三個待辦，保留負責人和日期：\n小林10月25日交需求初稿。小陳10月26日完成測試。10月27日兩人一起確認結果。",
+  "source": "",
+  "status": "completed",
+  "stage": "已完成，成果已保存到 VPS。",
+  "title": "幫我把下面這段整理成三個待辦，保留負責人和日期：\n小林10月25日交需求初稿。小陳10月26日完成測",
+  "created": "2026-10-21T11:14:52+00:00",
+  "updated": "2026-10-21T11:15:22+00:00",
+  "plan": "{\"action\": \"summarize\", \"question\": \"整理成三個待辦事項，保留負責人和日期：小林10月25日交需求初稿。小陳10月26日完成測試。10月27日兩人一起確認結果。\"}",
+  "result": "## 待辦事項清單\n\n*   **小林** - 10月25日：提交需求初稿。\n*   **小陳** - 10月26日：完成測試。\n*   **兩人** - 10月27日：確認結果。",
+  "artifact": "tasks/920e2c06-288c-4af1-a75a-570d1e9d1019/result.md",
+  "metrics": "{\"model\": {\"ready\": true, \"name\": \"gemma3:4b\", \"digest\": \"68ceab7e468a31c988b44d5a4984a0e21f58c4f7158c6ce29c1804babac38df7\"}, \"planning\": {\"total_duration\": 16688678497, \"load_duration\": 1074315, \"prompt_eval_count\": 337, \"prompt_eval_duration\": 10138648000, \"eval_count\": 60, \"eval_duration\": 6542597000, \"done_reason\": \"stop\", \"elapsed_seconds\": 16.692}, \"generation\": {\"total_duration\": 12410921916, \"load_duration\": 1530851, \"prompt_eval_count\": 215, \"prompt_eval_duration\": 6285265000, \"eval_count\": 66, \"eval_duration\": 6017921000, \"done_reason\": \"stop\", \"elapsed_seconds\": 12.414}}",
+  "model": "gemma3:4b",
+  "source_snapshot": null,
+  "events": [
+    {
+      "seq": 47,
+      "task_id": "920e2c06-288c-4af1-a75a-570d1e9d1019",
+      "at": "2026-10-21T11:14:52+00:00",
+      "status": "queued",
+      "message": "交辦已保存到 VPS。"
+    },
+    {
+      "seq": 48,
+      "task_id": "920e2c06-288c-4af1-a75a-570d1e9d1019",
+      "at": "2026-10-21T11:14:52+00:00",
+      "status": "planning",
+      "message": "小模型正在理解交辦。"
+    },
+    {
+      "seq": 49,
+      "task_id": "920e2c06-288c-4af1-a75a-570d1e9d1019",
+      "at": "2026-10-21T11:15:03+00:00",
+      "status": "planning",
+      "message": "理解交辦中，已產生 2 字。"
+    },
+    {
+      "seq": 50,
+      "task_id": "920e2c06-288c-4af1-a75a-570d1e9d1019",
+      "at": "2026-10-21T11:15:05+00:00",
+      "status": "planning",
+      "message": "理解交辦中，已產生 46 字。"
+    },
+    {
+      "seq": 51,
+      "task_id": "920e2c06-288c-4af1-a75a-570d1e9d1019",
+      "at": "2026-10-21T11:15:07+00:00",
+      "status": "planning",
+      "message": "理解交辦中，已產生 70 字。"
+    },
+    {
+      "seq": 52,
+      "task_id": "920e2c06-288c-4af1-a75a-570d1e9d1019",
+      "at": "2026-10-21T11:15:09+00:00",
+      "status": "planning",
+      "message": "理解交辦中，已產生 97 字。"
+    },
+    {
+      "seq": 53,
+      "task_id": "920e2c06-288c-4af1-a75a-570d1e9d1019",
+      "at": "2026-10-21T11:15:09+00:00",
+      "status": "running",
+      "message": "已確認工作計畫。"
+    },
+    {
+      "seq": 54,
+      "task_id": "920e2c06-288c-4af1-a75a-570d1e9d1019",
+      "at": "2026-10-21T11:15:09+00:00",
+      "status": "running",
+      "message": "正在整理來源並生成文字。"
+    },
+    {
+      "seq": 55,
+      "task_id": "920e2c06-288c-4af1-a75a-570d1e9d1019",
+      "at": "2026-10-21T11:15:16+00:00",
+      "status": "running",
+      "message": "生成內容中，已產生 2 字。"
+    },
+    {
+      "seq": 56,
+      "task_id": "920e2c06-288c-4af1-a75a-570d1e9d1019",
+      "at": "2026-10-21T11:15:18+00:00",
+      "status": "running",
+      "message": "生成內容中，已產生 31 字。"
+    },
+    {
+      "seq": 57,
+      "task_id": "920e2c06-288c-4af1-a75a-570d1e9d1019",
+      "at": "2026-10-21T11:15:20+00:00",
+      "status": "running",
+      "message": "生成內容中，已產生 63 字。"
+    },
+    {
+      "seq": 58,
+      "task_id": "920e2c06-288c-4af1-a75a-570d1e9d1019",
+      "at": "2026-10-21T11:15:22+00:00",
+      "status": "saving",
+      "message": "正在將成果保存到 VPS。"
+    },
+    {
+      "seq": 59,
+      "task_id": "920e2c06-288c-4af1-a75a-570d1e9d1019",
+      "at": "2026-10-21T11:15:22+00:00",
+      "status": "completed",
+      "message": "已完成，成果已保存到 VPS。"
+    }
+  ]
+}

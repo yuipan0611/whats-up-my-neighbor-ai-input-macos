@@ -1,0 +1,147 @@
+{
+  "provider": "codex",
+  "health_before": {
+    "service": "neighbor-office",
+    "version": "0.2.0",
+    "model": {
+      "ready": false,
+      "name": "gemma3:4b",
+      "digest": null
+    },
+    "provider": {
+      "name": "Codex",
+      "installed": true,
+      "authenticated": false,
+      "last_success": null
+    },
+    "paused": false,
+    "external_connected": false,
+    "worker_running": true
+  },
+  "health_after": {
+    "service": "neighbor-office",
+    "version": "0.2.0",
+    "model": {
+      "ready": false,
+      "name": "gemma3:4b",
+      "digest": null
+    },
+    "provider": {
+      "name": "Codex",
+      "installed": true,
+      "authenticated": false,
+      "last_success": null
+    },
+    "paused": false,
+    "external_connected": false,
+    "worker_running": true
+  },
+  "journal_ids": [
+    "82fe75b5-7456-4c0c-b75e-88e4f6ee4f3c",
+    "1ae6213d-6e46-47a9-9e03-24c64161f74a"
+  ],
+  "task": {
+    "id": "f28dcdb8-ced0-4547-8d3a-d67ef7ec1139",
+    "prompt": "將選取的紀錄整理成兩點，保留日期、金額及不確定性。",
+    "source": "",
+    "status": "needs_provider",
+    "stage": "Codex 尚未登入。交辦與來源已保留；請先在 VPS 完成本人登入，再按「接續工作」。",
+    "title": "將選取的紀錄整理成兩點，保留日期、金額及不確定性。",
+    "created": "2026-10-21T12:49:19+00:00",
+    "updated": "2026-10-21T12:49:19+00:00",
+    "plan": null,
+    "result": null,
+    "artifact": null,
+    "metrics": null,
+    "model": "Codex（帳號預設模型）",
+    "source_snapshot": null,
+    "executor": "codex",
+    "parent_id": "",
+    "journal_ids": "[\"82fe75b5-7456-4c0c-b75e-88e4f6ee4f3c\"]",
+    "context_snapshot": "生活紀錄 2026-10-21\n【合成驗證】小林 10 月 25 日交初稿，預算 300 元；是否出門尚未決定。",
+    "events": [
+      {
+        "seq": 64,
+        "task_id": "f28dcdb8-ced0-4547-8d3a-d67ef7ec1139",
+        "at": "2026-10-21T12:49:19+00:00",
+        "status": "queued",
+        "message": "交辦已保存到 VPS。"
+      },
+      {
+        "seq": 65,
+        "task_id": "f28dcdb8-ced0-4547-8d3a-d67ef7ec1139",
+        "at": "2026-10-21T12:49:19+00:00",
+        "status": "planning",
+        "message": "正在準備交辦。"
+      },
+      {
+        "seq": 66,
+        "task_id": "f28dcdb8-ced0-4547-8d3a-d67ef7ec1139",
+        "at": "2026-10-21T12:49:19+00:00",
+        "status": "running",
+        "message": "已選取 Codex，正在準備外部工作。"
+      },
+      {
+        "seq": 67,
+        "task_id": "f28dcdb8-ced0-4547-8d3a-d67ef7ec1139",
+        "at": "2026-10-21T12:49:19+00:00",
+        "status": "needs_provider",
+        "message": "Codex 尚未登入。交辦與來源已保留；請先在 VPS 完成本人登入，再按「接續工作」。"
+      }
+    ]
+  },
+  "child": {
+    "id": "65e0a15d-8637-49e5-ad22-b75d17629b86",
+    "prompt": "請依交接重寫為一句提醒，保留尚未決定的事。",
+    "source": "",
+    "status": "needs_provider",
+    "stage": "Codex 尚未登入。交辦與來源已保留；請先在 VPS 完成本人登入，再按「接續工作」。",
+    "title": "請依交接重寫為一句提醒，保留尚未決定的事。",
+    "created": "2026-10-21T12:49:21+00:00",
+    "updated": "2026-10-21T12:49:21+00:00",
+    "plan": null,
+    "result": null,
+    "artifact": null,
+    "metrics": null,
+    "model": "Codex（帳號預設模型）",
+    "source_snapshot": null,
+    "executor": "codex",
+    "parent_id": "f28dcdb8-ced0-4547-8d3a-d67ef7ec1139",
+    "journal_ids": "[]",
+    "context_snapshot": "# 工作交接\n\n任務：f28dcdb8-ced0-4547-8d3a-d67ef7ec1139\n狀態：needs_provider\n進度：Codex 尚未登入。交辦與來源已保留；請先在 VPS 完成本人登入，再按「接續工作」。\n來源：無\n成果位置：尚無\n\n## 原始交辦\n\n將選取的紀錄整理成兩點，保留日期、金額及不確定性。\n\n## 已保存內容\n\n尚無成果，請勿視為完成。\n\n## 交接補充與下一步\n\n2026-10-21T12:49:20+00:00\n\n補充：【合成驗證】已確認日期與金額。\n\n下一步：下次請明確保留尚未決定的外出計畫。\n",
+    "events": [
+      {
+        "seq": 69,
+        "task_id": "65e0a15d-8637-49e5-ad22-b75d17629b86",
+        "at": "2026-10-21T12:49:21+00:00",
+        "status": "queued",
+        "message": "交辦已保存到 VPS。"
+      },
+      {
+        "seq": 70,
+        "task_id": "65e0a15d-8637-49e5-ad22-b75d17629b86",
+        "at": "2026-10-21T12:49:21+00:00",
+        "status": "planning",
+        "message": "正在準備交辦。"
+      },
+      {
+        "seq": 71,
+        "task_id": "65e0a15d-8637-49e5-ad22-b75d17629b86",
+        "at": "2026-10-21T12:49:21+00:00",
+        "status": "running",
+        "message": "已選取 Codex，正在準備外部工作。"
+      },
+      {
+        "seq": 72,
+        "task_id": "65e0a15d-8637-49e5-ad22-b75d17629b86",
+        "at": "2026-10-21T12:49:21+00:00",
+        "status": "needs_provider",
+        "message": "Codex 尚未登入。交辦與來源已保留；請先在 VPS 完成本人登入，再按「接續工作」。"
+      }
+    ]
+  },
+  "handoff": {
+    "text": "# 工作交接\n\n任務：f28dcdb8-ced0-4547-8d3a-d67ef7ec1139\n狀態：needs_provider\n進度：Codex 尚未登入。交辦與來源已保留；請先在 VPS 完成本人登入，再按「接續工作」。\n來源：無\n成果位置：尚無\n\n## 原始交辦\n\n將選取的紀錄整理成兩點，保留日期、金額及不確定性。\n\n## 已保存內容\n\n尚無成果，請勿視為完成。\n\n## 交接補充與下一步\n\n2026-10-21T12:49:20+00:00\n\n補充：【合成驗證】已確認日期與金額。\n\n下一步：下次請明確保留尚未決定的外出計畫。\n"
+  },
+  "result_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

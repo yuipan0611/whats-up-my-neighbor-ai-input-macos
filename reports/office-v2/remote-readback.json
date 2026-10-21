@@ -1,0 +1,43 @@
+{
+  "old_tasks_preserved": 7,
+  "sqlite_integrity": "ok",
+  "journal_rows": 9,
+  "active_tasks": 0,
+  "artifact_readbacks": [
+    {
+      "id": "1e882349-d193-4bf9-a943-f01191c5e705",
+      "sha256": "6b74044978bc411729113b18fa41f06569087e031abd87041f227fb112e14074"
+    },
+    {
+      "id": "e3b18b8a-6673-4187-9f90-67ecf4fa3ace",
+      "sha256": "04e7792b3c06face8a23f978a4770df18c376ad51846a1e285490ebba10fb267"
+    },
+    {
+      "id": "4f699b82-6d8c-4d97-81a8-081dd708723f",
+      "sha256": "add61da36c670fad91f202a9c9c9f4c278db8f519e5d54da4ff544742ae2ef54"
+    },
+    {
+      "id": "9b02d3cc-4085-490a-8b5a-914dea2fce52",
+      "sha256": "440150b6b4b3ecfc2b3e73545a847f4ec8447c140f208115e064053ac4957f5f"
+    }
+  ],
+  "source_sha256": {
+    "app/office.py": "17790962c2a677f344d9511e0baf88910237330bd950c1507333ea9341693032",
+    "app/static/ARTWORK.md": "7c9b6c839ce816573d9c8800b7c284f6298b2a8561a68fdedb145b7d8c6bf46a",
+    "app/static/cat.svg": "d11226b2103f5358e5cdd464cfea03d4041df190e5935147369df1dc70e613ee",
+    "app/static/style.css": "d409312f8f0e3443b2967fb1d1d0a2097f424f4ab0eded8a2720849df8412bbd",
+    "app/static/app.js": "57204d94bcbb73c8d67c73cb03f45b9c40eab422a741340b108479b8235b53c7",
+    "app/static/index.html": "b048ee00e9a51d8e3e3a7cf38fccf4abac15e9e7dab5b00d7c10801fe12dcfa1",
+    "services/neighbor-office.service": "dc8c304a565876bb5b6e8bfc472f9d9eaa7f5c1e761d37802d39a44d6b45e107",
+    "services/neighbor-ollama.service": "055cf9c3eb08ae8560e8f970286ec4abe22b4706041ad1012dc919abfca348ad"
+  },
+  "office_active": "active",
+  "ollama_enabled": "disabled",
+  "ollama_active": "inactive",
+  "listeners": [
+    "LISTEN 0      5          127.0.0.1:5901       0.0.0.0:*   ",
+    "LISTEN 0      5          127.0.0.1:8421       0.0.0.0:*   ",
+    "LISTEN 0      5              [::1]:5901          [::]:*   "
+  ],
+  "memory": "total        used        free      shared  buff/cache   available\nMem:           7.7Gi       1.3Gi       4.0Gi        26Mi       2.8Gi       6.4Gi\nSwap:             0B          0B          0B"
+}

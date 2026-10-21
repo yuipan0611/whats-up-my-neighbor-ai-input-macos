@@ -1,0 +1,11 @@
+{
+  "version": "0.1.0",
+  "model": {
+    "ready": true,
+    "name": "gemma3:4b",
+    "digest": "68ceab7e468a31c988b44d5a4984a0e21f58c4f7158c6ce29c1804babac38df7"
+  },
+  "paused": false,
+  "external_connected": false,
+  "worker_running": true
+}

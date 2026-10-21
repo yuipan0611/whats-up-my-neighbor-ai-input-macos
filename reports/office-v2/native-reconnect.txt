@@ -1,0 +1,122 @@
+Window: "貓咪辦公室 · 獨立預覽", App: 貓咪辦公室預覽.
+0 standard window 貓咪辦公室 · 獨立預覽, Secondary Actions: Raise
+	1 container
+		2 image
+		3 text 貓咪辦公室
+		4 text 已驗證 VPS 辦公室連線
+		5 button 連線／重連
+		6 button 離線
+		7 scroll area
+			8 HTML content Description: 貓咪辦公室, URL: 127.0.0.1:18421/
+				9 container
+					10 text NEIGHBOR · VPS
+					11 heading 貓咪辦公室 YUI Neko 黑貓, Value: 1
+						12 text 貓咪辦公室
+						13 image YUI Neko 黑貓
+					14 text 交代一件事，貓咪會把進度和成果留在這裡。
+					15 text 已連上 VPS
+					16 container 辦公室功能
+						17 toggle button 工作與交接, Value: on
+						18 toggle button 生活紀錄, Value: off
+					19 container 今天交給貓咪什麼事？
+						20 heading 今天交給貓咪什麼事？, Value: 2
+							21 text 今天交給貓咪什麼事？
+						22 container
+							23 text 用自己的話交代
+							24 text entry area (settable) 用自己的話交代, Value: [text entry area], Placeholder: 例如：幫我把這份筆記整理成三個重點，保留日期與待辦。, Secondary Actions: Show Writing Tools
+								25 text (settable) 【離線草稿驗證】這段尚未送出，重連後應保留。
+							26 text 交給誰處理
+							27 pop up button (collapsed) 交給誰處理, Value: Codex · 外部 Agent, Secondary Actions: Expand
+							28 text 來源文字檔
+							29 pop up button (collapsed) 來源文字檔, Value: 直接處理上面貼的內容, Secondary Actions: Expand
+							30 text 放入文字檔
+							31 file upload button no file selected
+							32 button 交給貓咪
+							33 button 先停一下
+							34 button (disabled) 繼續工作
+							35 summary 選取生活紀錄供這次工作使用, Value: off
+								36 text 選取生活紀錄供這次工作使用
+							37 text 交辦、選定來源與選取的交接／生活紀錄會交給 OpenAI 處理。其他生活紀錄不會自動附加。
+					38 container 交辦紀錄
+						39 heading 交辦紀錄, Value: 2
+							40 text 交辦紀錄
+						41 text 依序處理
+						42 toggle button 【公開搜尋驗證】請查 OpenAI 官方 Codex CLI 文件，說明 codex exec 的 10/21 晚上08:58 已完成, Value: on
+						43 toggle button 搜尋工具已補齊官方執行元件，請重新查閱官方文件完成原交辦；只引用確實查到的 OpenAI 官方來源， 10/21 晚上08:57 已完成, Value: off
+						44 toggle button 請依交接整理成兩點，保留生活紀錄中尚未決定的計畫，並指出下一步。這是面板接續驗證。 10/21 晚上08:55 已完成, Value: off
+						45 toggle button 【公開資料驗證】請查閱 OpenAI 官方 Codex 身份驗證文件，說明沒有桌面的遠端 VPS 可 10/21 晚上08:53 等你補充, Value: off
+						46 toggle button 將選取的紀錄整理成兩點，保留日期、金額及不確定性。 10/21 晚上08:52 已完成, Value: off
+						47 toggle button 請依交接重寫為一句提醒，保留尚未決定的事。 10/21 晚上08:52 已完成, Value: off
+						48 toggle button 將選取的紀錄整理成兩點，保留日期、金額及不確定性。 10/21 晚上08:51 已完成, Value: off
+						49 toggle button 將選取的紀錄整理成兩點，保留日期、金額及不確定性。 10/21 晚上08:49 等你補充, Value: off
+						50 toggle button 請依交接重寫為一句提醒，保留尚未決定的事。 10/21 晚上08:49 等待 Agent 連線, Value: off
+						51 toggle button 將選取的紀錄整理成兩點，保留日期、金額及不確定性。 10/21 晚上08:49 等待 Agent 連線, Value: off
+						52 toggle button 【面板驗證】請將選取的生活紀錄整理成兩點，保留尚未決定的事，並建議下一步。 10/21 晚上08:48 等待 Agent 連線, Value: off
+						53 toggle button 幫我把下面這段整理成三個待辦，保留負責人和日期： 小林10月25日交需求初稿。小陳10月26日完成測 10/21 晚上07:14 已完成, Value: off
+						54 toggle button 幫我寫一段五百字的工作鼓勵。 10/21 晚上07:14 曾經中斷, Value: off
+						55 toggle button 把選取的筆記整理成兩個重點，保留預算與交稿日期。 10/21 晚上07:13 已完成, Value: off
+						56 toggle button 請幫我寫一段五百字的工作鼓勵。 10/21 晚上07:13 已停止, Value: off
+						57 toggle button 幫我上網查今天的台灣新聞，整理來源連結。 10/21 晚上07:13 待串接大模型, Value: off
+						58 toggle button 幫我整理這份筆記。 10/21 晚上07:13 等你補充, Value: off
+						59 toggle button 幫我整理成三個重點，保留日期、人名、金額與尚未決定的事。 10/21 晚上07:12 已完成, Value: off
+					60 container 進度與成果
+						61 heading 進度與成果, Value: 2
+							62 text 進度與成果
+						63 heading 【公開搜尋驗證】請查 OpenAI 官方 Codex CLI 文件，說明 codex exec 的, Value: 3
+							64 text 【公開搜尋驗證】請查 OpenAI 官方 Codex CLI 文件，說明 codex exec 的
+						65 text 【公開搜尋驗證】請查 OpenAI 官方 Codex CLI 文件，說明 codex exec 的 --ephemeral 選項有什麼用途。請實際查閱，回答兩句並附官方連結。
+						66 text 執行者：Codex · 外部 Agent
+						67 text 已完成
+						68 text 外部成果已保存。
+						69 button 接續這件工作
+						70 content list
+							71 container 10/21 晚上08:58 · 交辦已保存到 VPS。
+								72 text 1. 10/21 晚上08:58 · 交辦已保存到 VPS。
+							73 container 10/21 晚上08:58 · 正在準備交辦。
+								74 text 2. 10/21 晚上08:58 · 正在準備交辦。
+							75 container 10/21 晚上08:58 · 已選取 Codex，正在準備外部工作。
+								76 text 3. 10/21 晚上08:58 · 已選取 Codex，正在準備外部工作。
+							77 container 10/21 晚上08:58 · Codex 正在處理，已等待 0 秒。
+								78 text 4. 10/21 晚上08:58 · Codex 正在處理，已等待 0 秒。
+							79 container 10/21 晚上08:58 · Codex 正在查詢公開來源。
+								80 text 5. 10/21 晚上08:58 · Codex 正在查詢公開來源。
+							81 container 10/21 晚上08:59 · Codex 正在查詢公開來源。
+								82 text 6. 10/21 晚上08:59 · Codex 正在查詢公開來源。
+							83 container 10/21 晚上08:59 · Codex 正在查詢公開來源。
+								84 text 7. 10/21 晚上08:59 · Codex 正在查詢公開來源。
+							85 container 10/21 晚上08:59 · Codex 正在處理，已等待 15 秒。
+								86 text 8. 10/21 晚上08:59 · Codex 正在處理，已等待 15 秒。
+							87 container 10/21 晚上08:59 · Codex 正在查詢公開來源。
+								88 text 9. 10/21 晚上08:59 · Codex 正在查詢公開來源。
+							89 container 10/21 晚上08:59 · Codex 正在查詢公開來源。
+								90 text 10. 10/21 晚上08:59 · Codex 正在查詢公開來源。
+							91 container 10/21 晚上08:59 · Codex 正在查詢公開來源。
+								92 text 11. 10/21 晚上08:59 · Codex 正在查詢公開來源。
+							93 container 10/21 晚上08:59 · 正在保存外部成果。
+								94 text 12. 10/21 晚上08:59 · 正在保存外部成果。
+							95 container 10/21 晚上08:59 · 外部成果已保存。
+								96 text 13. 10/21 晚上08:59 · 外部成果已保存。
+						97 heading 保存的內容, Value: 3
+							98 text 保存的內容
+						99 text 已實際查閱 OpenAI 官方文件：`codex exec --ephemeral` 的用途是在執行時不將工作階段的執行紀錄檔（session rollout files）持久保存到磁碟。[官方參數文件](https://developers.openai.com/codex/cli/reference)
+若這次任務不需要保留上述紀錄，可使用 `codex exec --ephemeral "任務內容"`；官方非互動模式指南也提供此用法。[官方使用指南](https://developers.openai.com/codex/noninteractive)
+
+## 建議下一步
+
+由辦公室保存查證結果。
+						100 link 下載 Markdown, Value: 127.0.0.1:18421/api/tasks/9b02d3cc-4085-490a-8b5a-914dea2fce52/download
+						101 text VPS 位置：data/tasks/9b02d3cc-4085-490a-8b5a-914dea2fce52/result.md
+						102 summary 工作交接, Value: off
+							103 text 工作交接
+					104 text Codex · 登入有效 · 曾完成真實工作 ／ Gemma · 按需啟動 關掉面板後，VPS 仍會處理已交辦的工作。文字與成果保存在 VPS。
+			105 scroll bar (settable, float) 0
+	106 toolbar
+		107 tab group
+			108 tab Description: 貓咪辦公室, Value: 1
+			109 tab Description: 原有示範與遠端桌面, Value: 0
+	110 close button
+	111 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	112 minimize button
+113 menu bar
+	114 貓咪辦公室預覽
+	115 編輯

@@ -1,0 +1,460 @@
+{
+  "started_at": 1792581171.2069035,
+  "checks": [
+    "upload independently read back",
+    "duplicate submission is idempotent",
+    "real model summary completed and artifact independently read back",
+    "missing content asks for input without fabricated result",
+    "external request remains pending with saved brief",
+    "cancel active real-model task prevents completed artifact",
+    "service restart preserves paused queue and previous result",
+    "resume executes saved queue and saves new artifact",
+    "restart marks active work interrupted and does not repeat it",
+    "natural language status reads persisted state"
+  ],
+  "tasks": {
+    "summary": {
+      "id": "aba03704-292a-485a-a2fe-752775fc85a7",
+      "prompt": "幫我整理成三個重點，保留日期、人名、金額與尚未決定的事。",
+      "source": "驗收筆記-20261021.md",
+      "status": "completed",
+      "stage": "已完成，成果已保存到 VPS。",
+      "title": "幫我整理成三個重點，保留日期、人名、金額與尚未決定的事。",
+      "created": "2026-10-21T11:12:51+00:00",
+      "updated": "2026-10-21T11:13:23+00:00",
+      "plan": "{\"action\": \"summarize\", \"question\": \"驗收筆記-20261021.md\"}",
+      "result": "## 2026年10月21日會議筆記重點整理\n\n*   **日期：** 2026年10月21日\n*   **負責人：**\n    *   小林負責整理需求，預計於10月25日交出初稿。\n    *   小陳負責測試。\n*   **預算與決策：**\n    *   預算上限為1200元。\n    *   尚未決定是否購買新主機，先測試現有VPS。",
+      "artifact": "tasks/aba03704-292a-485a-a2fe-752775fc85a7/result.md",
+      "metrics": "{\"model\": {\"ready\": true, \"name\": \"gemma3:4b\", \"digest\": \"68ceab7e468a31c988b44d5a4984a0e21f58c4f7158c6ce29c1804babac38df7\"}, \"planning\": {\"total_duration\": 13394556684, \"load_duration\": 1271621, \"prompt_eval_count\": 319, \"prompt_eval_duration\": 9470639000, \"eval_count\": 28, \"eval_duration\": 3853068000, \"done_reason\": \"stop\", \"elapsed_seconds\": 13.406}, \"generation\": {\"total_duration\": 19178284869, \"load_duration\": 1108846, \"prompt_eval_count\": 260, \"prompt_eval_duration\": 7378999000, \"eval_count\": 122, \"eval_duration\": 11706067000, \"done_reason\": \"stop\", \"elapsed_seconds\": 19.181}}",
+      "model": "gemma3:4b",
+      "source_snapshot": "2026年10月21日會議筆記：小林負責整理需求，10月25日交初稿。小陳負責測試，預算上限是1200元。目前還沒決定是否購買新主機，先測試現有VPS。",
+      "events": [
+        {
+          "seq": 1,
+          "task_id": "aba03704-292a-485a-a2fe-752775fc85a7",
+          "at": "2026-10-21T11:12:51+00:00",
+          "status": "queued",
+          "message": "交辦已保存到 VPS。"
+        },
+        {
+          "seq": 2,
+          "task_id": "aba03704-292a-485a-a2fe-752775fc85a7",
+          "at": "2026-10-21T11:12:51+00:00",
+          "status": "planning",
+          "message": "小模型正在理解交辦。"
+        },
+        {
+          "seq": 3,
+          "task_id": "aba03704-292a-485a-a2fe-752775fc85a7",
+          "at": "2026-10-21T11:13:00+00:00",
+          "status": "planning",
+          "message": "理解交辦中，已產生 2 字。"
+        },
+        {
+          "seq": 4,
+          "task_id": "aba03704-292a-485a-a2fe-752775fc85a7",
+          "at": "2026-10-21T11:13:02+00:00",
+          "status": "planning",
+          "message": "理解交辦中，已產生 40 字。"
+        },
+        {
+          "seq": 5,
+          "task_id": "aba03704-292a-485a-a2fe-752775fc85a7",
+          "at": "2026-10-21T11:13:04+00:00",
+          "status": "running",
+          "message": "已確認工作計畫。"
+        },
+        {
+          "seq": 6,
+          "task_id": "aba03704-292a-485a-a2fe-752775fc85a7",
+          "at": "2026-10-21T11:13:04+00:00",
+          "status": "running",
+          "message": "正在整理來源並生成文字。"
+        },
+        {
+          "seq": 7,
+          "task_id": "aba03704-292a-485a-a2fe-752775fc85a7",
+          "at": "2026-10-21T11:13:12+00:00",
+          "status": "running",
+          "message": "生成內容中，已產生 2 字。"
+        },
+        {
+          "seq": 8,
+          "task_id": "aba03704-292a-485a-a2fe-752775fc85a7",
+          "at": "2026-10-21T11:13:14+00:00",
+          "status": "running",
+          "message": "生成內容中，已產生 32 字。"
+        },
+        {
+          "seq": 9,
+          "task_id": "aba03704-292a-485a-a2fe-752775fc85a7",
+          "at": "2026-10-21T11:13:16+00:00",
+          "status": "running",
+          "message": "生成內容中，已產生 60 字。"
+        },
+        {
+          "seq": 10,
+          "task_id": "aba03704-292a-485a-a2fe-752775fc85a7",
+          "at": "2026-10-21T11:13:18+00:00",
+          "status": "running",
+          "message": "生成內容中，已產生 89 字。"
+        },
+        {
+          "seq": 11,
+          "task_id": "aba03704-292a-485a-a2fe-752775fc85a7",
+          "at": "2026-10-21T11:13:20+00:00",
+          "status": "running",
+          "message": "生成內容中，已產生 120 字。"
+        },
+        {
+          "seq": 12,
+          "task_id": "aba03704-292a-485a-a2fe-752775fc85a7",
+          "at": "2026-10-21T11:13:22+00:00",
+          "status": "running",
+          "message": "生成內容中，已產生 152 字。"
+        },
+        {
+          "seq": 13,
+          "task_id": "aba03704-292a-485a-a2fe-752775fc85a7",
+          "at": "2026-10-21T11:13:23+00:00",
+          "status": "saving",
+          "message": "正在將成果保存到 VPS。"
+        },
+        {
+          "seq": 14,
+          "task_id": "aba03704-292a-485a-a2fe-752775fc85a7",
+          "at": "2026-10-21T11:13:23+00:00",
+          "status": "completed",
+          "message": "已完成，成果已保存到 VPS。"
+        }
+      ]
+    },
+    "clarification": {
+      "id": "3b3441f0-6276-45c5-b51e-c8dd3b2e1104",
+      "prompt": "幫我整理這份筆記。",
+      "source": "",
+      "status": "needs_input",
+      "stage": "請提供筆記的檔名或內容，以便整理。",
+      "title": "幫我整理這份筆記。",
+      "created": "2026-10-21T11:13:24+00:00",
+      "updated": "2026-10-21T11:13:35+00:00",
+      "plan": "{\"action\": \"clarify\", \"question\": \"請提供筆記的檔名或內容，以便整理。\"}",
+      "result": null,
+      "artifact": null,
+      "metrics": null,
+      "model": "gemma3:4b",
+      "source_snapshot": null,
+      "events": [
+        {
+          "seq": 15,
+          "task_id": "3b3441f0-6276-45c5-b51e-c8dd3b2e1104",
+          "at": "2026-10-21T11:13:24+00:00",
+          "status": "queued",
+          "message": "交辦已保存到 VPS。"
+        },
+        {
+          "seq": 16,
+          "task_id": "3b3441f0-6276-45c5-b51e-c8dd3b2e1104",
+          "at": "2026-10-21T11:13:24+00:00",
+          "status": "planning",
+          "message": "小模型正在理解交辦。"
+        },
+        {
+          "seq": 17,
+          "task_id": "3b3441f0-6276-45c5-b51e-c8dd3b2e1104",
+          "at": "2026-10-21T11:13:32+00:00",
+          "status": "planning",
+          "message": "理解交辦中，已產生 2 字。"
+        },
+        {
+          "seq": 18,
+          "task_id": "3b3441f0-6276-45c5-b51e-c8dd3b2e1104",
+          "at": "2026-10-21T11:13:34+00:00",
+          "status": "planning",
+          "message": "理解交辦中，已產生 51 字。"
+        },
+        {
+          "seq": 19,
+          "task_id": "3b3441f0-6276-45c5-b51e-c8dd3b2e1104",
+          "at": "2026-10-21T11:13:35+00:00",
+          "status": "running",
+          "message": "已確認工作計畫。"
+        },
+        {
+          "seq": 20,
+          "task_id": "3b3441f0-6276-45c5-b51e-c8dd3b2e1104",
+          "at": "2026-10-21T11:13:35+00:00",
+          "status": "needs_input",
+          "message": "請提供筆記的檔名或內容，以便整理。"
+        }
+      ]
+    },
+    "external": {
+      "id": "8b583c3b-4099-4bb2-b194-ec89e5d8fb49",
+      "prompt": "幫我上網查今天的台灣新聞，整理來源連結。",
+      "source": "",
+      "status": "needs_external",
+      "stage": "交接單已保存；外部大模型尚未接通，工作尚未執行。",
+      "title": "幫我上網查今天的台灣新聞，整理來源連結。",
+      "created": "2026-10-21T11:13:35+00:00",
+      "updated": "2026-10-21T11:13:45+00:00",
+      "plan": "{\"action\": \"external\", \"question\": \"整理台灣新聞來源連結\"}",
+      "result": "# 待外部模型處理\n\n幫我上網查今天的台灣新聞，整理來源連結。\n\n來源：未指定\n\n外部模型尚未接通。此檔是任務交接單，不是執行成果。\n",
+      "artifact": "tasks/8b583c3b-4099-4bb2-b194-ec89e5d8fb49/brief.md",
+      "metrics": null,
+      "model": "gemma3:4b",
+      "source_snapshot": null,
+      "events": [
+        {
+          "seq": 21,
+          "task_id": "8b583c3b-4099-4bb2-b194-ec89e5d8fb49",
+          "at": "2026-10-21T11:13:35+00:00",
+          "status": "queued",
+          "message": "交辦已保存到 VPS。"
+        },
+        {
+          "seq": 22,
+          "task_id": "8b583c3b-4099-4bb2-b194-ec89e5d8fb49",
+          "at": "2026-10-21T11:13:35+00:00",
+          "status": "planning",
+          "message": "小模型正在理解交辦。"
+        },
+        {
+          "seq": 23,
+          "task_id": "8b583c3b-4099-4bb2-b194-ec89e5d8fb49",
+          "at": "2026-10-21T11:13:44+00:00",
+          "status": "planning",
+          "message": "理解交辦中，已產生 2 字。"
+        },
+        {
+          "seq": 24,
+          "task_id": "8b583c3b-4099-4bb2-b194-ec89e5d8fb49",
+          "at": "2026-10-21T11:13:45+00:00",
+          "status": "running",
+          "message": "已確認工作計畫。"
+        },
+        {
+          "seq": 25,
+          "task_id": "8b583c3b-4099-4bb2-b194-ec89e5d8fb49",
+          "at": "2026-10-21T11:13:45+00:00",
+          "status": "needs_external",
+          "message": "交接單已保存；外部大模型尚未接通，工作尚未執行。"
+        }
+      ]
+    },
+    "cancelled": {
+      "id": "67dd9350-4c41-4773-ba29-6f2472daf09b",
+      "prompt": "請幫我寫一段五百字的工作鼓勵。",
+      "source": "",
+      "status": "cancelled",
+      "stage": "已停止；不會把後續模型輸出存成完成成果。",
+      "title": "新交辦",
+      "created": "2026-10-21T11:13:45+00:00",
+      "updated": "2026-10-21T11:13:46+00:00",
+      "plan": null,
+      "result": null,
+      "artifact": null,
+      "metrics": null,
+      "model": "gemma3:4b",
+      "source_snapshot": null,
+      "events": [
+        {
+          "seq": 26,
+          "task_id": "67dd9350-4c41-4773-ba29-6f2472daf09b",
+          "at": "2026-10-21T11:13:45+00:00",
+          "status": "queued",
+          "message": "交辦已保存到 VPS。"
+        },
+        {
+          "seq": 27,
+          "task_id": "67dd9350-4c41-4773-ba29-6f2472daf09b",
+          "at": "2026-10-21T11:13:45+00:00",
+          "status": "planning",
+          "message": "小模型正在理解交辦。"
+        },
+        {
+          "seq": 28,
+          "task_id": "67dd9350-4c41-4773-ba29-6f2472daf09b",
+          "at": "2026-10-21T11:13:46+00:00",
+          "status": "cancelled",
+          "message": "已停止；不會把後續模型輸出存成完成成果。"
+        }
+      ]
+    },
+    "resumed": {
+      "id": "f6d80861-314e-4852-a966-4c7b302874aa",
+      "prompt": "把選取的筆記整理成兩個重點，保留預算與交稿日期。",
+      "source": "驗收筆記-20261021.md",
+      "status": "completed",
+      "stage": "已完成，成果已保存到 VPS。",
+      "title": "把選取的筆記整理成兩個重點，保留預算與交稿日期。",
+      "created": "2026-10-21T11:13:48+00:00",
+      "updated": "2026-10-21T11:14:26+00:00",
+      "plan": "{\"action\": \"summarize\", \"question\": \"請將驗收筆記-20261021.md 整理成兩個重點，並保留預算與交稿日期。\"}",
+      "result": "## 任務要求：\n\n將「驗收筆記-20261021.md」檔案中的內容整理成兩個重點，並保留相關資訊。\n\n**重點一：**\n\n*   小林負責整理需求，預計於10月25日交稿初稿。\n*   預算上限為1200元。\n\n**重點二：**\n\n*   小陳負責測試。\n*   目前尚未決定是否購買新主機，先測試現有VPS。",
+      "artifact": "tasks/f6d80861-314e-4852-a966-4c7b302874aa/result.md",
+      "metrics": "{\"model\": {\"ready\": true, \"name\": \"gemma3:4b\", \"digest\": \"68ceab7e468a31c988b44d5a4984a0e21f58c4f7158c6ce29c1804babac38df7\"}, \"planning\": {\"total_duration\": 16654557895, \"load_duration\": 1861698, \"prompt_eval_count\": 317, \"prompt_eval_duration\": 9937827000, \"eval_count\": 45, \"eval_duration\": 4322654000, \"done_reason\": \"stop\", \"elapsed_seconds\": 16.667}, \"generation\": {\"total_duration\": 18068692480, \"load_duration\": 2858717, \"prompt_eval_count\": 258, \"prompt_eval_duration\": 7265425000, \"eval_count\": 112, \"eval_duration\": 10714299000, \"done_reason\": \"stop\", \"elapsed_seconds\": 18.072}}",
+      "model": "gemma3:4b",
+      "source_snapshot": "2026年10月21日會議筆記：小林負責整理需求，10月25日交初稿。小陳負責測試，預算上限是1200元。目前還沒決定是否購買新主機，先測試現有VPS。",
+      "events": [
+        {
+          "seq": 29,
+          "task_id": "f6d80861-314e-4852-a966-4c7b302874aa",
+          "at": "2026-10-21T11:13:48+00:00",
+          "status": "queued",
+          "message": "交辦已保存到 VPS。"
+        },
+        {
+          "seq": 30,
+          "task_id": "f6d80861-314e-4852-a966-4c7b302874aa",
+          "at": "2026-10-21T11:13:51+00:00",
+          "status": "planning",
+          "message": "小模型正在理解交辦。"
+        },
+        {
+          "seq": 31,
+          "task_id": "f6d80861-314e-4852-a966-4c7b302874aa",
+          "at": "2026-10-21T11:14:04+00:00",
+          "status": "planning",
+          "message": "理解交辦中，已產生 2 字。"
+        },
+        {
+          "seq": 32,
+          "task_id": "f6d80861-314e-4852-a966-4c7b302874aa",
+          "at": "2026-10-21T11:14:06+00:00",
+          "status": "planning",
+          "message": "理解交辦中，已產生 48 字。"
+        },
+        {
+          "seq": 33,
+          "task_id": "f6d80861-314e-4852-a966-4c7b302874aa",
+          "at": "2026-10-21T11:14:08+00:00",
+          "status": "planning",
+          "message": "理解交辦中，已產生 75 字。"
+        },
+        {
+          "seq": 34,
+          "task_id": "f6d80861-314e-4852-a966-4c7b302874aa",
+          "at": "2026-10-21T11:14:08+00:00",
+          "status": "running",
+          "message": "已確認工作計畫。"
+        },
+        {
+          "seq": 35,
+          "task_id": "f6d80861-314e-4852-a966-4c7b302874aa",
+          "at": "2026-10-21T11:14:08+00:00",
+          "status": "running",
+          "message": "正在整理來源並生成文字。"
+        },
+        {
+          "seq": 36,
+          "task_id": "f6d80861-314e-4852-a966-4c7b302874aa",
+          "at": "2026-10-21T11:14:15+00:00",
+          "status": "running",
+          "message": "生成內容中，已產生 2 字。"
+        },
+        {
+          "seq": 37,
+          "task_id": "f6d80861-314e-4852-a966-4c7b302874aa",
+          "at": "2026-10-21T11:14:17+00:00",
+          "status": "running",
+          "message": "生成內容中，已產生 26 字。"
+        },
+        {
+          "seq": 38,
+          "task_id": "f6d80861-314e-4852-a966-4c7b302874aa",
+          "at": "2026-10-21T11:14:20+00:00",
+          "status": "running",
+          "message": "生成內容中，已產生 61 字。"
+        },
+        {
+          "seq": 39,
+          "task_id": "f6d80861-314e-4852-a966-4c7b302874aa",
+          "at": "2026-10-21T11:14:22+00:00",
+          "status": "running",
+          "message": "生成內容中，已產生 88 字。"
+        },
+        {
+          "seq": 40,
+          "task_id": "f6d80861-314e-4852-a966-4c7b302874aa",
+          "at": "2026-10-21T11:14:24+00:00",
+          "status": "running",
+          "message": "生成內容中，已產生 118 字。"
+        },
+        {
+          "seq": 41,
+          "task_id": "f6d80861-314e-4852-a966-4c7b302874aa",
+          "at": "2026-10-21T11:14:26+00:00",
+          "status": "running",
+          "message": "生成內容中，已產生 152 字。"
+        },
+        {
+          "seq": 42,
+          "task_id": "f6d80861-314e-4852-a966-4c7b302874aa",
+          "at": "2026-10-21T11:14:26+00:00",
+          "status": "saving",
+          "message": "正在將成果保存到 VPS。"
+        },
+        {
+          "seq": 43,
+          "task_id": "f6d80861-314e-4852-a966-4c7b302874aa",
+          "at": "2026-10-21T11:14:26+00:00",
+          "status": "completed",
+          "message": "已完成，成果已保存到 VPS。"
+        }
+      ]
+    },
+    "interrupted": {
+      "id": "e2621785-2f37-4a25-bc96-adb09f2ece78",
+      "prompt": "幫我寫一段五百字的工作鼓勵。",
+      "source": "",
+      "status": "interrupted",
+      "stage": "服務曾重啟，工作中斷；請檢查已有資料後重新交辦。",
+      "title": "新交辦",
+      "created": "2026-10-21T11:14:27+00:00",
+      "updated": "2026-10-21T11:14:30+00:00",
+      "plan": null,
+      "result": null,
+      "artifact": null,
+      "metrics": null,
+      "model": "gemma3:4b",
+      "source_snapshot": null,
+      "events": [
+        {
+          "seq": 44,
+          "task_id": "e2621785-2f37-4a25-bc96-adb09f2ece78",
+          "at": "2026-10-21T11:14:27+00:00",
+          "status": "queued",
+          "message": "交辦已保存到 VPS。"
+        },
+        {
+          "seq": 45,
+          "task_id": "e2621785-2f37-4a25-bc96-adb09f2ece78",
+          "at": "2026-10-21T11:14:27+00:00",
+          "status": "planning",
+          "message": "小模型正在理解交辦。"
+        },
+        {
+          "seq": 46,
+          "task_id": "e2621785-2f37-4a25-bc96-adb09f2ece78",
+          "at": "2026-10-21T11:14:30+00:00",
+          "status": "interrupted",
+          "message": "服務曾重啟，工作中斷；請檢查已有資料後重新交辦。"
+        }
+      ]
+    }
+  },
+  "summary_seconds": 32.77,
+  "health": {
+    "version": "0.1.0",
+    "model": {
+      "ready": true,
+      "name": "gemma3:4b",
+      "digest": "68ceab7e468a31c988b44d5a4984a0e21f58c4f7158c6ce29c1804babac38df7"
+    },
+    "paused": false,
+    "external_connected": false,
+    "worker_running": true
+  },
+  "finished_at": 1792581271.1474385
+}

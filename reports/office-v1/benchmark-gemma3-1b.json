@@ -1,0 +1,195 @@
+{
+  "model": {
+    "ready": true,
+    "name": "gemma3:1b",
+    "digest": "97558784bdc9175075a72655bf360b15da17df6b3b9e5182af9f8c0c8e58ba7c"
+  },
+  "routing": [
+    {
+      "prompt": "幫我列出收件匣有哪些檔案。",
+      "expected": "list_files",
+      "plan": {
+        "action": "list_files",
+        "question": "收件匣有哪些檔案？"
+      },
+      "passed": true,
+      "metrics": {
+        "total_duration": 6404111228,
+        "load_duration": 2353404141,
+        "prompt_eval_count": 305,
+        "prompt_eval_duration": 2919164000,
+        "eval_count": 25,
+        "eval_duration": 1124494000,
+        "done_reason": "stop",
+        "elapsed_seconds": 6.406
+      }
+    },
+    {
+      "prompt": "請把選取的筆記整理成三點摘要，保留日期、人名與待辦。",
+      "expected": "summarize",
+      "plan": {
+        "action": "summarize",
+        "question": "保留日期、人名與待辦"
+      },
+      "passed": true,
+      "metrics": {
+        "total_duration": 3798304678,
+        "load_duration": 866292,
+        "prompt_eval_count": 322,
+        "prompt_eval_duration": 2826207000,
+        "eval_count": 21,
+        "eval_duration": 965488000,
+        "done_reason": "stop",
+        "elapsed_seconds": 3.799
+      }
+    },
+    {
+      "prompt": "幫我寫一段給自己的工作鼓勵，50字以內。",
+      "expected": "write",
+      "plan": {
+        "action": "write",
+        "question": "加油！今天努力完成，讓自己更有自信！ 繼續前進，成功就在前方！"
+      },
+      "passed": true,
+      "metrics": {
+        "total_duration": 4456029824,
+        "load_duration": 2231473,
+        "prompt_eval_count": 310,
+        "prompt_eval_duration": 2883960000,
+        "eval_count": 37,
+        "eval_duration": 1564128000,
+        "done_reason": "stop",
+        "elapsed_seconds": 4.458
+      }
+    },
+    {
+      "prompt": "幫我整理這份筆記。",
+      "expected": "clarify",
+      "plan": {
+        "action": "write",
+        "question": "整理筆記"
+      },
+      "passed": false,
+      "metrics": {
+        "total_duration": 3596889562,
+        "load_duration": 1021145,
+        "prompt_eval_count": 303,
+        "prompt_eval_duration": 2928188000,
+        "eval_count": 15,
+        "eval_duration": 659788000,
+        "done_reason": "stop",
+        "elapsed_seconds": 3.598
+      }
+    },
+    {
+      "prompt": "幫我上網查今天的台灣新聞，整理來源連結。",
+      "expected": "external",
+      "plan": {
+        "action": "external",
+        "question": "查台灣新聞的來源"
+      },
+      "passed": true,
+      "metrics": {
+        "total_duration": 3723348239,
+        "load_duration": 833141,
+        "prompt_eval_count": 308,
+        "prompt_eval_duration": 2994467000,
+        "eval_count": 17,
+        "eval_duration": 721099000,
+        "done_reason": "stop",
+        "elapsed_seconds": 3.724
+      }
+    },
+    {
+      "prompt": "幫我研究2026年各家VPS價格，寫比較報告。",
+      "expected": "external",
+      "plan": {
+        "action": "write",
+        "question": "研究2026年各家VPS價格，並寫比較報告"
+      },
+      "passed": false,
+      "metrics": {
+        "total_duration": 4562075581,
+        "load_duration": 2042350,
+        "prompt_eval_count": 312,
+        "prompt_eval_duration": 3263387000,
+        "eval_count": 27,
+        "eval_duration": 1291932000,
+        "done_reason": "stop",
+        "elapsed_seconds": 4.563
+      }
+    },
+    {
+      "prompt": "請替貓咪寫一則簡短的開工問候。",
+      "expected": "write",
+      "plan": {
+        "action": "write",
+        "question": "貓咪寫什麼？"
+      },
+      "passed": true,
+      "metrics": {
+        "total_duration": 4118711087,
+        "load_duration": 673302,
+        "prompt_eval_count": 310,
+        "prompt_eval_duration": 3066172000,
+        "eval_count": 22,
+        "eval_duration": 1045630000,
+        "done_reason": "stop",
+        "elapsed_seconds": 4.12
+      }
+    },
+    {
+      "prompt": "找近期Gemma新版本，附官方連結。",
+      "expected": "external",
+      "plan": {
+        "action": "write",
+        "question": "Gemma新版本是什麼版本？"
+      },
+      "passed": false,
+      "metrics": {
+        "total_duration": 4042133511,
+        "load_duration": 884189,
+        "prompt_eval_count": 306,
+        "prompt_eval_duration": 2944005000,
+        "eval_count": 24,
+        "eval_duration": 1091275000,
+        "done_reason": "stop",
+        "elapsed_seconds": 4.043
+      }
+    },
+    {
+      "prompt": "我剛剛的任務目前怎麼樣了？",
+      "expected": "status",
+      "plan": {
+        "action": "status",
+        "question": "測試筆記.md 存檔狀態如何？"
+      },
+      "passed": true,
+      "metrics": {
+        "total_duration": 3822998943,
+        "load_duration": 1901938,
+        "prompt_eval_count": 304,
+        "prompt_eval_duration": 2879428000,
+        "eval_count": 23,
+        "eval_duration": 932967000,
+        "done_reason": "stop",
+        "elapsed_seconds": 3.824
+      }
+    }
+  ],
+  "summary": {
+    "source": "2026年10月21日會議筆記：小林負責整理需求，10月25日交初稿。小陳負責測試，預算上限是1200元。目前還沒決定是否購買新主機，先測試現有VPS。",
+    "result": "好的，以下是根據您提供的資訊，整理的三個重點：\n\n*   **會議日期：** 2026年10月21日\n*   **會議負責人：** 小林\n*   **測試負責人：** 小陳\n*   **預算上限：** 1200元\n*   **目前狀態：** 尚未決定是否購買新主機，先測試現有VPS。\n\n希望這些重點能幫助您！",
+    "metrics": {
+      "total_duration": 7159875519,
+      "load_duration": 1666295,
+      "prompt_eval_count": 249,
+      "prompt_eval_duration": 2355598000,
+      "eval_count": 104,
+      "eval_duration": 4792898000,
+      "done_reason": "stop",
+      "elapsed_seconds": 7.161
+    },
+    "required_facts_present": false
+  }
+}

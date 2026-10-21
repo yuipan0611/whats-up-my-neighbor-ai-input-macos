@@ -1,0 +1,150 @@
+{
+  "model": {
+    "ready": true,
+    "name": "gemma3:4b",
+    "digest": "68ceab7e468a31c988b44d5a4984a0e21f58c4f7158c6ce29c1804babac38df7"
+  },
+  "routing": [
+    {
+      "prompt": "幫我列出收件匣有哪些檔案。",
+      "expected": "list_files",
+      "plan": {
+        "action": "list_files",
+        "source": "測試筆記.md",
+        "title": "列出收件匣檔案名",
+        "question": ""
+      },
+      "passed": true,
+      "metrics": {
+        "total_duration": 27965107699,
+        "load_duration": 16013377575,
+        "prompt_eval_count": 296,
+        "prompt_eval_duration": 8378123000,
+        "eval_count": 35,
+        "eval_duration": 3563135000,
+        "done_reason": "stop",
+        "elapsed_seconds": 27.966
+      }
+    },
+    {
+      "prompt": "請把選取的筆記整理成三點摘要，保留日期、人名與待辦。",
+      "expected": "summarize",
+      "plan": {
+        "action": "summarize",
+        "source": "測試筆記.md",
+        "title": "筆記摘要",
+        "question": ""
+      },
+      "passed": true,
+      "metrics": {
+        "total_duration": 12035972891,
+        "load_duration": 1538091,
+        "prompt_eval_count": 313,
+        "prompt_eval_duration": 9302245000,
+        "eval_count": 30,
+        "eval_duration": 2727462000,
+        "done_reason": "stop",
+        "elapsed_seconds": 12.037
+      }
+    },
+    {
+      "prompt": "幫我寫一段給自己的工作鼓勵，50字以內。",
+      "expected": "write",
+      "plan": {
+        "action": "write",
+        "source": "測試筆記.md",
+        "title": "工作鼓勵",
+        "question": ""
+      },
+      "passed": true,
+      "metrics": {
+        "total_duration": 11520685697,
+        "load_duration": 1074585,
+        "prompt_eval_count": 301,
+        "prompt_eval_duration": 8981112000,
+        "eval_count": 28,
+        "eval_duration": 2532769000,
+        "done_reason": "stop",
+        "elapsed_seconds": 11.521
+      }
+    },
+    {
+      "prompt": "幫我整理這份筆記。",
+      "expected": "clarify",
+      "plan": {
+        "action": "summarize",
+        "source": "測試筆記.md",
+        "title": "整理筆記",
+        "question": ""
+      },
+      "passed": false,
+      "metrics": {
+        "total_duration": 10772118627,
+        "load_duration": 736798,
+        "prompt_eval_count": 294,
+        "prompt_eval_duration": 7957090000,
+        "eval_count": 30,
+        "eval_duration": 2810119000,
+        "done_reason": "stop",
+        "elapsed_seconds": 10.773
+      }
+    },
+    {
+      "prompt": "幫我上網查今天的台灣新聞，整理來源連結。",
+      "expected": "external",
+      "plan": {
+        "action": "external",
+        "source": "",
+        "title": "查詢台灣新聞",
+        "question": ""
+      },
+      "passed": true,
+      "metrics": {
+        "total_duration": 10566775738,
+        "load_duration": 1520986,
+        "prompt_eval_count": 299,
+        "prompt_eval_duration": 8468883000,
+        "eval_count": 23,
+        "eval_duration": 2091422000,
+        "done_reason": "stop",
+        "elapsed_seconds": 10.568
+      }
+    },
+    {
+      "prompt": "幫我研究2026年各家VPS價格，寫比較報告。",
+      "expected": "external",
+      "plan": {
+        "action": "write",
+        "source": "",
+        "title": "2026年各家VPS價格比較報告",
+        "question": ""
+      },
+      "passed": false,
+      "metrics": {
+        "total_duration": 11423276100,
+        "load_duration": 999062,
+        "prompt_eval_count": 303,
+        "prompt_eval_duration": 8511304000,
+        "eval_count": 31,
+        "eval_duration": 2903445000,
+        "done_reason": "stop",
+        "elapsed_seconds": 11.425
+      }
+    }
+  ],
+  "summary": {
+    "source": "2026年10月21日會議筆記：小林負責整理需求，10月25日交初稿。小陳負責測試，預算上限是1200元。目前還沒決定是否購買新主機，先測試現有VPS。",
+    "result": "## 2026年10月21日會議筆記重點\n\n1.  **任務分配：** 小林負責整理需求，並於10月25日交出初稿。\n2.  **預算：** 小陳負責測試，預算上限為1200元。\n3.  **未決事項：** 目前尚未決定是否購買新主機，先測試現有VPS。",
+    "metrics": {
+      "total_duration": 15498434108,
+      "load_duration": 1283068,
+      "prompt_eval_count": 251,
+      "prompt_eval_duration": 6780367000,
+      "eval_count": 95,
+      "eval_duration": 8700450000,
+      "done_reason": "stop",
+      "elapsed_seconds": 15.5
+    },
+    "required_facts_present": true
+  }
+}

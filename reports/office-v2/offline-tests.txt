@@ -1,0 +1,38 @@
+test_cross_origin_and_rebinding_rejected (test_office.HTTPTests.test_cross_origin_and_rebinding_rejected) ... ok
+test_real_http_result_and_download (test_office.HTTPTests.test_real_http_result_and_download) ... ok
+test_static_is_script_safe_and_no_cache (test_office.HTTPTests.test_static_is_script_safe_and_no_cache) ... ok
+test_write_requires_token_and_json (test_office.HTTPTests.test_write_requires_token_and_json) ... ok
+test_cancel_during_model_prevents_artifact (test_office.OfficeTests.test_cancel_during_model_prevents_artifact) ... ok
+test_cancelled_task_cannot_be_completed (test_office.OfficeTests.test_cancelled_task_cannot_be_completed) ... ok
+test_clarification_is_not_fabricated_result (test_office.OfficeTests.test_clarification_is_not_fabricated_result) ... ok
+test_controls_do_not_need_model (test_office.OfficeTests.test_controls_do_not_need_model) ... ok
+test_external_work_remains_pending_with_brief (test_office.OfficeTests.test_external_work_remains_pending_with_brief) ... ok
+test_input_budget_rejected_before_network (test_office.OfficeTests.test_input_budget_rejected_before_network) ... ok
+test_live_research_is_pending_even_if_model_suggests_write (test_office.OfficeTests.test_live_research_is_pending_even_if_model_suggests_write) ... ok
+test_missing_summary_input_is_rejected_even_if_model_suggests_write (test_office.OfficeTests.test_missing_summary_input_is_rejected_even_if_model_suggests_write) ... ok
+test_model_cannot_add_unapproved_file_access_fields (test_office.OfficeTests.test_model_cannot_add_unapproved_file_access_fields) ... ok
+test_pause_survives_restart_and_resume_keeps_queued (test_office.OfficeTests.test_pause_survives_restart_and_resume_keeps_queued) ... ok
+test_research_motivation_is_local_prose (test_office.OfficeTests.test_research_motivation_is_local_prose) ... ok
+test_restart_keeps_queue_and_marks_active_interrupted (test_office.OfficeTests.test_restart_keeps_queue_and_marks_active_interrupted) ... ok
+test_result_is_written_and_independently_readable (test_office.OfficeTests.test_result_is_written_and_independently_readable) ... ok
+test_same_request_does_not_repeat (test_office.OfficeTests.test_same_request_does_not_repeat) ... ok
+test_second_service_cannot_recover_first_services_tasks (test_office.OfficeTests.test_second_service_cannot_recover_first_services_tasks) ... ok
+test_source_snapshot_survives_source_change (test_office.OfficeTests.test_source_snapshot_survives_source_change) ... ok
+test_summary_without_source_or_pasted_text_does_not_generate (test_office.OfficeTests.test_summary_without_source_or_pasted_text_does_not_generate) ... ok
+test_truncated_output_is_partial (test_office.OfficeTests.test_truncated_output_is_partial) ... ok
+test_upload_rejects_overwrite_traversal_and_symlink (test_office.OfficeTests.test_upload_rejects_overwrite_traversal_and_symlink) ... ok
+test_url_summary_waits_for_external_fetch (test_office.OfficeTests.test_url_summary_waits_for_external_fetch) ... ok
+test_bounded_adapter_stdin_flags_and_clean_environment (test_v2.CodexProcessTests.test_bounded_adapter_stdin_flags_and_clean_environment) ... ok
+test_cancel_terminates_owned_process_group (test_v2.CodexProcessTests.test_cancel_terminates_owned_process_group) ... ok
+test_invalid_external_response_never_completed (test_v2.CodexProcessTests.test_invalid_external_response_never_completed) ... ok
+test_additive_migration_preserves_old_task_and_artifact (test_v2.PersistenceV2.test_additive_migration_preserves_old_task_and_artifact) ... ok
+test_default_external_never_calls_gemma_and_cancel_blocks_save (test_v2.PersistenceV2.test_default_external_never_calls_gemma_and_cancel_blocks_save) ... ok
+test_handoff_contains_new_note_and_child_freezes_only_selected_context (test_v2.PersistenceV2.test_handoff_contains_new_note_and_child_freezes_only_selected_context) ... ok
+test_journal_idempotent_raw_export_without_model (test_v2.PersistenceV2.test_journal_idempotent_raw_export_without_model) ... ok
+test_journal_selected_gemma_path_uses_frozen_context (test_v2.PersistenceV2.test_journal_selected_gemma_path_uses_frozen_context) ... ok
+test_missing_login_keeps_task_without_fabricated_result (test_v2.PersistenceV2.test_missing_login_keeps_task_without_fabricated_result) ... ok
+
+----------------------------------------------------------------------
+Ran 33 tests in 5.709s
+
+OK

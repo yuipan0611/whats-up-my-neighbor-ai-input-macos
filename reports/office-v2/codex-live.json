@@ -1,0 +1,175 @@
+{
+  "provider": "codex",
+  "health_before": {
+    "service": "neighbor-office",
+    "version": "0.2.0",
+    "model": {
+      "ready": false,
+      "name": "gemma3:4b",
+      "digest": null
+    },
+    "provider": {
+      "name": "Codex",
+      "installed": true,
+      "authenticated": true,
+      "last_success": null
+    },
+    "paused": false,
+    "external_connected": false,
+    "worker_running": true
+  },
+  "health_after": {
+    "service": "neighbor-office",
+    "version": "0.2.0",
+    "model": {
+      "ready": false,
+      "name": "gemma3:4b",
+      "digest": null
+    },
+    "provider": {
+      "name": "Codex",
+      "installed": true,
+      "authenticated": true,
+      "last_success": "2026-10-21T12:52:16+00:00"
+    },
+    "paused": false,
+    "external_connected": true,
+    "worker_running": true
+  },
+  "journal_ids": [
+    "ddebb35e-9a24-45f3-91ec-a0a81e879624",
+    "2111bc1b-dfd4-4f8f-94e8-59b97889d9f9"
+  ],
+  "task": {
+    "id": "1e882349-d193-4bf9-a943-f01191c5e705",
+    "prompt": "將選取的紀錄整理成兩點，保留日期、金額及不確定性。",
+    "source": "",
+    "status": "completed",
+    "stage": "外部成果已保存。",
+    "title": "將選取的紀錄整理成兩點，保留日期、金額及不確定性。",
+    "created": "2026-10-21T12:51:58+00:00",
+    "updated": "2026-10-21T12:52:08+00:00",
+    "plan": null,
+    "result": "1. 2026-10-21 生活紀錄【合成驗證】：小林於 10 月 25 日交初稿，預算 300 元。\n2. 同筆紀錄註明：是否出門尚未決定。\n\n## 建議下一步\n\n由辦公室保存整理結果；待確認是否出門後補充紀錄。",
+    "artifact": "tasks/1e882349-d193-4bf9-a943-f01191c5e705/result.md",
+    "metrics": "{\"provider\": \"codex\", \"elapsed_seconds\": 10.022, \"usage\": {\"input_tokens\": 12804, \"cached_input_tokens\": 0, \"cache_write_input_tokens\": 0, \"output_tokens\": 98, \"reasoning_output_tokens\": 0}}",
+    "model": "Codex（帳號預設模型）",
+    "source_snapshot": null,
+    "executor": "codex",
+    "parent_id": "",
+    "journal_ids": "[\"ddebb35e-9a24-45f3-91ec-a0a81e879624\"]",
+    "context_snapshot": "生活紀錄 2026-10-21\n【合成驗證】小林 10 月 25 日交初稿，預算 300 元；是否出門尚未決定。",
+    "events": [
+      {
+        "seq": 80,
+        "task_id": "1e882349-d193-4bf9-a943-f01191c5e705",
+        "at": "2026-10-21T12:51:58+00:00",
+        "status": "queued",
+        "message": "交辦已保存到 VPS。"
+      },
+      {
+        "seq": 81,
+        "task_id": "1e882349-d193-4bf9-a943-f01191c5e705",
+        "at": "2026-10-21T12:51:58+00:00",
+        "status": "planning",
+        "message": "正在準備交辦。"
+      },
+      {
+        "seq": 82,
+        "task_id": "1e882349-d193-4bf9-a943-f01191c5e705",
+        "at": "2026-10-21T12:51:58+00:00",
+        "status": "running",
+        "message": "已選取 Codex，正在準備外部工作。"
+      },
+      {
+        "seq": 83,
+        "task_id": "1e882349-d193-4bf9-a943-f01191c5e705",
+        "at": "2026-10-21T12:51:58+00:00",
+        "status": "running",
+        "message": "Codex 正在處理，已等待 0 秒。"
+      },
+      {
+        "seq": 84,
+        "task_id": "1e882349-d193-4bf9-a943-f01191c5e705",
+        "at": "2026-10-21T12:52:08+00:00",
+        "status": "saving",
+        "message": "正在保存外部成果。"
+      },
+      {
+        "seq": 85,
+        "task_id": "1e882349-d193-4bf9-a943-f01191c5e705",
+        "at": "2026-10-21T12:52:08+00:00",
+        "status": "completed",
+        "message": "外部成果已保存。"
+      }
+    ]
+  },
+  "child": {
+    "id": "e3b18b8a-6673-4187-9f90-67ecf4fa3ace",
+    "prompt": "請依交接重寫為一句提醒，保留尚未決定的事。",
+    "source": "",
+    "status": "completed",
+    "stage": "外部成果已保存。",
+    "title": "請依交接重寫為一句提醒，保留尚未決定的事。",
+    "created": "2026-10-21T12:52:09+00:00",
+    "updated": "2026-10-21T12:52:16+00:00",
+    "plan": null,
+    "result": "提醒：【合成驗證】小林於 10 月 25 日交初稿，預算 300 元，日期與金額已確認，是否出門仍尚未決定。\n\n## 建議下一步\n\n待確認是否出門後，由辦公室補充紀錄。",
+    "artifact": "tasks/e3b18b8a-6673-4187-9f90-67ecf4fa3ace/result.md",
+    "metrics": "{\"provider\": \"codex\", \"elapsed_seconds\": 6.193, \"usage\": {\"input_tokens\": 13086, \"cached_input_tokens\": 0, \"cache_write_input_tokens\": 0, \"output_tokens\": 79, \"reasoning_output_tokens\": 0}}",
+    "model": "Codex（帳號預設模型）",
+    "source_snapshot": null,
+    "executor": "codex",
+    "parent_id": "1e882349-d193-4bf9-a943-f01191c5e705",
+    "journal_ids": "[]",
+    "context_snapshot": "# 工作交接\n\n任務：1e882349-d193-4bf9-a943-f01191c5e705\n狀態：completed\n進度：外部成果已保存。\n來源：無\n成果位置：tasks/1e882349-d193-4bf9-a943-f01191c5e705/result.md\n\n## 原始交辦\n\n將選取的紀錄整理成兩點，保留日期、金額及不確定性。\n\n## 本次明確選取的原文快照\n\n\n\n生活紀錄 2026-10-21\n【合成驗證】小林 10 月 25 日交初稿，預算 300 元；是否出門尚未決定。\n\n## 已保存內容\n\n1. 2026-10-21 生活紀錄【合成驗證】：小林於 10 月 25 日交初稿，預算 300 元。\n2. 同筆紀錄註明：是否出門尚未決定。\n\n## 建議下一步\n\n由辦公室保存整理結果；待確認是否出門後補充紀錄。\n\n## 交接補充與下一步\n\n2026-10-21T12:52:08+00:00\n\n補充：【合成驗證】已確認日期與金額。\n\n下一步：下次請明確保留尚未決定的外出計畫。\n",
+    "events": [
+      {
+        "seq": 87,
+        "task_id": "e3b18b8a-6673-4187-9f90-67ecf4fa3ace",
+        "at": "2026-10-21T12:52:09+00:00",
+        "status": "queued",
+        "message": "交辦已保存到 VPS。"
+      },
+      {
+        "seq": 88,
+        "task_id": "e3b18b8a-6673-4187-9f90-67ecf4fa3ace",
+        "at": "2026-10-21T12:52:10+00:00",
+        "status": "planning",
+        "message": "正在準備交辦。"
+      },
+      {
+        "seq": 89,
+        "task_id": "e3b18b8a-6673-4187-9f90-67ecf4fa3ace",
+        "at": "2026-10-21T12:52:10+00:00",
+        "status": "running",
+        "message": "已選取 Codex，正在準備外部工作。"
+      },
+      {
+        "seq": 90,
+        "task_id": "e3b18b8a-6673-4187-9f90-67ecf4fa3ace",
+        "at": "2026-10-21T12:52:10+00:00",
+        "status": "running",
+        "message": "Codex 正在處理，已等待 0 秒。"
+      },
+      {
+        "seq": 91,
+        "task_id": "e3b18b8a-6673-4187-9f90-67ecf4fa3ace",
+        "at": "2026-10-21T12:52:16+00:00",
+        "status": "saving",
+        "message": "正在保存外部成果。"
+      },
+      {
+        "seq": 92,
+        "task_id": "e3b18b8a-6673-4187-9f90-67ecf4fa3ace",
+        "at": "2026-10-21T12:52:16+00:00",
+        "status": "completed",
+        "message": "外部成果已保存。"
+      }
+    ]
+  },
+  "handoff": {
+    "text": "# 工作交接\n\n任務：1e882349-d193-4bf9-a943-f01191c5e705\n狀態：completed\n進度：外部成果已保存。\n來源：無\n成果位置：tasks/1e882349-d193-4bf9-a943-f01191c5e705/result.md\n\n## 原始交辦\n\n將選取的紀錄整理成兩點，保留日期、金額及不確定性。\n\n## 本次明確選取的原文快照\n\n\n\n生活紀錄 2026-10-21\n【合成驗證】小林 10 月 25 日交初稿，預算 300 元；是否出門尚未決定。\n\n## 已保存內容\n\n1. 2026-10-21 生活紀錄【合成驗證】：小林於 10 月 25 日交初稿，預算 300 元。\n2. 同筆紀錄註明：是否出門尚未決定。\n\n## 建議下一步\n\n由辦公室保存整理結果；待確認是否出門後補充紀錄。\n\n## 交接補充與下一步\n\n2026-10-21T12:52:08+00:00\n\n補充：【合成驗證】已確認日期與金額。\n\n下一步：下次請明確保留尚未決定的外出計畫。\n"
+  },
+  "result_sha256": "6b74044978bc411729113b18fa41f06569087e031abd87041f227fb112e14074"
+}

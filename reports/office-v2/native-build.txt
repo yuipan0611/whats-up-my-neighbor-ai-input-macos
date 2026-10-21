@@ -1,0 +1,3 @@
+/Users/panh.c/Desktop/What's up my neighbor/worktrees/neighbor-office-v1/build/office-preview/貓咪辦公室預覽.app/Contents/Info.plist: OK
+/Users/panh.c/Desktop/What's up my neighbor/worktrees/neighbor-office-v1/build/office-preview/貓咪辦公室預覽.app: replacing existing signature
+/Users/panh.c/Desktop/What's up my neighbor/worktrees/neighbor-office-v1/build/office-preview/貓咪辦公室預覽.app

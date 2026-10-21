@@ -1,0 +1,113 @@
+{
+  "id": "9b02d3cc-4085-490a-8b5a-914dea2fce52",
+  "prompt": "【公開搜尋驗證】請查 OpenAI 官方 Codex CLI 文件，說明 codex exec 的 --ephemeral 選項有什麼用途。請實際查閱，回答兩句並附官方連結。",
+  "source": "",
+  "status": "completed",
+  "stage": "外部成果已保存。",
+  "title": "【公開搜尋驗證】請查 OpenAI 官方 Codex CLI 文件，說明 codex exec 的 ",
+  "created": "2026-10-21T12:58:52+00:00",
+  "updated": "2026-10-21T12:59:21+00:00",
+  "plan": null,
+  "result": "已實際查閱 OpenAI 官方文件：`codex exec --ephemeral` 的用途是在執行時不將工作階段的執行紀錄檔（session rollout files）持久保存到磁碟。[官方參數文件](https://developers.openai.com/codex/cli/reference)\n若這次任務不需要保留上述紀錄，可使用 `codex exec --ephemeral \"任務內容\"`；官方非互動模式指南也提供此用法。[官方使用指南](https://developers.openai.com/codex/noninteractive)\n\n## 建議下一步\n\n由辦公室保存查證結果。",
+  "artifact": "tasks/9b02d3cc-4085-490a-8b5a-914dea2fce52/result.md",
+  "metrics": "{\"provider\": \"codex\", \"elapsed_seconds\": 29.306, \"usage\": {\"input_tokens\": 92681, \"cached_input_tokens\": 64640, \"cache_write_input_tokens\": 0, \"output_tokens\": 374, \"reasoning_output_tokens\": 0}, \"event_types\": {\"error\": 1, \"agent_message\": 2, \"web_search\": 6}}",
+  "model": "Codex（帳號預設模型）",
+  "source_snapshot": null,
+  "executor": "codex",
+  "parent_id": "",
+  "journal_ids": "[]",
+  "context_snapshot": "",
+  "events": [
+    {
+      "seq": 130,
+      "task_id": "9b02d3cc-4085-490a-8b5a-914dea2fce52",
+      "at": "2026-10-21T12:58:52+00:00",
+      "status": "queued",
+      "message": "交辦已保存到 VPS。"
+    },
+    {
+      "seq": 131,
+      "task_id": "9b02d3cc-4085-490a-8b5a-914dea2fce52",
+      "at": "2026-10-21T12:58:52+00:00",
+      "status": "planning",
+      "message": "正在準備交辦。"
+    },
+    {
+      "seq": 132,
+      "task_id": "9b02d3cc-4085-490a-8b5a-914dea2fce52",
+      "at": "2026-10-21T12:58:52+00:00",
+      "status": "running",
+      "message": "已選取 Codex，正在準備外部工作。"
+    },
+    {
+      "seq": 133,
+      "task_id": "9b02d3cc-4085-490a-8b5a-914dea2fce52",
+      "at": "2026-10-21T12:58:52+00:00",
+      "status": "running",
+      "message": "Codex 正在處理，已等待 0 秒。"
+    },
+    {
+      "seq": 134,
+      "task_id": "9b02d3cc-4085-490a-8b5a-914dea2fce52",
+      "at": "2026-10-21T12:58:59+00:00",
+      "status": "running",
+      "message": "Codex 正在查詢公開來源。"
+    },
+    {
+      "seq": 135,
+      "task_id": "9b02d3cc-4085-490a-8b5a-914dea2fce52",
+      "at": "2026-10-21T12:59:02+00:00",
+      "status": "running",
+      "message": "Codex 正在查詢公開來源。"
+    },
+    {
+      "seq": 136,
+      "task_id": "9b02d3cc-4085-490a-8b5a-914dea2fce52",
+      "at": "2026-10-21T12:59:05+00:00",
+      "status": "running",
+      "message": "Codex 正在查詢公開來源。"
+    },
+    {
+      "seq": 137,
+      "task_id": "9b02d3cc-4085-490a-8b5a-914dea2fce52",
+      "at": "2026-10-21T12:59:07+00:00",
+      "status": "running",
+      "message": "Codex 正在處理，已等待 15 秒。"
+    },
+    {
+      "seq": 138,
+      "task_id": "9b02d3cc-4085-490a-8b5a-914dea2fce52",
+      "at": "2026-10-21T12:59:08+00:00",
+      "status": "running",
+      "message": "Codex 正在查詢公開來源。"
+    },
+    {
+      "seq": 139,
+      "task_id": "9b02d3cc-4085-490a-8b5a-914dea2fce52",
+      "at": "2026-10-21T12:59:12+00:00",
+      "status": "running",
+      "message": "Codex 正在查詢公開來源。"
+    },
+    {
+      "seq": 140,
+      "task_id": "9b02d3cc-4085-490a-8b5a-914dea2fce52",
+      "at": "2026-10-21T12:59:14+00:00",
+      "status": "running",
+      "message": "Codex 正在查詢公開來源。"
+    },
+    {
+      "seq": 141,
+      "task_id": "9b02d3cc-4085-490a-8b5a-914dea2fce52",
+      "at": "2026-10-21T12:59:21+00:00",
+      "status": "saving",
+      "message": "正在保存外部成果。"
+    },
+    {
+      "seq": 142,
+      "task_id": "9b02d3cc-4085-490a-8b5a-914dea2fce52",
+      "at": "2026-10-21T12:59:21+00:00",
+      "status": "completed",
+      "message": "外部成果已保存。"
+    }
+  ]
+}
