@@ -22,7 +22,7 @@
 ## 未驗證
 
 - 預覽 App 那一次沒有登入。它跟自動檢查用的是同一個 `RemoteDesktopHandoffController` 和 `SSHTunnelController`，差別只在 UI。
-- 長時間連線與網路中斷時，會不會顯示「通道已中斷」：這次沒有在真實 VPS 上測，只有離線測試覆蓋。
+- ~~長時間連線與網路中斷~~：已由下方 T5d 補測通過。
 - 第二使用者目標，以及 Vine Server。
 - SETUP.md 2.9 節的 SSH 收緊與 systemd 開機自動啟動。
 
@@ -31,3 +31,16 @@
 1. 在 hPanel Web console 以 root 執行 SETUP.md 2.9 節，關閉密碼登入、root 只准金鑰登入。執行完告訴 Claude，Claude 會從 Mac 確認只剩 `publickey`。
 2. 選用：讓 VNC 開機自動啟動。在那之前，VPS 重開機後要再以 neighbor 執行一次 `vncserver :1 -localhost yes -SecurityTypes VncAuth`。
 3. 決定第二使用者要用哪個 VNC 伺服器（PRD 第 10 節）。
+
+## 補測：長時間連線與網路中斷（T5d，2026-10-21）
+
+工具是 `scripts/check-real-vps-drop.sh` 加 `Tests/RemoteDesktopVPSDropCheck.swift`。它用 App 原本的控制器與 SSH 參數，透過使用者的 `neighbor-vps` 別名連線；啟動器換成記錄用的假元件，不打開螢幕共享，所以不需要人輸入。
+
+| 項目 | 結果 |
+|---|---|
+| 長時間連線（`HOLD_SECONDS=600`） | 10 分鐘內每 10 秒檢查一次，共 59 次，全部通過：<br>• 狀態維持 `viewerOpened`<br>• 15901 有程式在監聽<br>• 經由通道的 RFB 探測成功 |
+| 網路中斷 | 在 VPS 上只對這條通道新出現的那一個 `sshd-session` 送出 `kill -STOP`，模擬封包有去無回的斷線。依 App 的 `ServerAliveInterval=15`、`ServerAliveCountMax=2`，本機 ssh 在 **36.6 秒**後結束，面板狀態變成「SSH 通道已中斷，螢幕共享畫面會停止…」，15901 隨即釋放。<br>（30 秒短版試跑也得到相同結果，耗時 34.4 秒） |
+| 清理 | 結束後，遠端 neighbor 的 sshd 程序清單和執行前完全一樣，使用者原本的 `pts/1` 工作階段沒有被碰到；本機沒有殘留 ssh |
+| 試跑發現並修正 | 檢查程式的輸出被緩衝；被結束時，App 開的 ssh 會殘留。已讓輸出逐行送出，收到結束訊號時先收掉通道，腳本另外用精確參數再清一次 |
+
+結論：長時間連線穩定；網路中斷時約 30～45 秒內會顯示「通道已中斷」，不會自動重連，符合 PRD 第 5 節。

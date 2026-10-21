@@ -34,8 +34,9 @@ status: 進行中，只在本機分支；不 push、不 merge、不發布
 | T5a | 本機假 VNC 伺服器與螢幕共享 loopback 檢查工具；任務說明見 [tasks/T5a-loopback-check.md](tasks/T5a-loopback-check.md) | **Antigravity**（Gemini，`agy` CLI） | `scripts/fake-rfb-server.py`、`Tests/RemoteDesktopLiveCheck.swift`、`scripts/check-screen-sharing-loopback.sh` | R1 | 完成；R2 補 RFB 3.3 握手，Claude 修腳本並實測 |
 | T5b | VPS 路徑本機 sshd 端到端檢查；任務說明見 [tasks/T5b-vps-path-loopback.md](tasks/T5b-vps-path-loopback.md) | **Antigravity**（Gemini，`agy` CLI） | `scripts/check-vps-path-loopback.sh`、`Tests/RemoteDesktopVPSLiveCheck.swift` | R2 | 完成，實測結束碼 0 |
 | T5c | Docker（Debian 12）版 Linux VPS 端到端，加上假伺服器持續監聽；任務說明見 [tasks/T5c-docker-vps.md](tasks/T5c-docker-vps.md) | **Antigravity**（Gemini，`agy` CLI） | `scripts/docker-vps/`、`scripts/check-docker-vps.sh`、`scripts/fake-rfb-server.py` | T5b | 完成（2026-10-21）：使用者經由螢幕共享登入 xfce 桌面；找到 macOS 螢幕共享的 VNC 密碼 8 字元限制 |
+| T5d | 真實 VPS 長時間連線與網路中斷；任務說明見 [tasks/T5d-real-vps-long-and-drop.md](tasks/T5d-real-vps-long-and-drop.md) | **Antigravity**（Gemini，`agy` CLI） | `scripts/check-real-vps-drop.sh`、`Tests/RemoteDesktopVPSDropCheck.swift` | T5 VPS | 完成（2026-10-21）：10 分鐘 59/59 次檢查通過；斷線 36.6 秒後顯示「通道已中斷」 |
 | R3 | 15901 佔用檢查改成判斷有沒有程式在監聽，避免 TIME_WAIT 誤報；任務說明見 [tasks/R3-port-check-time-wait.md](tasks/R3-port-check-time-wait.md) | **Antigravity**（Gemini，`agy` CLI） | 核心、測試檔 | T5b | 完成，重現測試在舊實作下會失敗 |
-| T5 | 真機驗證（第二使用者先，VPS 等資料） | 使用者＋Claude | 驗證紀錄 `reports/REMOTE_DESKTOP_HANDOFF_<日期>.md` | T4、遠端設定完成 | **VPS 完成（2026-10-21）**：真實 Hostinger VPS 端到端與預覽 App 都通過，見 `reports/REMOTE_DESKTOP_VPS_2026-10-21.md`。第二使用者仍待決定要用哪個伺服器 |
+| T5 | 真機驗證（VPS；第二使用者已於 2026-10-21 由使用者決定不做，見 PRD 第 10 節） | 使用者＋Claude | 驗證紀錄 `reports/REMOTE_DESKTOP_HANDOFF_<日期>.md` | T4、遠端設定完成 | **VPS 完成（2026-10-21）**：真實 Hostinger VPS 端到端與預覽 App 都通過，見 `reports/REMOTE_DESKTOP_VPS_2026-10-21.md`。第二使用者仍待決定要用哪個伺服器 |
 
 ## 規則（所有 agent）
 
@@ -73,3 +74,4 @@ status: 進行中，只在本機分支；不 push、不 merge、不發布
 - 2026-10-21｜Claude｜T5 VPS｜完成｜Tests/RemoteDesktopVPSLiveCheck.swift 加 `--alias`（預設不變）；新增 scripts/check-real-vps.sh、scripts/vps-bootstrap-ubuntu.sh；SETUP.md 補 2.8／2.9 與 tigervnc-tools 說明；PRD 第 9、10 節｜真實 Hostinger VPS：check-real-vps.sh 結束碼 0，使用者確認桌面、滑鼠、鍵盤；TigerVNC log 記探測為 Clean disconnection；預覽 App Linux VPS 接手／結束，15901 釋放｜SSH 收緊與 VNC 開機自動啟動待使用者以 root 執行（SETUP 2.9）；第二使用者伺服器仍待決定
 - 2026-10-21｜Claude｜T5c｜暫停｜—｜已由真實 VPS 取代。Gemini 的 `fake-rfb-server.py`、`check-screen-sharing-loopback.sh` 修改與 docker-vps 檔案保留在工作目錄，未提交｜要不要繼續做 Docker 版（例如當 CI 用的重現環境），之後再決定
 - 2026-10-21｜Claude｜T5c｜完成（取代上一行的「暫停」）｜Gemini 寫的 docker-vps 與 check-docker-vps.sh；Claude 補上 `tigervnc-tools`、`VNC_TEST_PASSWORD`、保存 TigerVNC log；fake-rfb-server 改為持續監聽｜Docker 中照 SETUP.md 設定的 TigerVNC 1.12：密碼 `neighbor1`（9 字元）時，螢幕共享被判定認證失敗 4 次，但同一組密碼的標準 VncAuth 客戶端能登入；改成 8 字元後，使用者經由 SSH 通道一次登入成功，看到 xfce 桌面（截圖在 build/docker-vps-evidence/）；伺服器存的密碼解出來是前 8 個字｜測試容器與映像檔已刪除，Docker Desktop 已關閉
+- 2026-10-21｜Claude｜T5d、R5｜完成｜Gemini 寫 drop-check 與腳本；Claude 修正 comm 排序與 PID 驗證；R5 由 Gemini 修輸出緩衝與收到訊號時收掉通道｜真實 neighbor-vps：10 分鐘保持 59/59 通過；只凍結通道自己的遠端 sshd-session，36.6 秒後顯示 tunnelLostMessage，15901 釋放；遠端與本機都沒有殘留；使用者原有的 pts/1 沒被碰到｜第 4 階段結束：VPS 全部完成；第二使用者依使用者決定不做；SETUP 2.9 屬於 VPS 維運，需要 root，不在本計畫範圍
