@@ -68,3 +68,33 @@
 - 測試：`./scripts/test-all.sh` 的 27 組全部通過，接手控制那組增為 33 個情境。
 - 建置：`./scripts/build.sh` 通過，產物同時包含 x86_64 與 arm64。
 - 正式 App：原始碼與 `3101f03` 相比沒有差異（0 行）。
+
+## 2026-10-21 補充：Docker（Debian 12）端到端，以及 VNC 密碼 8 字元限制
+
+真實 VPS（Hostinger、Ubuntu 26.04）的結果見 `REMOTE_DESKTOP_VPS_2026-10-21.md`。這一節是另一條平行的驗證。
+
+### 做法
+
+`scripts/check-docker-vps.sh` 用 Docker 跑 Debian 12，TigerVNC 1.12、xfce4、sshd 都照 SETUP.md 第 2 節設定。只把 sshd 開在 Mac 的 127.0.0.1:22923，VNC 只聽容器內的 loopback。App 的 VPS 路徑經由真的 SSH 通道連進去，最後由使用者在螢幕共享輸入密碼。
+
+### 結果
+
+| 測試 | 結果 |
+|---|---|
+| SETUP.md 自我檢查 | 5901 只聽 `127.0.0.1` 與 `[::1]` |
+| 密碼 `neighbor1`（9 字元） | 使用者輸入完全相同的 9 個字元，TigerVNC 仍判定 `Authentication failure`。<br>• Claude 解出伺服器存的密碼是 `neighbor`，也就是前 8 個字。<br>• 用同一組密碼的標準 VncAuth 客戶端（Python 加 openssl DES）能登入，前 8 個字錯的對照組則失敗。<br>• 結論：螢幕共享不會像標準客戶端那樣把超過 8 字元的密碼截斷 |
+| 密碼 `neighbor`（8 字元） | 一次登入成功。TigerVNC 記到 `Client pixel format depth 32`，送出 4 次畫面更新，螢幕共享顯示 xfce 桌面（截圖：`build/docker-vps-evidence/screen-sharing-xfce-desktop.jpg`） |
+| 結束接手 | 15901 立即釋放，檢查腳本結束碼 0 |
+
+### 順帶修正
+
+- Debian 12 的 `vncpasswd` 在 `tigervnc-tools` 套件，SETUP.md 已明確列出。
+- 螢幕共享登入時會重新連一條線，假伺服器原本在第一條連線結束時就退出，現在改為持續監聽，直到送出畫面的那條連線結束。修正後，螢幕共享登入後顯示了假伺服器的測試圖樣（上綠下灰），截圖在 `build/loopback-check/screen-sharing-after-login.jpg`。
+
+### 過程中的溝通失誤
+
+第 5 次測試前，Claude 把伺服器密碼改成 8 字元，但只在訊息中提了一句，使用者沒看到，所以仍然輸入 9 字元，該次測試等於沒有測到 8 字元。之後先跟使用者確認、說清楚，第 6 次才得到有效結果。以後改測試參數時，要先確認對方知道，再開始執行。
+
+### 收尾
+
+測試容器、`neighbor-vps-test:local` 與 `debian:bookworm-slim` 映像檔都已刪除，Docker Desktop 已關閉，臨時私鑰與密碼檔已刪除。
