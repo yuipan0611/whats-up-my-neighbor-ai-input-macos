@@ -1,7 +1,7 @@
 ---
 title: 貓咪辦公室手機直連：交接板
 date: 2026-10-22
-status: 已拍板 N2＋WSS＋CLI 配對；後端實作中；未部署
+status: 後端（M1–M3）與手機頁面（M4）本機完成；M5 網路前置、M6 部署與 iPhone 實機都尚未進行
 ---
 
 # 交接板
@@ -16,11 +16,11 @@ status: 已拍板 N2＋WSS＋CLI 配對；後端實作中；未部署
 | M1 | `/api/sync`、`_office` 事件、Host/Origin 設定化 | Claude | `office/office.py`、`office/tests/test_mobile.py` | — | 完成（本機） |
 | M2 | WebSocket 端點（D2＝W） | Claude | 同 M1 | M1 | 完成（本機） |
 | M3 | 配對（VPS CLI）、devices、session、撤銷 | Claude | 同 M1 | M1 | 完成（本機） |
-| M4 | 手機版面、配對頁、補狀態、WebSocket、重連、退回輪詢 | Codex | `office/static/*` | PRD 第 13 節（已定稿） | 進行中 |
-| M5 | 網路前置：SSH 收緊，加上 Caddy、DNS（office.nekonode.cloud）、ufw 80/443 | YUI（root、hPanel） | VPS 設定 | — | 未開始，此輪不做 |
-| M6 | 部署與 iPhone 實機驗收 | Claude＋YUI | 驗證紀錄 `reports/office-mobile/` | M1–M5，另取 YUI 部署同意 | 未開始 |
+| M4 | 手機版面、配對頁、補狀態、WebSocket、重連、退回輪詢 | Codex | `office/static/*` | PRD 第 13 節（已定稿） | 完成（本機）。見 `reports/office-mobile/LOCAL-VERIFICATION.md` |
+| M5 | 網路前置：SSH 收緊，加上 Caddy、DNS（office.nekonode.cloud）、ufw 80/443 | YUI（root、hPanel） | VPS 設定；Codex 的範本 `office/services/*.example` 與 `docs/mobile/DEPLOY.md` | 取得 YUI 部署同意 | 未做 |
+| M6 | 部署與 iPhone 實機驗收 | Claude＋YUI | 驗證紀錄 `reports/office-mobile/` | M1–M5，另取 YUI 部署同意 | 未做 |
 
-M1 的回應格式（PRD 第 5、6 節）一旦定稿，M4 就可以和 M2、M3 同時進行。
+**尚未驗收**：public HTTPS/WSS（Secure cookie、wss、Caddy 轉送、限速取得的真實 IP）與 iPhone 實機（鎖定手機續跑、斷線補狀態、撤銷）。這些都要在 M5 部署之後，才能宣稱端到端完成。
 
 ## 規則
 
@@ -47,3 +47,4 @@ M1 的回應格式（PRD 第 5、6 節）一旦定稿，M4 就可以和 M2、M3 
   ｜Codex 提出的兩點：`ws_send` 在磁碟上只有一次 sendall，重連測試的 seq 1–5 也沒有重複；`snapshot()` 已照建議改成單一 transaction。
   
   ｜未做：部署、DNS、Caddy、iPhone 實機（M5、M6）。Codex 的 static/README/DEPLOY/services 由 Codex 自行 commit。
+- 2026-10-22｜Claude｜M0 狀態同步｜完成｜只改 PRD.md、HANDOFF.md｜依 Codex 的本機整合紀錄，把 M4 標為本機完成；PRD 第 10 節勾選已通過的後端項目；S 標為不適用｜M5、M6 未做；public HTTPS/WSS 與真機待部署驗收。Codex 先前誤讀 ws_send，是 sed 範圍重疊造成的，程式本身沒有問題

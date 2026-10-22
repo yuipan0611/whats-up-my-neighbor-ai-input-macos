@@ -1,9 +1,9 @@
 ---
 title: 貓咪辦公室：iPhone Chrome 直連 VPS
 date: 2026-10-22
-status: 草案。只對齊設計，未拍板、未實作、未部署
+status: 已拍板（N2＋W＋CLI 配對＋暫不通知）。後端與手機頁面本機完成；public HTTPS/WSS 與 iPhone 實機尚未部署驗收
 branch: codex/neighbor-office-v1（基於 e0cb2f3；VPS 上執行的是 75bc990）
-owners: Claude 負責 office/office.py 與後端測試；Codex 負責 office/static/* 與手機頁面（提案）
+owners: Claude 負責 office/office.py 與後端測試；Codex 負責 office/static/* 與手機頁面（2026-10-22 確認）
 ---
 
 # 貓咪辦公室：iPhone Chrome 直連 VPS
@@ -200,26 +200,28 @@ iPhone Chrome → https://office.nekonode.cloud（A 記錄 → 31.97.108.187）
 
 ## 10. 驗收標準
 
-**後端離線測試（Claude）**
-- [ ] `/api/sync`：
+**後端離線測試（Claude）**：2026-10-22 全部通過（`8576550`，62 項）
+- [x] `/api/sync`：
   - `after=0` 回傳全部事件；`after=latest` 回傳空。
   - 超過 limit 時 `truncated=true`。
   - 回傳的 seq 嚴格遞增、沒有缺號。
-- [ ] 暫停、恢復、新增生活紀錄、上傳檔案時，各自產生一筆 `_office` 事件。
-- [ ] W：
+- [x] 暫停、恢復、新增生活紀錄、上傳檔案時，各自產生一筆 `_office` 事件。
+- [x] W：
   - 握手時 `Sec-WebSocket-Accept` 正確。
   - Origin 不符就拒絕；沒有 cookie 就拒絕。
   - 斷線後帶 `after` 重連，不漏事件也不重複。
-- [ ] S：`Last-Event-ID` 與 `after` 等價；心跳按時送出；長連線不被 15 秒逾時切斷。
-- [ ] 配對：
+- [ ] ~~S：`Last-Event-ID` 與 `after` 等價；心跳按時送出；長連線不被 15 秒逾時切斷。~~ 不適用：D2 選了 W，沒有實作 S。
+- [x] 配對：
   - 錯誤碼次數限速有效。
   - 過期或已用過的配對碼被拒絕。
   - 撤銷後 cookie 失效，長連線也被關閉。
-- [ ] 非 loopback 的 Host 呼叫 `/api/bootstrap` 回 404；loopback 的行為不變。
-- [ ] 重送相同 UUID 不會建立第二筆。
-- [ ] 原本的 38 個測試全部通過。
+- [x] 非 loopback 的 Host 呼叫 `/api/bootstrap` 回 404；loopback 的行為不變。
+- [x] 重送相同 UUID 不會建立第二筆。
+- [x] 原本的 38 個測試全部通過。
 
-**實機（YUI 的 iPhone 配合，D1、D2 拍板後才做）**
+**本機整合（Codex，2026-10-22）**：新版 office.py 的隔離本機服務，加上 Chrome 實際 WebSocket，顯示「已連上 VPS · 即時」；暫停／恢復即時更新。另以模擬 API 驗證 390px 配對頁與配對後的切換。見 `reports/office-mobile/LOCAL-VERIFICATION.md`。這不能代替下面的 public 驗收：本機是 http，cookie 的 Secure 屬性與 wss 都沒有走到。
+
+**實機（尚未進行；要等 M5 部署並取得 YUI 同意）**
 - [ ] 手機配對後交辦一件工作，接著鎖定手機 5 分鐘以上，工作照樣在 VPS 完成。
 - [ ] 重新打開頁面，補回期間所有步驟與完成狀態，沒有缺漏、沒有重複。
 - [ ] 飛航模式下送出，恢復網路後重送，結果只有一筆。
