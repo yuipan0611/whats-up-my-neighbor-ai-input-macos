@@ -148,6 +148,9 @@ final class StatusMenuController {
         menu.addItem(forgetPhoneItem)
 
         menu.addItem(NSMenuItem.separator())
+        let officialWebsite = NSMenuItem(title: "官方網站", action: actions["openOfficialWebsite"], keyEquivalent: "")
+        officialWebsite.target = target
+        menu.addItem(officialWebsite)
         let catSettings = NSMenuItem(title: "開啟貓咪設定資料夾…", action: actions["openCatSettings"], keyEquivalent: "")
         catSettings.target = target
         menu.addItem(catSettings)

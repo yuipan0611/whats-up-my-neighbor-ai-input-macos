@@ -175,6 +175,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     private func configureStatusItem() {
         statusMenu.configure(target: self, toggleTitle: toggleMenuTitle(), relayTitle: relayMenuTitle(), clipboardMenu: clipboardHistoryMenu.menu, actions: [
             "openCatSettings": #selector(openCatSettings),
+            "openOfficialWebsite": #selector(openOfficialWebsite),
             "showVocabularyWindow": #selector(showVocabularyWindow),
             "showNekoPreview": #selector(showNekoPreview),
             "toggleDesktopPet": #selector(toggleDesktopPet),
@@ -867,6 +868,10 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
                 showError("無法把金鑰存入鑰匙圈：\(error.localizedDescription)")
             }
         }
+    }
+
+    @objc private func openOfficialWebsite() {
+        NSWorkspace.shared.open(URL(string: "https://nekonode.cloud")!)
     }
 
     @objc private func openAccessibilitySettings() {

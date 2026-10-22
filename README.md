@@ -2,6 +2,8 @@
 
 [![Build](https://github.com/yuipan0611/whats-up-my-neighbor-ai-input-macos/actions/workflows/build.yml/badge.svg)](https://github.com/yuipan0611/whats-up-my-neighbor-ai-input-macos/actions/workflows/build.yml) [![Latest release](https://img.shields.io/github/v/release/yuipan0611/whats-up-my-neighbor-ai-input-macos)](https://github.com/yuipan0611/whats-up-my-neighbor-ai-input-macos/releases/latest) [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
+官方網站：[nekonode.cloud](https://nekonode.cloud)。使用教學、開發者文件、Roadmap 與更新紀錄都在這裡。
+
 Windows 測試版已獨立至 [Windows repo](https://github.com/yuipan0611/whats-up-my-neighbor-ai-input-windows)，功能、測試與發佈各自維護。拆分與舊網址相容說明見 [repo 搬遷紀錄](docs/REPOSITORY_MIGRATION.md)。
 
 一個輕量的原生 macOS 選單列語音輸入 App。按下自訂全域快捷鍵開始錄音，再按一次停止；音訊會送到 Groq `whisper-large-v3`，轉成繁體中文後貼到原本游標位置。也可與配套 iPhone App 在附近直接連線，從手機修改轉錄文字並明確選擇「只貼上」或「貼到 Mac 並送出」（iPhone App 仍在開發中，尚未發布）。
