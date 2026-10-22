@@ -12,7 +12,18 @@ owners: Claude 負責 office/office.py 與後端測試；Codex 負責 office/sta
 
 YUI 人在外面時，用 iPhone Chrome 打開貓咪辦公室交辦工作。關掉手機後，VPS 照樣把工作做完；重新打開時，從 SQLite 的 `events.seq` 把錯過的狀態補回來。
 
-## 2. 待 YUI 拍板（本文件不替 YUI 決定）
+## 2. 決策
+
+**YUI 已於 2026-10-22 拍板**：
+
+- **D1 = N2**：公網 HTTPS/WSS。
+- **D2 = W**：WebSocket。
+- **D3 = VPS CLI**：用 `office.py pair` 產生配對碼。
+- **D4 = 暫不做通知。**
+
+N1（Tailscale）與 S（SSE）保留在下文，作為日後替代方案的紀錄。**若第 5–7 節的細節與第 13 節衝突，以第 13 節「API 契約 v1」為準。**
+
+原本的選項表：
 
 | 編號 | 決定 | 選項 |
 |---|---|---|
@@ -220,6 +231,167 @@ iPhone Chrome → https://office.nekonode.cloud（A 記錄 → 31.97.108.187）
 - iOS 上用 Chrome「加入主畫面」後能不能收 Web Push（D4）。
 - `tailscale serve` 是否轉送 WebSocket upgrade 和 SSE。
 - Caddy 轉送 SSE 時需要哪些不緩衝設定。
+
+## 13. API 契約 v1（前端依此實作；2026-10-22 定稿）
+
+### 13.1 兩種模式
+
+| 模式 | 判定方式 | 認證 |
+|---|---|---|
+| local | Host 屬於 `{127.0.0.1, localhost}:{伺服器埠, 18421}`，**而且**請求沒有 `X-Forwarded-For`、`X-Forwarded-Host`、`Forwarded` 任何一個標頭 | 與 v0.2 相同：`GET /api/bootstrap` 取 token，不用配對 |
+| public | 伺服器以 `--public-origin https://office.nekonode.cloud` 啟動，而且 Host 完全等於 `office.nekonode.cloud` | cookie 加配對 |
+
+- 不符合上面任何一種的請求，一律回 421。
+- 帶有 `X-Forwarded-*` 標頭卻使用 loopback Host，也回 421。這是為了防止經過反向代理的請求冒充本機。
+
+### 13.2 public 模式下不需要 cookie 的路徑
+
+- `GET /`，以及 `GET /<檔名>`：檔名符合 `^[a-z0-9][a-z0-9-]*\.(js|css|svg|png|webmanifest)$`，對應 `office/static/` 下的一般檔案（不能是符號連結）。前端新增靜態檔不必通知後端。
+- `GET /api/session`
+- `POST /api/pair`
+
+其餘 `/api/*` 都要帶有效的 cookie，否則回 `401 {"error": "...", "pair_required": true}`。`GET /api/bootstrap` 在 public 模式回 404。
+
+### 13.3 寫入規則（public 模式的所有 POST）
+
+以下三項都要滿足：
+
+- `Origin` 必須完全等於 `https://office.nekonode.cloud`，**不能省略**。
+- `Content-Type: application/json`
+- `X-Office-Token: <token>`。token 由 `GET /api/session` 取得；`POST /api/pair` 不需要 token。
+
+錯誤回應：
+
+- token 不對（例如服務重啟過）：`403 {"error": "頁面已過期，請重新整理。", "token_expired": true}`。前端重新呼叫 `GET /api/session`，然後重試一次。
+- Origin 不符：`403`，**沒有** `token_expired` 欄位。
+
+local 模式的規則與 v0.2 相同。
+
+### 13.4 Session 與配對
+
+**`GET /api/session`**
+
+- `200`：
+  ```json
+  {"mode": "public", "device": {"id": "uuid", "name": "YUI iPhone"}, "token": "...", "version": "0.3.0", "latest_seq": 230}
+  ```
+  回應同時重新發一次 cookie，有效期往後延 30 天。
+  local 模式回 `{"mode": "local", "device": null, ...}`，其餘欄位相同。
+- `401 {"error": "需要先配對這台裝置。", "pair_required": true}`
+
+**`POST /api/pair`**，body `{"code": "12345678", "name": "YUI iPhone"}`
+
+- `code`：8 位數字字串。
+- `name`：去掉頭尾空白後 1–40 字。
+
+| 回應 | 內容 |
+|---|---|
+| `201` | `{"device": {...}, "token": "...", "version": "0.3.0", "latest_seq": N}`，同時設定 cookie |
+| `400` | 格式不對 |
+| `403` | `{"error": "配對碼不正確或已失效。"}`。錯誤、過期、已用過、已作廢，**都回同一句話** |
+| `429` | `{"error": "...", "retry_after": 秒數}`，並帶 `Retry-After` 標頭 |
+| `404` | local 模式 |
+
+**`POST /api/session/forget`**：撤銷自己這台裝置並清除 cookie，回 `200 {"ok": true}`。
+
+**Cookie**：
+
+```text
+__Host-office=<device_id>.<secret>; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=2592000
+```
+
+前端讀不到 cookie，也不需要讀。
+
+**配對碼（D3）**：
+
+- 在 VPS 上執行 `python3 -I office.py pair`，會印出 8 位數配對碼和到期時間。
+- 有效 10 分鐘，只能用一次。產生新的配對碼時，舊的未用配對碼一律作廢；同一組配對碼累計失敗 10 次也作廢。
+- 限速：同一個用戶端 IP 在 10 分鐘內失敗 5 次，就鎖 10 分鐘。IP 取 `X-Forwarded-For` 最右邊那一個，也就是 Caddy 實際看到的位址。
+
+**裝置管理**（只能在 VPS 上用 CLI，或在 local 模式下呼叫）：
+
+- CLI：`office.py devices` 列出裝置；`office.py revoke <device_id>` 撤銷裝置。
+- HTTP（local 模式）：`GET /api/devices`、`POST /api/devices/<id>/revoke`。
+- 撤銷後：HTTP 請求立即回 401；已連上的 WebSocket 在 2 秒內以 close code 4401 關閉。
+
+### 13.5 補狀態：`GET /api/sync?after=<int ≥ 0>&limit=<1–1000，預設 500>`
+
+```json
+{"latest_seq": 230, "events": [Event, ...], "more": false, "stale": false, "paused": false}
+```
+
+- `Event` 的格式：
+  ```json
+  {"seq": 182, "task_id": "uuid 或 \"_office\"", "at": "ISO8601", "status": "...", "message": "..."}
+  ```
+- `events` 依 seq 由小到大排列，最多 `limit` 筆。
+- `more: true`：後面還有事件。用最後一筆的 seq 當 `after` 再呼叫一次。
+- `stale: true`：`after` 比 `latest_seq` 還大，代表資料庫換過。這時 `events` 為空，前端要重抓整份快照。
+- `task_id = "_office"` 的事件，`status` 只會是 `paused`、`resumed`、`journal_added`、`file_added` 其中之一；`message` 只是一句說明，不含生活紀錄原文。
+- `GET /api/tasks` 的回應新增 `latest_seq` 欄位，與任務清單在同一個 transaction 中讀取，所以兩者一致。
+
+### 13.6 WebSocket：`wss://office.nekonode.cloud/api/ws?after=<seq>`
+
+**握手**
+
+- public 模式：cookie 有效，而且 Origin 完全等於 public origin。
+- local 模式：Origin 若有帶，必須等於 `http://<Host>`。
+- 握手失敗時回一般的 HTTP 錯誤，不會升級：
+
+  | 狀態碼 | 原因 |
+  |---|---|
+  | 401 | 未配對或裝置已撤銷 |
+  | 403 | Origin 不符 |
+  | 400 | 握手標頭不正確 |
+  | 426 | 不是 WebSocket 請求 |
+
+  瀏覽器端只會看到連線失敗。前端應該接著呼叫 `GET /api/session`，判斷是不是需要配對。
+
+**伺服器送出的訊息**（文字訊框，內容是 JSON）
+
+1. 一連上先送：
+   ```json
+   {"type": "hello", "latest_seq": N, "paused": bool, "version": "0.3.0"}
+   ```
+2. 補送積壓的事件：`after` 之後的每一筆，依序送出：
+   ```json
+   {"type": "event", "event": Event}
+   ```
+   - 如果積壓超過 500 筆，或 `after > latest_seq`，改送一則 `{"type": "resync", "latest_seq": N}`，然後從 N 開始接續即時事件。收到 `resync` 時，前端要重抓整份快照。
+3. 之後有新事件就即時送出，格式同第 2 點。
+
+**心跳**：伺服器每 20 秒送一個 ping 控制訊框，瀏覽器會自動回 pong。60 秒內沒有收到用戶端的任何訊框，伺服器就以 4000 關閉連線。
+
+**用戶端可以送的訊息**：選用的 `{"type": "ack", "seq": N}`，伺服器記為該裝置最後讀到的位置。其他文字一律忽略。單一訊息上限 4096 bytes。
+
+**指令不走 WebSocket**：交辦、取消、交接、暫停照舊用 POST。
+
+**Close code**
+
+| 代碼 | 意思 | 前端要做什麼 |
+|---|---|---|
+| 1001 | 伺服器關閉 | 重連 |
+| 1002 | 協定錯誤 | 重連 |
+| 1009 | 訊息太大 | 重連 |
+| 4000 | 閒置逾時 | 重連 |
+| 4008 | 同一裝置開了第 3 條連線，最舊的那條被關掉 | 重連 |
+| 4401 | 未授權或裝置已撤銷 | **不要重連**，改進配對畫面 |
+
+**前端流程**
+
+1. 第一次打開：先 `GET /api/session`。
+2. 依序抓 `GET /api/tasks`（裡面有 `latest_seq`）、`/api/journal`、`/api/files`。
+3. 開 WebSocket，帶 `?after=<latest_seq>`。
+4. 收到事件時，丟掉 seq 小於或等於已處理 seq 的；其餘依 `task_id` 重抓 `GET /api/tasks/<id>`，同一件任務 1 秒內最多抓一次。
+5. 斷線時以退避間隔重連（1、2、4… 最多 30 秒），每次都帶已處理的 seq。
+6. 頁面回到前景時：先 `GET /api/sync?after=` 補齊（`more` 為 true 就繼續抓，`stale` 為 true 就重抓整份），再開 WebSocket。
+
+### 13.7 其他
+
+- public 模式的 CSP 加上 `connect-src 'self' wss://office.nekonode.cloud`。
+- `VERSION` 改為 `0.3.0`。
+- 部署時 service 的 ExecStart 要加 `--public-origin https://office.nekonode.cloud`。**這次不部署。**
+- Caddy 必須保留原本的 Host（這是預設行為），也必須附上 `X-Forwarded-For`（也是預設）。
 
 ## 12. 不做
 
