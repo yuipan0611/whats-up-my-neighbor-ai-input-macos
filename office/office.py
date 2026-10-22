@@ -2,6 +2,7 @@
 """Private, persistent cat office. Python standard library only."""
 from __future__ import annotations
 import argparse
+import base64
 import contextlib
 import fcntl
 import hashlib
@@ -12,19 +13,23 @@ import os
 from pathlib import Path
 import re
 import secrets
+import select
 import signal
+import socket
+import struct
 import subprocess
 import selectors
 import sqlite3
+import sys
 import threading
 import time
 import urllib.error
 import urllib.request
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 import uuid
 from datetime import datetime, timezone
 
-VERSION = '0.2.0'
+VERSION = '0.3.0'
 ACTIVE = ('planning', 'running', 'saving')
 ACTIONS = ['summarize', 'write', 'list_files', 'status', 'clarify', 'external']
 PLAN_SCHEMA = {
@@ -56,9 +61,11 @@ def now():
 
 
 class OfficeError(Exception):
-    def __init__(self, message, code=400):
+    def __init__(self, message, code=400, extra=None, headers=None):
         super().__init__(message)
         self.code = code
+        self.extra = extra or {}
+        self.headers = headers or {}
 
 
 class Cancelled(Exception):
@@ -113,6 +120,11 @@ class Store:
                 created TEXT NOT NULL, note TEXT NOT NULL, next_step TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS journal (id TEXT PRIMARY KEY, created TEXT NOT NULL,
                 day TEXT NOT NULL, text TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                secret_hash TEXT NOT NULL, created TEXT NOT NULL, last_seen TEXT NOT NULL,
+                last_seq INTEGER NOT NULL DEFAULT 0, revoked INTEGER NOT NULL DEFAULT 0, revoked_at TEXT);
+            CREATE TABLE IF NOT EXISTS pairing_codes (code_hash TEXT PRIMARY KEY, created REAL NOT NULL,
+                expires REAL NOT NULL, failures INTEGER NOT NULL DEFAULT 0, used INTEGER NOT NULL DEFAULT 0);
             ''')
         self.db.chmod(0o600)
 
@@ -140,7 +152,105 @@ class Store:
 
     def set_paused(self, value):
         with self.connect() as c:
+            old = c.execute("SELECT value FROM settings WHERE key='paused'").fetchone()[0] == '1'
             c.execute("UPDATE settings SET value=? WHERE key='paused'", ('1' if value else '0',))
+            if old != bool(value):
+                self._office_event(c, 'paused' if value else 'resumed', '辦公室已暫停。' if value else '辦公室已恢復工作。')
+
+    OFFICE = '_office'
+
+    def _office_event(self, c, status, message):
+        c.execute('INSERT INTO events(task_id,at,status,message) VALUES (?,?,?,?)', (self.OFFICE, now(), status, message))
+
+    def sync(self, after, limit=500):
+        with self.connect() as c:
+            latest = c.execute('SELECT COALESCE(MAX(seq),0) FROM events').fetchone()[0]
+            paused = c.execute("SELECT value FROM settings WHERE key='paused'").fetchone()[0] == '1'
+            if after > latest:
+                return {'latest_seq': latest, 'events': [], 'more': False, 'stale': True, 'paused': paused}
+            rows = [dict(r) for r in c.execute('SELECT seq,task_id,at,status,message FROM events WHERE seq>? ORDER BY seq LIMIT ?', (after, limit + 1))]
+            return {'latest_seq': latest, 'events': rows[:limit], 'more': len(rows) > limit, 'stale': False, 'paused': paused}
+
+    def latest_seq(self):
+        with self.connect() as c:
+            return c.execute('SELECT COALESCE(MAX(seq),0) FROM events').fetchone()[0]
+
+    def snapshot(self):
+        """Tasks, pause flag and latest seq from one read transaction, so a client resumes from a matching cursor."""
+        with self.connect() as c:
+            c.execute('BEGIN')
+            latest = c.execute('SELECT COALESCE(MAX(seq),0) FROM events').fetchone()[0]
+            tasks = [dict(r) for r in c.execute(self.TASK_LIST)]
+            paused = c.execute("SELECT value FROM settings WHERE key='paused'").fetchone()[0] == '1'
+            return tasks, latest, paused
+
+    CODE_SECONDS = 600
+    CODE_FAILURES = 10
+    DEVICE_DAYS = 30
+
+    def create_pairing_code(self):
+        code = f'{secrets.randbelow(10 ** 8):08d}'
+        t = time.time()
+        with self.connect() as c:
+            c.execute('UPDATE pairing_codes SET used=1 WHERE used=0')
+            c.execute('INSERT INTO pairing_codes(code_hash,created,expires) VALUES (?,?,?)',
+                      (hashlib.sha256(code.encode()).hexdigest(), t, t + self.CODE_SECONDS))
+        return code, datetime.fromtimestamp(t + self.CODE_SECONDS, timezone.utc).isoformat(timespec='seconds')
+
+    def redeem_pairing_code(self, code, name):
+        """Return (device, secret) for a live code, or None. Every miss counts against the live code."""
+        digest = hashlib.sha256(code.encode()).hexdigest()
+        t = time.time()
+        with self.connect() as c:
+            live = c.execute('SELECT code_hash FROM pairing_codes WHERE used=0 AND expires>? AND failures<?',
+                             (t, self.CODE_FAILURES)).fetchall()
+            if not any(hmac.compare_digest(row[0], digest) for row in live):
+                c.execute('UPDATE pairing_codes SET failures=failures+1 WHERE used=0 AND expires>?', (t,))
+                return None
+            c.execute('UPDATE pairing_codes SET used=1 WHERE code_hash=?', (digest,))
+            device_id, secret, stamp = str(uuid.uuid4()), secrets.token_urlsafe(32), now()
+            c.execute('INSERT INTO devices(id,name,secret_hash,created,last_seen) VALUES (?,?,?,?,?)',
+                      (device_id, name, hashlib.sha256(secret.encode()).hexdigest(), stamp, stamp))
+            return {'id': device_id, 'name': name}, secret
+
+    def device_for_cookie(self, value):
+        device_id, _, secret = (value or '').partition('.')
+        try:
+            if str(uuid.UUID(device_id)) != device_id or not secret:
+                return None
+        except ValueError:
+            return None
+        with self.connect() as c:
+            row = c.execute('SELECT * FROM devices WHERE id=? AND revoked=0', (device_id,)).fetchone()
+            if row is None or not hmac.compare_digest(row['secret_hash'], hashlib.sha256(secret.encode()).hexdigest()):
+                return None
+            seen = datetime.fromisoformat(row['last_seen'])
+            age = (datetime.now(timezone.utc) - seen).total_seconds()
+            if age > self.DEVICE_DAYS * 86400:
+                return None
+            if age > 60:
+                c.execute('UPDATE devices SET last_seen=? WHERE id=?', (now(), device_id))
+            return {'id': row['id'], 'name': row['name']}
+
+    def device_active(self, device_id):
+        with self.connect() as c:
+            return c.execute('SELECT 1 FROM devices WHERE id=? AND revoked=0', (device_id,)).fetchone() is not None
+
+    def set_device_seq(self, device_id, seq):
+        with self.connect() as c:
+            c.execute('UPDATE devices SET last_seq=MAX(last_seq,?) WHERE id=?', (seq, device_id))
+
+    def devices(self):
+        with self.connect() as c:
+            return [dict(r) for r in c.execute('SELECT id,name,created,last_seen,last_seq,revoked,revoked_at FROM devices ORDER BY created')]
+
+    def revoke_device(self, device_id):
+        with self.connect() as c:
+            row = c.execute('SELECT id FROM devices WHERE id=?', (device_id,)).fetchone()
+            if row is None:
+                raise OfficeError('找不到這台裝置。', 404)
+            c.execute('UPDATE devices SET revoked=1, revoked_at=COALESCE(revoked_at,?) WHERE id=?', (now(), device_id))
+            return dict(c.execute('SELECT id,name,created,last_seen,last_seq,revoked,revoked_at FROM devices WHERE id=?', (device_id,)).fetchone())
 
     def _change(self, c, id_, status, message, **fields):
         allowed = {'plan', 'result', 'artifact', 'metrics', 'title', 'source_snapshot'}
@@ -227,9 +337,11 @@ class Store:
             task['events'] = [dict(e) for e in c.execute('SELECT * FROM events WHERE task_id=? ORDER BY seq', (id_,))]
             return task
 
+    TASK_LIST = 'SELECT id,prompt,source,status,stage,title,created,updated,model,executor,parent_id FROM tasks ORDER BY created DESC,rowid DESC LIMIT 100'
+
     def list(self):
         with self.connect() as c:
-            return [dict(r) for r in c.execute('SELECT id,prompt,source,status,stage,title,created,updated,model,executor,parent_id FROM tasks ORDER BY created DESC,rowid DESC LIMIT 100')]
+            return [dict(r) for r in c.execute(self.TASK_LIST)]
 
     def claim(self):
         with self.connect() as c:
@@ -276,6 +388,8 @@ class Store:
                 os.fsync(f.fileno())
         except FileExistsError:
             raise OfficeError('同名檔案已存在，請改用新的檔名。', 409)
+        with self.connect() as c:
+            self._office_event(c, 'file_added', '收件匣新增檔案：' + name)
         return {'name': name, 'bytes': path.stat().st_size}
 
     def save(self, id_, text, artifact='result.md'):
@@ -319,7 +433,8 @@ class Store:
             old = c.execute('SELECT * FROM journal WHERE id=?', (id_,)).fetchone()
             if old and (old['text'] != text.strip() or old['day'] != day):
                 raise OfficeError('紀錄編號已用於其他內容。', 409)
-            c.execute('INSERT OR IGNORE INTO journal VALUES(?,?,?,?)', (id_, now(), day, text.strip()))
+            if c.execute('INSERT OR IGNORE INTO journal VALUES(?,?,?,?)', (id_, now(), day, text.strip())).rowcount:
+                self._office_event(c, 'journal_added', '新增一筆生活紀錄。')
             entries = c.execute('SELECT * FROM journal WHERE day=? ORDER BY created,rowid', (day,)).fetchall()
             folder = self.root / 'journal'
             if folder.is_symlink():
@@ -761,17 +876,94 @@ class Office:
             self.store.change(id_, 'completed', '已完成，成果已保存到 VPS。', artifact=path, result=result, metrics=json.dumps(metrics))
 
 
+WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
+COOKIE = '__Host-office'
+STATIC_NAME = re.compile(r'[a-z0-9][a-z0-9-]*\.(js|css|svg|png|webmanifest)')
+STATIC_TYPES = {'js': 'application/javascript; charset=utf-8', 'css': 'text/css; charset=utf-8', 'svg': 'image/svg+xml',
+                'png': 'image/png', 'webmanifest': 'application/manifest+json'}
+FORWARD_HEADERS = ('X-Forwarded-For', 'X-Forwarded-Host', 'Forwarded')
+
+
+class PairLimiter:
+    """Per-IP lockout after repeated wrong pairing codes."""
+    FAILURES, WINDOW, LOCK = 5, 600, 600
+
+    def __init__(self, clock=time.monotonic):
+        self.clock, self.lock, self.failures, self.locked = clock, threading.Lock(), {}, {}
+
+    def retry_after(self, ip):
+        with self.lock:
+            until = self.locked.get(ip, 0) - self.clock()
+            return int(until) + 1 if until > 0 else 0
+
+    def fail(self, ip):
+        with self.lock:
+            t = self.clock()
+            recent = [x for x in self.failures.get(ip, []) if t - x < self.WINDOW] + [t]
+            self.failures[ip] = recent
+            if len(recent) >= self.FAILURES:
+                self.locked[ip], self.failures[ip] = t + self.LOCK, []
+
+
+class Socket:
+    """One upgraded WebSocket connection; another thread may ask it to close."""
+    def __init__(self, device_id):
+        self.device_id, self.kick_code = device_id, None
+
+
 class Server(ThreadingHTTPServer):
     daemon_threads = True
-    def __init__(self, port, office):
+    PER_DEVICE = 2
+    LOCAL_SOCKETS = 8
+
+    def __init__(self, port, office, public_origin=None):
         self.office = office
         self.token = secrets.token_urlsafe(32)
+        self.key = secrets.token_bytes(32)
         self.static = Path(__file__).parent / 'static'
+        self.public_origin = self.public_host = None
+        if public_origin:
+            parts = urlsplit(public_origin)
+            if parts.scheme != 'https' or not parts.hostname or parts.path not in ('', '/') or parts.query or parts.username:
+                raise ValueError('--public-origin must look like https://office.example.com')
+            self.public_host = parts.netloc.lower()
+            self.public_origin = 'https://' + self.public_host
+        self.limiter = PairLimiter()
+        self.sockets, self.sockets_lock = [], threading.Lock()
+        self.stopping = threading.Event()
         super().__init__(('127.0.0.1', port), Handler)
+
+    def device_token(self, device_id):
+        return hmac.new(self.key, b'device:' + device_id.encode(), hashlib.sha256).hexdigest()
+
+    def register(self, sock):
+        with self.sockets_lock:
+            mine = [s for s in self.sockets if s.device_id == sock.device_id and s.kick_code is None]
+            limit = self.LOCAL_SOCKETS if sock.device_id is None else self.PER_DEVICE
+            for old in mine[:max(0, len(mine) - limit + 1)]:
+                old.kick_code = 4008
+            self.sockets.append(sock)
+
+    def unregister(self, sock):
+        with self.sockets_lock:
+            if sock in self.sockets:
+                self.sockets.remove(sock)
+
+    def kick_device(self, device_id):
+        with self.sockets_lock:
+            for sock in self.sockets:
+                if sock.device_id == device_id:
+                    sock.kick_code = 4401
+
+    def shutdown(self):
+        self.stopping.set()
+        super().shutdown()
 
 
 class Handler(BaseHTTPRequestHandler):
     server_version = 'NeighborOffice/' + VERSION
+    mode, device = 'local', None
+
     def setup(self):
         super().setup()
         self.connection.settimeout(15)
@@ -779,15 +971,20 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
-    def send(self, code, value, content_type='application/json; charset=utf-8', download=False):
+    def send(self, code, value, content_type='application/json; charset=utf-8', download=False, headers=None):
         data = json.dumps(value, ensure_ascii=False).encode() if content_type.startswith('application/json') else (value.encode() if isinstance(value, str) else value)
+        connect = f" connect-src 'self' wss://{self.server.public_host};" if self.mode == 'public' else ''
         self.send_response(code)
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(data)))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('X-Frame-Options', 'DENY')
-        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        self.send_header('Content-Security-Policy', f"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self';{connect} frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        if self.mode == 'public':
+            self.send_header('Strict-Transport-Security', 'max-age=31536000')
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
         if download:
             self.send_header('Content-Disposition', 'attachment; filename="result.md"')
         self.end_headers()
@@ -796,32 +993,112 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def boundary(self, write=False):
+    def fail(self, e):
+        self.send(e.code, {'error': str(e), **e.extra}, headers=e.headers)
+
+    def boundary(self, write=False, upgrade=False):
+        """Decide local or public mode and enforce Host, Origin and fetch-site rules."""
+        self.device = None
         host = self.headers.get('Host', '')
         port = self.server.server_port
-        if host not in {f'{name}:{p}' for name in ('127.0.0.1', 'localhost') for p in (port, 18421)}:
+        forwarded = any(self.headers.get(h) for h in FORWARD_HEADERS)
+        if host in {f'{name}:{p}' for name in ('127.0.0.1', 'localhost') for p in (port, 18421)} and not forwarded:
+            self.mode, expected = 'local', 'http://' + host
+        elif self.server.public_host and host.lower() == self.server.public_host:
+            self.mode, expected = 'public', self.server.public_origin
+        else:
             raise OfficeError('連線位址不允許。', 421)
         origin = self.headers.get('Origin')
-        if origin and origin != 'http://' + host:
+        if origin and origin != expected:
+            raise OfficeError('只接受辦公室頁面的操作。', 403)
+        if self.mode == 'public' and (write or upgrade) and not origin:
             raise OfficeError('只接受辦公室頁面的操作。', 403)
         if self.headers.get('Sec-Fetch-Site') == 'cross-site':
             raise OfficeError('只接受辦公室頁面的操作。', 403)
-        if write:
-            if not hmac.compare_digest(self.headers.get('X-Office-Token', ''), self.server.token):
-                raise OfficeError('頁面已過期，請重新整理。', 403)
-            if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
-                raise OfficeError('請以 JSON 交辦。', 415)
+        if write and self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
+            raise OfficeError('請以 JSON 交辦。', 415)
+
+    def cookie(self):
+        for part in self.headers.get('Cookie', '').split(';'):
+            name, _, value = part.strip().partition('=')
+            if name == COOKIE:
+                return value
+        return None
+
+    def authenticate(self):
+        if self.mode == 'public':
+            self.device = self.server.office.store.device_for_cookie(self.cookie())
+            if self.device is None:
+                raise OfficeError('需要先配對這台裝置。', 401, {'pair_required': True})
+
+    def token_for_request(self):
+        return self.server.device_token(self.device['id']) if self.mode == 'public' else self.server.token
+
+    def check_token(self):
+        if not hmac.compare_digest(self.headers.get('X-Office-Token', ''), self.token_for_request()):
+            raise OfficeError('頁面已過期，請重新整理。', 403, {'token_expired': True})
+
+    def set_cookie(self, device_id, secret):
+        return {'Set-Cookie': f'{COOKIE}={device_id}.{secret}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age={Store.DEVICE_DAYS * 86400}'}
+
+    def client_ip(self):
+        forwarded = [p.strip() for p in self.headers.get('X-Forwarded-For', '').split(',') if p.strip()]
+        return forwarded[-1] if forwarded else self.client_address[0]
+
+    def session_body(self):
+        return {'mode': self.mode, 'device': self.device, 'token': self.token_for_request(), 'version': VERSION,
+                'latest_seq': self.server.office.store.latest_seq()}
+
+    def static_file(self, path):
+        if path == '/':
+            return self.server.static / 'index.html', 'text/html; charset=utf-8'
+        name = path[1:]
+        match = STATIC_NAME.fullmatch(name)
+        candidate = self.server.static / name
+        if match and candidate.is_file() and not candidate.is_symlink():
+            return candidate, STATIC_TYPES[match.group(1)]
+        return None, None
 
     def do_GET(self):
         try:
-            self.boundary()
-            path = urlsplit(self.path).path
+            parts = urlsplit(self.path)
+            path = parts.path
+            self.boundary(upgrade=path == '/api/ws')
             office = self.server.office
-            if path in ('/', '/app.js', '/style.css', '/cat.svg'):
-                name, mime = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'application/javascript; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8'), '/cat.svg': ('cat.svg', 'image/svg+xml')}[path]
-                self.send(200, (self.server.static / name).read_bytes(), mime)
-            elif path == '/api/bootstrap':
+            if not path.startswith('/api/'):
+                file, mime = self.static_file(path)
+                if file is None:
+                    raise OfficeError('找不到這個頁面。', 404)
+                self.send(200, file.read_bytes(), mime)
+                return
+            if path == '/api/session':
+                cookie = self.cookie() if self.mode == 'public' else None
+                self.authenticate()
+                headers = self.set_cookie(*cookie.split('.', 1)) if cookie else None
+                self.send(200, self.session_body(), headers=headers)
+                return
+            if path == '/api/bootstrap' and self.mode == 'public':
+                raise OfficeError('找不到這個頁面。', 404)
+            self.authenticate()
+            if path == '/api/ws':
+                self.websocket(parts.query)
+                return
+            if path == '/api/bootstrap':
                 self.send(200, {'token': self.server.token, 'version': VERSION})
+            elif path == '/api/sync':
+                query = parse_qs(parts.query)
+                try:
+                    after = int(query.get('after', ['0'])[0])
+                    limit = int(query.get('limit', ['500'])[0])
+                except ValueError:
+                    raise OfficeError('after 與 limit 必須是整數。')
+                if after < 0 or not 1 <= limit <= 1000:
+                    raise OfficeError('after 不可為負數，limit 需介於 1 至 1000。')
+                self.send(200, office.store.sync(after, limit))
+            elif path == '/api/devices':
+                if self.mode == 'public':
+                    raise OfficeError('找不到這個頁面。', 404)
+                self.send(200, {'devices': office.store.devices()})
             elif path == '/api/health':
                 provider = office.agent.health() if office.agent else {'name': 'Codex', 'installed': False, 'authenticated': False}
                 with office.store.connect() as c:
@@ -832,7 +1109,8 @@ class Handler(BaseHTTPRequestHandler):
                                'external_connected': provider['authenticated'] and bool(success),
                                'worker_running': bool(office.thread and office.thread.is_alive())})
             elif path == '/api/tasks':
-                self.send(200, {'tasks': office.store.list(), 'paused': office.store.paused()})
+                tasks, latest, paused = office.store.snapshot()
+                self.send(200, {'tasks': tasks, 'paused': paused, 'latest_seq': latest})
             elif path == '/api/files':
                 self.send(200, {'files': office.store.files()})
             elif path == '/api/journal':
@@ -845,8 +1123,7 @@ class Handler(BaseHTTPRequestHandler):
                 text = '# 生活紀錄\n\n' + '\n\n---\n\n'.join(f"{e['day']} · {e['id']}\n\n{e['text']}" for e in reversed(office.store.journal()))
                 self.send(200, text, 'text/markdown; charset=utf-8', True)
             elif re.fullmatch(r'/api/tasks/[0-9a-f-]{36}(/download)?', path):
-                parts = path.split('/')
-                task = office.store.get(parts[3])
+                task = office.store.get(path.split('/')[3])
                 if path.endswith('/download'):
                     if task['result'] is None:
                         raise OfficeError('這個任務還沒有可下載的內容。', 404)
@@ -856,7 +1133,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 raise OfficeError('找不到這個頁面。', 404)
         except OfficeError as e:
-            self.send(e.code, {'error': str(e)})
+            self.fail(e)
         except Exception:
             self.send(500, {'error': '讀取失敗，請重新整理。'})
 
@@ -874,12 +1151,25 @@ class Handler(BaseHTTPRequestHandler):
                 raise OfficeError('請求格式不正確。')
             path = urlsplit(self.path).path
             office = self.server.office
+            if path == '/api/pair':
+                self.pair(body)
+                return
+            self.authenticate()
+            self.check_token()
             if path == '/api/command':
                 self.send(202, office.command(body))
             elif path == '/api/files':
                 self.send(201, office.store.upload(body.get('name'), body.get('text')))
             elif path == '/api/journal':
                 self.send(201, office.store.add_journal(body))
+            elif path == '/api/session/forget' and self.mode == 'public':
+                office.store.revoke_device(self.device['id'])
+                self.server.kick_device(self.device['id'])
+                self.send(200, {'ok': True}, headers={'Set-Cookie': f'{COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0'})
+            elif re.fullmatch(r'/api/devices/[0-9a-f-]{36}/revoke', path) and self.mode == 'local':
+                device = office.store.revoke_device(path.split('/')[3])
+                self.server.kick_device(device['id'])
+                self.send(200, {'device': device})
             elif re.fullmatch(r'/api/tasks/[0-9a-f-]{36}/handoff', path):
                 self.send(201, office.store.add_handoff(path.split('/')[3], body))
             elif re.fullmatch(r'/api/tasks/[0-9a-f-]{36}/cancel', path):
@@ -887,18 +1177,215 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 raise OfficeError('找不到這個操作。', 404)
         except OfficeError as e:
-            self.send(e.code, {'error': str(e)})
+            self.fail(e)
         except (ValueError, UnicodeError):
             self.send(400, {'error': '請求格式不正確。'})
         except Exception:
             self.send(500, {'error': '操作失敗，請重新整理後檢查任務紀錄。'})
 
+    def pair(self, body):
+        if self.mode != 'public':
+            raise OfficeError('找不到這個操作。', 404)
+        ip = self.client_ip()
+        wait = self.server.limiter.retry_after(ip)
+        if wait:
+            raise OfficeError('嘗試次數過多，請稍後再試。', 429, {'retry_after': wait}, {'Retry-After': str(wait)})
+        code, name = body.get('code'), body.get('name')
+        if not isinstance(code, str) or not re.fullmatch(r'\d{8}', code):
+            raise OfficeError('配對碼是 8 位數字。')
+        if not isinstance(name, str) or not 1 <= len(name.strip()) <= 40 or any(ord(ch) < 32 for ch in name):
+            raise OfficeError('裝置名稱需為 1 至 40 字。')
+        paired = self.server.office.store.redeem_pairing_code(code, name.strip())
+        if paired is None:
+            self.server.limiter.fail(ip)
+            raise OfficeError('配對碼不正確或已失效。', 403)
+        self.device, secret = paired
+        self.send(201, {**self.session_body(), 'device': self.device}, headers=self.set_cookie(self.device['id'], secret))
+
+    # --- WebSocket (RFC 6455): server pushes events; commands stay on HTTP POST. ---
+
+    PING_EVERY, IDLE_LIMIT, REVOKE_CHECK, BACKLOG, MAX_MESSAGE = 20, 60, 2, 500, 4096
+
+    def websocket(self, query):
+        if self.headers.get('Upgrade', '').lower() != 'websocket' or 'upgrade' not in self.headers.get('Connection', '').lower():
+            raise OfficeError('需要 WebSocket 連線。', 426, headers={'Upgrade': 'websocket'})
+        key = self.headers.get('Sec-WebSocket-Key', '')
+        try:
+            valid_key = len(base64.b64decode(key, validate=True)) == 16
+        except ValueError:
+            valid_key = False
+        if not valid_key or self.headers.get('Sec-WebSocket-Version') != '13':
+            raise OfficeError('WebSocket 握手不正確。', 400)
+        try:
+            after = int(parse_qs(query).get('after', ['0'])[0])
+        except ValueError:
+            raise OfficeError('after 必須是整數。')
+        if after < 0:
+            raise OfficeError('after 不可為負數。')
+        accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+        self.send_response(101)
+        self.send_header('Upgrade', 'websocket')
+        self.send_header('Connection', 'Upgrade')
+        self.send_header('Sec-WebSocket-Accept', accept)
+        self.end_headers()
+        self.wfile.flush()
+        self.close_connection = True
+        sock = Socket(self.device['id'] if self.device else None)
+        self.server.register(sock)
+        try:
+            self.ws_loop(sock, after)
+        except Exception:
+            # The socket is already upgraded, so no HTTP error page can follow.
+            pass
+        finally:
+            self.server.unregister(sock)
+
+    def ws_send(self, opcode, payload=b''):
+        size = len(payload)
+        if size < 126:
+            head = struct.pack('!BB', 0x80 | opcode, size)
+        elif size < 65536:
+            head = struct.pack('!BBH', 0x80 | opcode, 126, size)
+        else:
+            head = struct.pack('!BBQ', 0x80 | opcode, 127, size)
+        self.connection.sendall(head + payload)
+
+    def ws_json(self, value):
+        self.ws_send(0x1, json.dumps(value, ensure_ascii=False).encode())
+
+    def ws_close(self, code):
+        try:
+            self.ws_send(0x8, struct.pack('!H', code))
+        except OSError:
+            pass
+
+    def ws_frames(self, buffer):
+        """Split complete client frames off the buffer: (frames, leftover, close code or None)."""
+        frames = []
+        while True:
+            if len(buffer) < 2:
+                return frames, buffer, None
+            first, second = buffer[0], buffer[1]
+            length, offset = second & 0x7F, 2
+            if length == 126:
+                if len(buffer) < 4:
+                    return frames, buffer, None
+                length, offset = struct.unpack('!H', buffer[2:4])[0], 4
+            elif length == 127:
+                if len(buffer) < 10:
+                    return frames, buffer, None
+                length, offset = struct.unpack('!Q', buffer[2:10])[0], 10
+            if not second & 0x80 or not first & 0x80 or first & 0x70:
+                return frames, b'', 1002
+            if length > self.MAX_MESSAGE:
+                return frames, b'', 1009
+            if len(buffer) < offset + 4 + length:
+                return frames, buffer, None
+            mask = buffer[offset:offset + 4]
+            data = bytes(b ^ mask[i % 4] for i, b in enumerate(buffer[offset + 4:offset + 4 + length]))
+            frames.append((first & 0x0F, data))
+            buffer = buffer[offset + 4 + length:]
+
+    def ws_loop(self, sock, after):
+        store = self.server.office.store
+        conn = self.connection
+        conn.settimeout(10)
+        latest = store.latest_seq()
+        self.ws_json({'type': 'hello', 'latest_seq': latest, 'paused': store.paused(), 'version': VERSION})
+        cursor = after
+        if after > latest or latest - after > self.BACKLOG:
+            self.ws_json({'type': 'resync', 'latest_seq': latest})
+            cursor = latest
+        buffer = b''
+        clock = time.monotonic
+        last_rx = last_ping = last_check = clock()
+        while True:
+            if sock.kick_code:
+                return self.ws_close(sock.kick_code)
+            if self.server.stopping.is_set():
+                return self.ws_close(1001)
+            t = clock()
+            if sock.device_id and t - last_check >= self.REVOKE_CHECK:
+                last_check = t
+                if not store.device_active(sock.device_id):
+                    return self.ws_close(4401)
+            batch = store.sync(cursor, 200)
+            for event in batch['events']:
+                self.ws_json({'type': 'event', 'event': event})
+                cursor = event['seq']
+            if t - last_ping >= self.PING_EVERY:
+                self.ws_send(0x9, b'office')
+                last_ping = t
+            if t - last_rx >= self.IDLE_LIMIT:
+                return self.ws_close(4000)
+            if batch['more']:
+                continue
+            readable, _, _ = select.select([conn], [], [], 0.25)
+            if not readable:
+                continue
+            data = conn.recv(8192)
+            if not data:
+                return
+            last_rx = clock()
+            frames, buffer, error = self.ws_frames(buffer + data)
+            for opcode, payload in frames:
+                if opcode == 0x8:
+                    return self.ws_close(1000)
+                if opcode == 0x9:
+                    self.ws_send(0xA, payload[:125])
+                elif opcode == 0x1 and sock.device_id:
+                    try:
+                        message = json.loads(payload)
+                    except ValueError:
+                        continue
+                    seq = message.get('seq') if isinstance(message, dict) and message.get('type') == 'ack' else None
+                    if isinstance(seq, int) and not isinstance(seq, bool) and 0 <= seq <= cursor:
+                        store.set_device_seq(sock.device_id, seq)
+            if error:
+                return self.ws_close(error)
+
+
+CLI_COMMANDS = ('pair', 'devices', 'revoke')
+
+
+def cli(argv):
+    data = argparse.ArgumentParser(add_help=False)
+    data.add_argument('--data', type=Path, default=argparse.SUPPRESS)
+    parser = argparse.ArgumentParser(prog='office.py', parents=[data])
+    commands = parser.add_subparsers(dest='command', required=True)
+    commands.add_parser('pair', parents=[data], help='產生一組 10 分鐘、只能用一次的手機配對碼')
+    commands.add_parser('devices', parents=[data], help='列出已配對的裝置')
+    commands.add_parser('revoke', parents=[data], help='撤銷一台裝置').add_argument('device_id')
+    args = parser.parse_args(argv)
+    args.data = getattr(args, 'data', Path.home() / 'neighbor-office/data')
+    os.umask(0o077)
+    store = Store(args.data)
+    if args.command == 'pair':
+        code, expires = store.create_pairing_code()
+        print(f'配對碼：{code}\n有效到：{expires}（10 分鐘，只能用一次；產生新碼會讓舊碼失效）')
+    elif args.command == 'devices':
+        rows = store.devices()
+        for d in rows:
+            state = '已撤銷 ' + d['revoked_at'] if d['revoked'] else '使用中'
+            print(f"{d['id']}  {d['name']}  建立 {d['created']}  最後使用 {d['last_seen']}  {state}")
+        if not rows:
+            print('還沒有配對的裝置。')
+    else:
+        try:
+            device = store.revoke_device(args.device_id)
+        except OfficeError as e:
+            raise SystemExit(str(e))
+        print(f"已撤銷 {device['name']}（{device['id']}）；它的連線會在 2 秒內中斷。")
+
 
 def main():
+    if set(sys.argv[1:]) & set(CLI_COMMANDS):
+        return cli(sys.argv[1:])
     parser = argparse.ArgumentParser()
     parser.add_argument('--data', type=Path, default=Path.home() / 'neighbor-office/data')
     parser.add_argument('--model', default='gemma3:4b')
     parser.add_argument('--port', type=int, default=8421)
+    parser.add_argument('--public-origin', help='e.g. https://office.nekonode.cloud; enables paired phone access through a TLS proxy')
     args = parser.parse_args()
     os.umask(0o077)
     store = Store(args.data)
@@ -908,7 +1395,7 @@ def main():
     except BlockingIOError:
         raise SystemExit('Office is already running for this data directory')
     office = Office(store, Ollama(args.model, managed=True), CodexAgent(args.data.parent / 'runtime'))
-    server = Server(args.port, office)
+    server = Server(args.port, office, args.public_origin)
     # Exclusive server bind happens before worker start, so an accidental second
     # process cannot consume queued tasks. Deployment is one user service.
     office.start()
@@ -917,7 +1404,7 @@ def main():
         threading.Thread(target=server.shutdown, daemon=True).start()
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    print(f'Neighbor Office {VERSION} listening on loopback:{server.server_port}', flush=True)
+    print(f'Neighbor Office {VERSION} listening on loopback:{server.server_port}' + (f' for {server.public_origin}' if server.public_origin else ''), flush=True)
     try:
         server.serve_forever(poll_interval=0.25)
     finally:
