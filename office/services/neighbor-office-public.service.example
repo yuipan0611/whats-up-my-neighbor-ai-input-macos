@@ -1,0 +1,16 @@
+[Unit]
+Description=Neighbor cat office with durable tasks and paired phone access
+
+[Service]
+Type=simple
+WorkingDirectory=%h/neighbor-office/current
+ExecStart=/usr/bin/python3 -I %h/neighbor-office/current/office.py --data %h/neighbor-office/data --model gemma3:4b --port 8421 --public-origin https://office.nekonode.cloud
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=8
+UMask=0077
+NoNewPrivileges=true
+MemoryMax=1G
+
+[Install]
+WantedBy=default.target

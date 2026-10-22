@@ -2,6 +2,8 @@
 <html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>貓咪辦公室</title><link rel="stylesheet" href="/style.css"><script defer src="/app.js"></script></head>
 <body><main>
 <header><div><p class="eyebrow">NEIGHBOR · VPS</p><h1>貓咪辦公室 <img class="mascot" src="/cat.svg" alt="YUI Neko 黑貓" width="64" height="64"></h1><p>交代一件事，貓咪會把進度和成果留在這裡。</p></div><span id="connection" role="status">正在連線…</span></header>
+<section id="pairing" class="pairing" aria-labelledby="pair-title" hidden><div class="pair-heading"><img src="/cat.svg" alt="" width="56" height="56"><div><p class="eyebrow">安全連線</p><h2 id="pair-title">先配對這台手機</h2></div></div><p>在 Mac 開啟配對工具，把顯示的配對碼輸入下方。完成後，就能用手機 Chrome 查看工作與交辦。</p><form id="pair-form"><label for="pair-code">8 位數配對碼</label><input id="pair-code" type="text" inputmode="numeric" pattern="[0-9]{8}" autocomplete="one-time-code" maxlength="8" placeholder="00000000" required><label for="device-name">這台裝置的名稱</label><input id="device-name" type="text" maxlength="40" value="我的手機 Chrome" required><button id="pair-submit" type="submit">配對手機</button><p id="pairing-message" role="status" aria-live="polite"></p></form><p class="hint">配對碼只用一次，10 分鐘後失效。請勿把配對碼傳給其他人。</p></section>
+<div id="office-app" hidden>
 <nav aria-label="辦公室功能"><button id="show-work" class="secondary" type="button" aria-pressed="true">工作與交接</button><button id="show-life" class="secondary" type="button" aria-pressed="false">生活紀錄</button></nav>
 <div id="work-page">
 <section class="compose" aria-labelledby="compose-title"><h2 id="compose-title">今天交給貓咪什麼事？</h2>
@@ -21,4 +23,5 @@
 <section id="life-page" hidden aria-labelledby="life-title"><h2 id="life-title">生活紀錄</h2><p class="hint">先留下原話，不經模型處理。保存在 VPS，可選取後交給 Agent 整理。</p>
 <form id="journal-form"><label for="journal-day">日期</label><input id="journal-day" type="date" required><label for="journal-text">想記下什麼？</label><textarea id="journal-text" rows="6" maxlength="12000" placeholder="今天發生的事、想法，或下次想接著聊的內容。" required></textarea><div class="actions"><button id="journal-save" type="submit">保存生活紀錄</button><a href="/api/journal/download" download="journal.md">匯出最近 200 筆 Markdown</a></div><p id="journal-message" role="status"></p></form><div id="journal-list"></div></section>
 <footer><span id="model">正在確認 Agent 狀態…</span><span>關掉面板後，VPS 仍會處理已交辦的工作。文字與成果保存在 VPS。</span></footer>
+</div>
 </main></body></html>

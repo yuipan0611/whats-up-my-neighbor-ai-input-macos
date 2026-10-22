@@ -1019,7 +1019,10 @@ class Handler(BaseHTTPRequestHandler):
             raise OfficeError('只接受辦公室頁面的操作。', 403)
         if self.mode == 'public' and (write or upgrade) and not origin:
             raise OfficeError('只接受辦公室頁面的操作。', 403)
-        if self.headers.get('Sec-Fetch-Site') == 'cross-site':
+        # Allow a link from another site to open the public pairing page.
+        # API reads and every state-changing or upgraded request stay isolated.
+        api_read = urlsplit(self.path).path.startswith('/api/')
+        if self.headers.get('Sec-Fetch-Site') == 'cross-site' and (write or upgrade or api_read):
             raise OfficeError('只接受辦公室頁面的操作。', 403)
         if write and self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
             raise OfficeError('請以 JSON 交辦。', 415)

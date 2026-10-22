@@ -36,9 +36,15 @@ VPS `~/neighbor-office/data/`，目錄權限 700，服務檔案預設 600：
 
 `install_codex.py` 安裝官方固定 CLI、code-mode host 與 bwrap 發行檔，逐一核對 SHA256。第一次在 VPS 的獨立 CODEX_HOME 執行 Codex 登入，由本人完成：可使用裝置碼，若帳號未啟用則改一般瀏覽器 OAuth＋SSH loopback callback。登入檔留 VPS，不放 Git、報告或匯出。
 
-`deploy.sh` 上傳 source/static/tests，跑離線測試並重啟使用者 office 服務；Gemma 的開機啟動保持停用。不開新公網埠；office 僅 127.0.0.1:8421，Gemma 使用時僅 127.0.0.1:11434。
+`deploy.sh` 僅供舊版 SSH 通道服務使用；偵測到手機公網版時會停止，避免覆蓋其服務設定。Gemma 的開機啟動保持停用。office 僅監聽 `127.0.0.1:8421`，由 Caddy 對外提供 HTTPS／WSS；Gemma 使用時僅監聽 `127.0.0.1:11434`。
 
 離線測試：`python3 -I -m unittest discover -s office/tests -v`。
 真實服務驗證：`python3 office/verify_v2.py --report reports/office-v2/codex-live.json`；Gemma 加 `--provider gemma`。會新增明確標示的合成紀錄，不能將其視為真實生活事件。詳細通過與未驗收項目見 `reports/office-v2/VERIFICATION.md`。
 
 HTTP 維持 Host／Origin／頁面 token 檢查，以純文字顯示內容，不執行模型 HTML。資料庫遷移前的備份在 VPS `~/neighbor-office/backups/office-v2-20261021T124049Z/`，包含當時 SQLite、app 與兩份使用者服務設定。
+
+## 手機 Chrome 直連
+
+`https://office.nekonode.cloud` 已部署，手機先用 VPS 產生的一次性碼配對，再透過 cookie 存取辦公室。配對碼可從 Mac 執行 `office/pair-iphone.command` 取得，只顯示在本機 Terminal，10 分鐘內有效。WebSocket 只傳即時進度，交辦仍走 HTTP；手機斷線後由 SQLite 的事件序號補回。辦公室維持只監聽 `127.0.0.1:8421`。
+
+設計與 API 契約見 [手機 PRD](docs/mobile/PRD.md)，部署紀錄與剩餘驗收見 [部署檢查單](docs/mobile/DEPLOY.md)。iPhone Chrome 已開啟配對頁、配對並交辦測試任務；VPS 顯示完成，使用者確認可直接看到繁體中文成果。鎖屏後進度補回仍待驗收。

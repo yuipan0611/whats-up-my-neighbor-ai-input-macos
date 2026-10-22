@@ -2,7 +2,7 @@
 set -euo pipefail
 # Keep the owned tunnel alive for the browser session; never stop other SSH jobs.
 # Reuse a verified office page if a tunnel from this chat is already open.
-if /usr/bin/curl -fsS --max-time 2 http://127.0.0.1:18421/api/health 2>/dev/null | /usr/bin/python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("service")=="neighbor-office" and d.get("version")=="0.2.0"' >/dev/null 2>&1; then
+if /usr/bin/curl -fsS --max-time 2 http://127.0.0.1:18421/api/health 2>/dev/null | /usr/bin/python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("service")=="neighbor-office" and isinstance(d.get("version"),str) and d.get("worker_running") is not None' >/dev/null 2>&1; then
   /usr/bin/open http://127.0.0.1:18421
   echo '已沿用現有的貓咪辦公室連線。'
   exit 0

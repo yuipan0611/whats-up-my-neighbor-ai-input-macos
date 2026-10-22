@@ -206,6 +206,12 @@ class BoundaryTests(Base):
         self.assertIn(f'connect-src \'self\' wss://{PUBLIC_HOST}', headers['Content-Security-Policy'])
         self.assertIn('max-age', headers['Strict-Transport-Security'])
 
+    def test_cross_site_navigation_can_open_pairing_page_but_not_api(self):
+        headers = {**self.public(origin=False), 'Sec-Fetch-Site': 'cross-site'}
+        self.assertEqual(self.request('/', headers=headers)[0], 200)
+        self.assertEqual(self.request('/app.js', headers=headers)[0], 200)
+        self.assertEqual(self.request('/api/session', headers=headers)[0], 403)
+
     def test_public_mode_disabled_without_origin_flag(self):
         server = app.Server(0, self.office)
         thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
