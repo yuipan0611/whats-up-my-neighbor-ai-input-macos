@@ -1,4 +1,5 @@
 import base64
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -431,6 +432,33 @@ class WebSocketTests(Base):
         ws2.message()
         self.request(f"/api/devices/{paired2['device']['id']}/revoke", {}, {**self.local, 'Content-Type': 'application/json', 'X-Office-Token': self.server.token})
         self.assertEqual(ws2.message(), {'close': 4401})
+
+    def test_open_socket_closes_when_device_session_expires(self):
+        cookie, paired = self.pair()
+        ws = self.public_ws(cookie)
+        ws.message()
+        self.office.command({'id': uid(), 'prompt': '到期前的事件'})
+        self.assertEqual(ws.message()['type'], 'event')
+        expired = (datetime.now(timezone.utc) - timedelta(days=app.Store.DEVICE_DAYS, minutes=1)).isoformat(timespec='seconds')
+        with self.store.connect() as c:
+            c.execute('UPDATE devices SET last_seen=? WHERE id=?', (expired, paired['device']['id']))
+        start = time.monotonic()
+        self.assertEqual(ws.until_close(), {'close': 4401})
+        self.assertLess(time.monotonic() - start, 3)
+        self.assertFalse(self.store.device_active(paired['device']['id']))
+        self.assertEqual(self.request('/api/session', headers=self.public(cookie=cookie))[0], 401)
+        self.assertEqual(self.public_ws(cookie).status, 401)
+
+    def test_socket_stays_open_just_inside_device_window(self):
+        cookie, paired = self.pair()
+        ws = self.public_ws(cookie)
+        ws.message()
+        recent = (datetime.now(timezone.utc) - timedelta(days=app.Store.DEVICE_DAYS - 1)).isoformat(timespec='seconds')
+        with self.store.connect() as c:
+            c.execute('UPDATE devices SET last_seen=? WHERE id=?', (recent, paired['device']['id']))
+        time.sleep(0.6)
+        self.office.command({'id': uid(), 'prompt': '仍在有效期內'})
+        self.assertEqual(ws.message()['type'], 'event')
 
     def test_third_connection_kicks_oldest(self):
         cookie, _ = self.pair()

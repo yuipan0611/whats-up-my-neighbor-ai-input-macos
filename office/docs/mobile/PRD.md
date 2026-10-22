@@ -315,6 +315,7 @@ __Host-office=<device_id>.<secret>; Path=/; Secure; HttpOnly; SameSite=Strict; M
 - CLI：`office.py devices` 列出裝置；`office.py revoke <device_id>` 撤銷裝置。
 - HTTP（local 模式）：`GET /api/devices`、`POST /api/devices/<id>/revoke`。
 - 撤銷後：HTTP 請求立即回 401；已連上的 WebSocket 在 2 秒內以 close code 4401 關閉。
+- 有效期：裝置的 `last_seen` 超過 30 天就失效。`last_seen` 只在帶 cookie 的 HTTP 請求時更新（最多每 60 秒一次）；WebSocket 流量**不會**延長有效期。所以長時間開著的 WebSocket，在有效期結束時也會在 2 秒內以 4401 關閉。前端每次回到前景都會呼叫 `/api/sync`，正常使用時有效期會一直往後延。
 
 ### 13.5 補狀態：`GET /api/sync?after=<int ≥ 0>&limit=<1–1000，預設 500>`
 

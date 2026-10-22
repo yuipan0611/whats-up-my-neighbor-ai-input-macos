@@ -48,3 +48,4 @@ status: 後端（M1–M3）與手機頁面（M4）本機完成；M5 網路前置
   
   ｜未做：部署、DNS、Caddy、iPhone 實機（M5、M6）。Codex 的 static/README/DEPLOY/services 由 Codex 自行 commit。
 - 2026-10-22｜Claude｜M0 狀態同步｜完成｜只改 PRD.md、HANDOFF.md｜依 Codex 的本機整合紀錄，把 M4 標為本機完成；PRD 第 10 節勾選已通過的後端項目；S 標為不適用｜M5、M6 未做；public HTTPS/WSS 與真機待部署驗收。Codex 先前誤讀 ws_send，是 sed 範圍重疊造成的，程式本身沒有問題
+- 2026-10-22｜Claude｜M3 修正｜完成（本機）｜`Store.device_active()` 改成與 cookie 檢查同一條規則（未撤銷，且 last_seen 在 30 天內）；PRD 13.4 補上有效期說明｜Codex 指出：已開著的 WebSocket 原本只檢查 revoked，到期後仍會繼續收事件。新增 2 項測試：到期時 2 秒內以 4401 關閉，之後 HTTP 與握手都回 401；還在有效期內的連線不會被誤關。全部 64 項通過；把規則改回只看 revoked 的 mutation 會讓新測試失敗｜不依賴 Caddy 的逾時設定

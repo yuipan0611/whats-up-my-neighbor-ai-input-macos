@@ -224,17 +224,23 @@ class Store:
             row = c.execute('SELECT * FROM devices WHERE id=? AND revoked=0', (device_id,)).fetchone()
             if row is None or not hmac.compare_digest(row['secret_hash'], hashlib.sha256(secret.encode()).hexdigest()):
                 return None
-            seen = datetime.fromisoformat(row['last_seen'])
-            age = (datetime.now(timezone.utc) - seen).total_seconds()
+            age = self.device_age(row)
             if age > self.DEVICE_DAYS * 86400:
                 return None
             if age > 60:
                 c.execute('UPDATE devices SET last_seen=? WHERE id=?', (now(), device_id))
             return {'id': row['id'], 'name': row['name']}
 
+    @staticmethod
+    def device_age(row):
+        return (datetime.now(timezone.utc) - datetime.fromisoformat(row['last_seen'])).total_seconds()
+
     def device_active(self, device_id):
+        """Same validity rule as the cookie check: not revoked and seen within DEVICE_DAYS.
+        WebSocket traffic does not refresh last_seen, so an open socket ends with the session."""
         with self.connect() as c:
-            return c.execute('SELECT 1 FROM devices WHERE id=? AND revoked=0', (device_id,)).fetchone() is not None
+            row = c.execute('SELECT last_seen FROM devices WHERE id=? AND revoked=0', (device_id,)).fetchone()
+            return row is not None and self.device_age(row) <= self.DEVICE_DAYS * 86400
 
     def set_device_seq(self, device_id, seq):
         with self.connect() as c:
