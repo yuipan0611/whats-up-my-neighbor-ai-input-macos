@@ -10,6 +10,8 @@ VPS 常駐的獨立原型：自然語言交辦、進度與成果保存、工作�
 4. 「生活紀錄」保存原話，無需任何模型。只有明確選取，才會隨工作交給 Agent。日期由使用者選取，不自動推定事件發生時間。
 5. 關掉面板，VPS 仍處理已保存的佇列。離線未送出的草稿只在面板記憶體中，關閉 App 前請交辦或另存。
 
+手機聊天介面的 `+` 可選 TXT／MD、PNG／JPEG／WebP 與 PDF。文字檔維持 48KB 上限；圖片與 PDF 各 8MB，PDF 最多 8 頁。手機瀏覽器會把 PDF 每頁轉為圖片，與原始 PDF 一起上傳；Codex 讀取頁面圖片，並在本次交辦保留不可變的附件快照。圖片與 PDF 目前只能交給 Codex，Gemma 僅處理文字。附件選取後在送出時才上傳 VPS；送出給 Codex 後，明確選取的附件會隨交辦傳給 OpenAI。Luna／Sol／Astra、Claude、Gemini 只顯示規劃位置，標示尚未接通且不可選。
+
 也可使用 `office/open-office.command` 開啟 Mac 瀏覽器，或 VPS 桌面的「貓咪辦公室」。只有一條 18421 通道即可；預覽退出僅停止自己建立的 SSH 程序。
 
 ## 執行者
@@ -25,7 +27,8 @@ VPS 常駐的獨立原型：自然語言交辦、進度與成果保存、工作�
 VPS `~/neighbor-office/data/`，目錄權限 700，服務檔案預設 600：
 
 - `office.sqlite3`：交辦、執行者、來源與選定上下文快照、父任務、狀態、事件、交接原文與生活紀錄。SQLite 是資料來源。
-- `inbox/`：UTF-8 .md/.txt，48KB 以內，同名不覆寫。
+- `inbox/`：UTF-8 .md/.txt（48KB 以內）與圖片／PDF（8MB 以內），同名不覆寫。PDF 另存逐頁圖片於 `<檔名>.pages/`。
+- `tasks/<UUID>/source/`：本次明確選取的圖片或 PDF 與逐頁圖片快照，供 Codex 讀取，避免收件匣來源日後變動影響已交辦任務。
 - `tasks/<UUID>/result.md`：成果；`partial.md` 為部分內容；`brief.md` 為待外部交接單。
 - `tasks/<UUID>/handoff.md`：保存交接時的 Markdown 快照；下載端點另以最新狀態組成完整交接。
 - `journal/YYYY-MM-DD.md`：當天原文匯出。畫面與總匯出顯示最近 200 筆，較早資料仍在 SQLite 與每日檔。

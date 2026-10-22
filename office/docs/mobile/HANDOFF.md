@@ -31,6 +31,8 @@ status: 後端（M1–M3）與手機頁面（M4）本機完成；M5 網路前置
 
 ## 進度紀錄
 
+- 2026-10-22｜Codex｜手機聊天改版附件需求｜使用者已要求 PDF 與圖片可由模型讀取；既有 `office.py` 僅處理文字檔。為完成這次已授權的改版，Codex 將在此留言後修改 `office/office.py` 與相應測試，新增受限的附件上傳與 Codex 圖片輸入；維持現有配對、工作與交接流程。
+
 - 2026-10-22｜Claude｜M0｜草案｜新增 PRD.md、HANDOFF.md｜唯讀核對：VPS 上的 office 等於 75bc990；8421 只聽 loopback；只開 22；root 仍可用密碼登入｜待 YUI 拍板 D1–D4，並確認分工
 - 2026-10-22｜Claude｜M0｜完成｜PRD 加入決策（D1=N2、D2=W、D3=CLI、D4=不做）與第 13 節 API 契約 v1｜—｜前端依第 13 節實作；後端開始寫 office.py、tests/test_mobile.py
 - 2026-10-22｜Claude｜M1–M3｜完成（本機）｜office.py：

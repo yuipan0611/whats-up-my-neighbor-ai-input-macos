@@ -12,12 +12,13 @@ function node(tag, text, cls) { const el = document.createElement(tag); if(text 
 function message(text, error=false) { $('message').textContent=text; $('message').className=error?'error':''; }
 function showPairing(note='請輸入 Mac 配對工具顯示的一次性配對碼。', required=true) {
   authenticated=false;pairRequired=required;token='';connected=false;
+  document.body.classList.remove('office-ready');
   if(socket){socket.onclose=null;socket.close();socket=null;}socketOpen=false;
   if(reconnectTimer)clearTimeout(reconnectTimer);reconnectTimer=null;
   $('office-app').hidden=true;$('pairing').hidden=false;
   $('pairing-message').textContent=note;$('connection').textContent='等待手機配對';
 }
-function showOffice() {$('pairing').hidden=true;$('office-app').hidden=false;authenticated=true;pairRequired=false;}
+function showOffice() {$('pairing').hidden=true;$('office-app').hidden=false;authenticated=true;pairRequired=false;document.body.classList.add('office-ready');}
 async function establishSession() {
   const path=localOffice?'/api/bootstrap':'/api/session';
   const r=await fetch(path,{cache:'no-store',credentials:'same-origin'});
@@ -57,6 +58,7 @@ function renderList() {
       }).catch(e=>message(e.message,true));
     }); $('task-list').append(b);
   }
+  window.mobileOffice?.renderList();
 }
 let liveState=null;
 function tickLive(){
@@ -108,6 +110,7 @@ async function refreshDetail() {
   }
   box.append(events);if(active)events.scrollTop=events.scrollHeight;
   if(['needs_provider','needs_input','failed','interrupted','incomplete'].includes(task.status))box.append(node('p','可以在上方補上內容，重新交辦。這筆紀錄會保留。','hint'));
+  await window.mobileOffice?.renderTask(task);
   if(handoffSelected===id)await loadHandoff();
 }
 async function refresh() {
@@ -115,8 +118,8 @@ async function refresh() {
   $('mode').textContent=data.paused?'辦公室暫停中':'依序處理';$('pause').disabled=data.paused;$('resume').disabled=!data.paused;
   $('connection').textContent=socketOpen?'已連上 VPS · 即時':'已連上 VPS';
   if(!tasks.some(task=>task.id===selected)){
-    selected=tasks[0]?.id||'';lastDetail='';handoffSelected='';$('handoff-area').hidden=true;
-    if(!selected){liveState=null;$('task-detail').replaceChildren(node('p','選一件任務，查看貓咪做到哪裡。','hint'));}
+    selected=window.mobileOffice?.isNewChat()? '' : tasks[0]?.id||'';lastDetail='';handoffSelected='';$('handoff-area').hidden=true;
+    if(!selected){liveState=null;$('task-detail').replaceChildren(node('p','選一件任務，查看貓咪做到哪裡。','hint'));window.mobileOffice?.renderEmpty();}
   }
   renderList();await refreshDetail();if(selected!==handoffSelected)await loadHandoff();await loadJournal();
   return Number(data.latest_seq)||0;
@@ -195,7 +198,7 @@ async function fullSnapshot(){
 async function files() {
   const data=await api('/api/files'), old=$('source').value;
   $('source').replaceChildren(new Option('直接處理上面貼的內容',''));
-  for(const file of data.files)$('source').append(new Option(file.name,file.name));
+  for(const file of data.files.filter(file=>/\.(txt|md)$/i.test(file.name)))$('source').append(new Option(file.name,file.name));
   $('source').value=old;
 }
 async function sendControl(prompt) { try{const r=await api('/api/command',{prompt});message(r.message);await refresh();}catch(e){message(e.message,true);} }
@@ -255,9 +258,9 @@ function clearParent(){parentId='';$('parent-context').hidden=true;$('clear-pare
 $('clear-parent').onclick=clearParent;
 function privacy(){$('privacy-hint').textContent=$('executor').value==='codex'?'交辦、選定來源與選取的交接／生活紀錄會交給 OpenAI 處理。其他生活紀錄不會自動附加。':'Gemma 在 VPS 處理短文字，合計約千字內；不會上網或自動呼叫外部 Agent。';}
 $('executor').onchange=privacy;
-function showPage(life){$('work-page').hidden=life;$('life-page').hidden=!life;$('show-work').setAttribute('aria-pressed',String(!life));$('show-life').setAttribute('aria-pressed',String(life));}
+function showPage(life){$('work-page').hidden=life;$('life-page').hidden=!life;$('show-work').setAttribute('aria-pressed',String(!life));$('show-life').setAttribute('aria-pressed',String(life));window.mobileOffice?.pageChanged(life);}
 $('show-work').onclick=()=>showPage(false);$('show-life').onclick=()=>showPage(true);
-async function providerHealth(){const h=await api('/api/health'),p=h.provider;$('model').textContent='Codex · '+(p.authenticated?(p.last_success?'登入有效 · 曾完成真實工作':'已登入 · 尚待真任務驗證'):'等待 VPS 本人登入')+' ／ Gemma · '+(h.model.ready?'可用':'按需啟動');}
+async function providerHealth(){const h=await api('/api/health'),p=h.provider;$('model').textContent='Codex · '+(p.authenticated?(p.last_success?'登入有效 · 曾完成真實工作':'已登入 · 尚待真任務驗證'):'等待 VPS 本人登入')+' ／ Gemma · '+(h.model.ready?'可用':'按需啟動');window.mobileOffice?.updateHealth(h);}
 async function loadHandoff(){
   const id=selected;if(!id)return;const h=await api('/api/tasks/'+id+'/handoff');if(id!==selected)return;
   if(handoffSelected!==id){$('handoff-note').value='';$('next-step').value='';$('handoff-message').textContent='';pendingHandoff=null;}
