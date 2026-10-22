@@ -47,4 +47,4 @@ HTTP 維持 Host／Origin／頁面 token 檢查，以純文字顯示內容，不
 
 `https://office.nekonode.cloud` 已部署，手機先用 VPS 產生的一次性碼配對，再透過 cookie 存取辦公室。配對碼可從 Mac 執行 `office/pair-iphone.command` 取得，只顯示在本機 Terminal，10 分鐘內有效。WebSocket 只傳即時進度，交辦仍走 HTTP；手機斷線後由 SQLite 的事件序號補回。辦公室維持只監聽 `127.0.0.1:8421`。
 
-設計與 API 契約見 [手機 PRD](docs/mobile/PRD.md)，部署紀錄與剩餘驗收見 [部署檢查單](docs/mobile/DEPLOY.md)。iPhone Chrome 已開啟配對頁、配對並交辦測試任務；VPS 顯示完成，使用者確認可直接看到繁體中文成果。鎖屏後進度補回仍待驗收。
+設計與 API 契約見 [手機 PRD](docs/mobile/PRD.md)，部署紀錄與驗收範圍見 [部署檢查單](docs/mobile/DEPLOY.md)。iPhone Chrome 已開啟配對頁、配對並交辦測試任務；使用者確認可直接看到繁體中文成果，鎖屏超過五分鐘後仍能查看完成成果與進度。手動斷網重送及撤銷這台 iPhone 尚未實測。
