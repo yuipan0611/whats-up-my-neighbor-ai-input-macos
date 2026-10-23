@@ -6,7 +6,7 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
 
 # 交接板
 
-需求、決策、權限與體驗規則以 [PRD.md](PRD.md) 為準。本檔只記錄分工與進度。
+需求、決策、權限與體驗規則以 [PRD.md](PRD.md) 為準。本檔只記錄分工與進度。nekonode-site 分支 `docs/vps-agent-mvp-20261023` 的那份 VPS-first PRD 只當需求參考，**不拿來派工**；它的 A01–A20 對到哪個 H 任務，見 [ADR-001](ADR-001-office-sqlite-vs-vps-mvp-prd.md)。各 H 任務開工前，先看 ADR-001 第 7 節有沒有新增給它的項目。
 
 ## 分工
 
@@ -34,6 +34,7 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
 - 不讀取、不輸入、不保存密碼、token、cookie、配對碼或私鑰，也不寫進報告或聊天。
 - 需要 YUI 動手的步驟（root 指令、登入、建立 App），先用確認問題講清楚要輸入什麼、什麼時候輸入，再開始。
 - 不要把 `.impeccable/`、`design/` 或 `worktrees/neighbor-remote-agent` 的實驗混進來。
+- 驗收紀錄把自動測試、模擬、實機（VPS／Mac／iPhone 分開）和 `NOT RUN` 分開標示；Chromium 的結果不寫成 Chrome 的結果（ADR-001 第 8 節）。
 
 ## 進度紀錄
 
@@ -71,3 +72,13 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
   - 契約見 PRD 9.1。
   - 手機介面把 hands 任務顯示成「Codex」，H5 再改。
   - 下一步：H1（需要 YUI 以 root 執行）→ 部署 0.5.0 並開啟 worker socket → H3。
+- 2026-10-23｜Claude｜H2 worker lease｜完成（本機，未部署）
+  - 原因：heartbeat、events、complete 原本只認任務編號。第 1 輪卡住超過 120 秒、任務被第 2 輪領走後，第 1 輪醒來仍能交出成果，也能替第 2 輪續租。
+  - 修法：每次領取發一個新的隨機 `lease`，三個端點都要帶。沒帶回 400；舊的或猜的，heartbeat 回 `continue: false, superseded: true` 且不續租，events／complete 回 409、不留任何東西。擁有者看到的任務資料不含 lease。
+  - 資料表只新增 `lease` 欄位；用 0.4.0 的資料庫實測遷移，既有任務保留。版本號維持 0.5.0（尚未部署過）。升級當下若有沒帶 lease 的 hands 任務，會在 120 秒後退回佇列、重新領取。
+  - `hands_notes` 改在辦公室的鎖裡完成「檢查＋寫入」，跟 `hands_complete` 一樣。
+  - 測試：`test_hands.py` 新增 FencingTests 3 項，既有測試改帶 lease；全部 104 項通過。7 組 mutation 全部被抓到：比對永遠成立、heartbeat 不查 lease、先續租再查、events／complete 不查、重新領取沿用舊 lease、不驗證格式、擁有者看得到 lease。
+  - 契約見 PRD 9.1（v0.2.1）。
+- 2026-10-23｜Claude｜H0｜ADR-001
+  - 對照 nekonode-site 的 VPS-first PRD：沿用辦公室＋SQLite，不另做 FastAPI＋PostgreSQL。A01–A20 逐項對到 H 任務；新增工作列在 ADR 第 7 節。
+  - 待 YUI 決定（ADR 第 5 節）：接手中斷線是否維持暫停（推薦維持）；程式與 Chrome 同一個使用者（推薦 v1 維持）；網站白名單（推薦 v1 不做）。

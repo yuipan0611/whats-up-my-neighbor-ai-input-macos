@@ -8,6 +8,7 @@ related:
   - office/README.md（貓咪辦公室現況）
   - office/docs/mobile/PRD.md（手機直連與 API 契約 v1）
   - worktrees/neighbor-remote-agent/docs/remote-desktop/PRD.md（VNC 接手控制，2026-10-21 真 VPS 驗證）
+  - office/docs/agent-hands/ADR-001-office-sqlite-vs-vps-mvp-prd.md（與 nekonode-site 的 VPS-first PRD 對照）
 ---
 
 # PRD：貓咪的手（VPS 工作區與權限）v1
@@ -448,15 +449,22 @@ v1b 驗收要**實際演練一次**完整撤銷，然後再恢復。
 
 | 端點 | 送 | 回 |
 |---|---|---|
-| `/api/worker/claim` | `{}` | `{task, paused, locked}`。`task` 只有 `id, prompt, source, source_snapshot, context_snapshot, parent_id, attempts, created`；沒有可領的就是 `null`。一次只發一件 |
-| `/api/worker/heartbeat` | `{task_id}` | `{continue, status}`。`continue` 變成 false，就立刻停手（取消、先停一下、收回權限、已結束都會這樣） |
-| `/api/worker/events` | `{task_id, events:[{kind, message}]}`，1–50 筆，`kind` 是 `thinking`／`message`／`tool` | `{recorded}`；任務已停止回 409 |
-| `/api/worker/complete` | `{task_id, outcome, text, reason?}`；`outcome` 是 `completed`／`incomplete`／`failed`，`text` 最多 150KB | `{id, status}`。`completed` 存成 `result.md`；`incomplete`／`failed` 有文字就存成 `partial.md`；任務已停止回 409，不會留下成果 |
+| `/api/worker/claim` | `{}` | `{task, paused, locked}`。`task` 只有 `id, prompt, source, source_snapshot, context_snapshot, parent_id, attempts, lease, created`；沒有可領的就是 `null`。一次只發一件 |
+| `/api/worker/heartbeat` | `{task_id, lease}` | `{continue, status}`。`continue` 變成 false，就立刻停手（取消、先停一下、收回權限、已結束、已被新的一輪領走都會這樣；最後一種多帶 `superseded: true`） |
+| `/api/worker/events` | `{task_id, lease, events:[{kind, message}]}`，1–50 筆，`kind` 是 `thinking`／`message`／`tool` | `{recorded}`；任務已停止或 lease 已過期回 409 |
+| `/api/worker/complete` | `{task_id, lease, outcome, text, reason?}`；`outcome` 是 `completed`／`incomplete`／`failed`，`text` 最多 150KB | `{id, status}`。`completed` 存成 `result.md`；`incomplete`／`failed` 有文字就存成 `partial.md`；任務已停止或 lease 已過期回 409，不會留下成果 |
 
 **租約與重試：**
 - 任何 worker 呼叫都會續租。超過 120 秒沒有任何呼叫，任務就回到佇列重試，每次領取算一次。第 3 次仍然沒有回應，才標成 `interrupted` 讓使用者看到。
 - worker 應每 30 秒左右送一次 heartbeat。
 - 辦公室重啟時不會中斷 hands 任務，會重新起算它的租約。
+
+**這一輪的憑證（lease）：**
+- 每次領取都會發一個新的隨機 `lease`，只屬於這一輪。heartbeat、events、complete 都要帶它。
+- 沒帶、空字串或型別不對，回 400。帶的是舊的一輪（或猜的）：heartbeat 回 `continue: false, superseded: true`，而且**不續租**；events 和 complete 回 409（含 `superseded: true`），不寫入任何步驟或成果。
+- 要擋的情況：第 1 輪的 worker 或它留下的 agent 程序卡住超過 120 秒，任務退回佇列、被第 2 輪領走後，第 1 輪又醒過來。沒有 lease 時，它的 complete 會被當成第 2 輪的成果，它的 heartbeat 也會一直替第 2 輪續租。
+- `lease` 不出現在擁有者看到的任務資料裡。辦公室重啟後 lease 不變，worker 照常接著做。
+- worker 把 lease 留在自己的記憶體裡，不寫進工作區，也不交給 agent。agent 跟 worker 是同一個 Linux 使用者，所以這一條擋的是**卡住後又醒過來的程序**，不是要擋惡意的 agent；後者由「只回答這件 hands 任務本身」那條規則處理。
 
 **停止：**
 - 「先停一下」會取消進行中的任務，佇列保留。
@@ -571,3 +579,6 @@ v1b 驗收要**實際演練一次**完整撤銷，然後再恢復。
   - 看貓咪改成網頁共用畫面（D6）。
   - 新增 D10 自動轉交、D11 通知。
   - 範圍拆成 v1a、v1b。
+- **v0.2.1（2026-10-23）：**
+  - worker API 加上每一輪的 `lease`，擋掉舊的一輪（9.1）。這是 0.5.0 部署前的契約修改，版本號不變。
+  - 新增 ADR-001：說明為什麼繼續用辦公室＋SQLite，以及 nekonode-site 那份 VPS-first PRD 的 A01–A20 對到哪個 H 任務。
