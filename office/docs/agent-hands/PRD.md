@@ -2,7 +2,7 @@
 title: 貓咪的手：VPS 工作區與權限（v1）
 date: 2026-10-23
 revision: v0.2（加入使用者體驗層：工程做，使用者無感）
-status: 草案；D1–D11 待 YUI 拍板，拍板前不改程式、不動 VPS
+status: 已拍板（2026-10-23，D1–D11 全部照推薦）；v1a 進行中，從 H2 的 loopback 修補開始
 branch: claude/agent-hands-prd（基於 main 5705004）
 related:
   - office/README.md（貓咪辦公室現況）
@@ -422,7 +422,7 @@ v1b 驗收要**實際演練一次**完整撤銷，然後再恢復。
 - worker 憑證只能呼叫 worker 端點，跟頁面 token、裝置 cookie 互不相通。
 - 任務新增欄位：`executor='auto'|'hands'`、`needs_human`（`kind: login|approve|grant`、網站、連結、原因、預估秒數）、`screenshots[]`、`github`（repo、分支、PR 連結）。資料表遷移只能新增，不能動既有資料。
 
-## 10. 決策（待 YUI 拍板）
+## 10. 決策（2026-10-23 YUI 拍板：全部照「推薦」欄）
 
 | # | 問題 | 推薦 | 其他選項 | v0.2 變更 |
 |---|---|---|---|---|

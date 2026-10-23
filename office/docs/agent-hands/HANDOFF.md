@@ -1,7 +1,7 @@
 ---
 title: 貓咪的手：交接板
 date: 2026-10-23
-status: H0 v0.2 草案完成；等 YUI 拍板 D1–D11，之後才開始 H1
+status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H2 loopback 修補先做
 ---
 
 # 交接板
@@ -12,7 +12,7 @@ status: H0 v0.2 草案完成；等 YUI 拍板 D1–D11，之後才開始 H1
 
 | ID | 任務 | 負責 | 擁有的檔案／範圍 | 依賴 | 狀態 |
 |---|---|---|---|---|---|
-| H0 | PRD 與交接板 | Claude | `office/docs/agent-hands/*` | — | v0.2 草案，待拍板 |
+| H0 | PRD 與交接板 | Claude | `office/docs/agent-hands/*` | — | 完成（D1–D11 已拍板） |
 | H1 | VPS 基礎：swap、`neko-hands`、Chrome、VNC 改歸 neko-hands、`/srv/neko-handoff` | YUI（root）；Claude 提供指令並唯讀驗證 | VPS 系統設定 | D1、D2、D8 | 未開始 |
 | H2 | 辦公室安全底座：loopback 修補、worker API、「手」執行者、先停一下與收回開關 | Claude | `office/office.py`、`office/tests/test_hands.py` | D1 | 未開始 |
 | H3 | worker＋Codex 登入＋瀏覽器 MCP；合成任務 | Claude＋YUI（登入） | `office/hands/*`（新增） | H1、H2、D9 | 未開始 |
@@ -47,3 +47,4 @@ status: H0 v0.2 草案完成；等 YUI 拍板 D1–D11，之後才開始 H1
   - 撤回 v0.1 的「Chrome 登入 GitHub 網頁」。
   - 範圍拆成 v1a（H1–H5）和 v1b（H6–H9）。
   - 待 YUI 拍板 D1–D11。
+- 2026-10-23｜YUI｜H0｜拍板｜D1–D11 全部照 PRD 推薦；指示開始 v1a，先做 H2 的 loopback 修補｜手機 PRD 的 D4（暫不通知）由本 PRD 的 D11 取代，已在手機 PRD 註記
