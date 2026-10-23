@@ -13,7 +13,7 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
 | ID | 任務 | 負責 | 擁有的檔案／範圍 | 依賴 | 狀態 |
 |---|---|---|---|---|---|
 | H0 | PRD 與交接板 | Claude | `office/docs/agent-hands/*` | — | 完成（D1–D11 已拍板） |
-| H1 | VPS 基礎：swap、`neko-hands`、Chrome、VNC 改歸 neko-hands、`/srv/neko-handoff`；worker 群組與 worker socket 的資料夾（neighbor 與 neko-hands 同屬一個群組，資料夾 2750） | YUI（root）；Claude 提供指令並唯讀驗證 | VPS 系統設定 | D1、D2、D8 | 未開始 |
+| H1 | VPS 基礎：swap、`neko-hands`、Chrome、VNC 改歸 neko-hands、`/srv/neko-handoff`；worker 群組與 worker socket 的資料夾（neighbor 與 neko-hands 同屬一個群組，資料夾 2750） | Claude（依 YUI 指示以 root 執行）；腳本 `office/hands/setup-h1.sh` | VPS 系統設定 | D1、D2、D8 | **完成**（2026-10-23，VPS 實機）。見 `reports/agent-hands/H1-VERIFICATION-2026-10-23.md` |
 | H2 | 辦公室安全底座：loopback 修補、worker API、「手」執行者、先停一下與收回開關 | Claude | `office/office.py`、`office/tests/test_local_entry.py`、`office/tests/test_hands.py` | D1 | **完成**。loopback 修補已部署（0.4.0）；worker API／hands 執行者／收回開關在本機完成（0.5.0，未部署，等 H1 建好群組後一起開） |
 | H3 | worker＋Codex 登入＋瀏覽器 MCP；合成任務 | Claude＋YUI（登入） | `office/hands/*`（新增） | H1、H2、D9、D13 | 未開始 |
 | H4 | GitHub App（營運者建立）、辦公室代為 clone／push／開 Draft PR、鑰匙收回、越權測試 | Claude＋YUI | `office/github_app.py`（新增）、`office/tests/test_github_push.py`、驗證紀錄 `reports/agent-hands/` | H2、H3、D4 | 未開始 |
@@ -32,7 +32,7 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
 - 一個檔案只有一個負責人。要改別人的檔案，先在下方留言。
 - 新介面文案要通過 PRD 3.8 的禁用詞掃描。
 - 不讀取、不輸入、不保存密碼、token、cookie、配對碼或私鑰，也不寫進報告或聊天。
-- 需要 YUI 動手的步驟（root 指令、登入、建立 App），先用確認問題講清楚要輸入什麼、什麼時候輸入，再開始。
+- 這台 Mac 拿得到的操作由 Claude 自己執行並自己驗證，不要請 YUI 跑指令再回報：YUI 2026-10-23 指示「這種東西你應該自己操控電腦確認」。root 用 `ssh -i ~/.ssh/neighbor_vps_ed25519 -o IdentitiesOnly=yes root@31.97.108.187`。只有真的需要 YUI 本人的步驟（登入帳號、建立 GitHub App、在 hPanel 操作），才先用確認問題講清楚要輸入什麼、什麼時候輸入。
 - 不要把 `.impeccable/`、`design/` 或 `worktrees/neighbor-remote-agent` 的實驗混進來。
 - 驗收紀錄把自動測試、模擬、實機（VPS／Mac／iPhone 分開）和 `NOT RUN` 分開標示；Chromium 的結果不寫成 Chrome 的結果（ADR-001 第 8 節）。
 
@@ -91,3 +91,16 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
   - 跟著改：3.3、3.7（新增「你接手到一半離開了」文案）、第 7 節、第 9 節、第 12 節、13.2（新增兩項驗收）；5.2 補 D13，5.9 補 D14，第 10 節新增 D12–D14。
   - H6 表格列改寫，依賴加上 H3（要用 worker 暫停 agent），檔案加 `hands_heartbeat` 的 `hold` 和 `office/tests/test_viewer.py`。H3 依賴加上 D13。
   - 只改文件，沒有改程式。
+- 2026-10-23｜Claude｜H1｜完成（VPS 實機）
+  - 經過：YUI 按了「H1 finished」，但實際上沒有執行；唯讀檢查發現 VPS 完全沒變。YUI 指示改由 Claude 自己操作。root 的 authorized_keys 收了 `neighbor_vps_ed25519`，Claude 以 root 執行 `setup-h1.sh`（SHA-256 `b2beb758…f7f83d12`），結束碼 0，21 個 OK。
+  - 結果：
+    - swap 4G。
+    - `neko-hands`（uid 1001，只在 neko-hands、neko 群組，密碼已鎖，沒有 SSH 金鑰）。
+    - `user-1001.slice` 記憶體上限 5G。
+    - `/srv/neko-office`、`/srv/neko-handoff/{to-cat,from-cat}`。
+    - 桌面 `:1` 改歸 neko-hands，systemd 開機啟動，只聽本機；neighbor 的桌面已關。
+    - Chrome 156、CJK 字型。
+  - 獨立複查：權限與群組；以貓咪身分做越權嘗試，全部失敗，辦公室 TCP 回 421／401；從外部掃描，只有 22、80、443。ADR A07、A11、A18 已更新證據。
+  - VPS 上的資料夾改用 ASCII 名稱 `to-cat`／`from-cat`（PRD 5.7 已改）。
+  - NOT RUN：重開機後是否保留、用螢幕共享實際看畫面、Chrome 在桌面上開啟（H3）。
+  - 下一步：部署 0.5.0 並開 `--worker-socket /srv/neko-office/worker.sock`（服務設定是 neighbor 的 user unit，不需要 root），然後做 H3。

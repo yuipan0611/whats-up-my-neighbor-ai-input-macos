@@ -48,7 +48,7 @@ ChatGPT 那份是在**看不到本分支**的情況下寫的（本分支沒有 p
 | Policy broker／Grant | GitHub App 的臨時鑰匙＋辦公室代為 push（PRD 5.4、5.6） | H4 |
 | Browser broker＋headed Chrome | neko-hands 的 Chrome，跑在 VNC 桌面上（PRD 7） | H1、H3 |
 | noVNC 觀看／接管 | 「看看貓咪」，經辦公室的 WebSocket 轉接（PRD 6） | H6 |
-| 檔案 broker（input 唯讀、output 讀寫） | `/srv/neko-handoff/給貓`（唯讀）、`貓交回`（PRD 5.7） | H1、H7 |
+| 檔案 broker（input 唯讀、output 讀寫） | `/srv/neko-handoff/to-cat`（貓咪唯讀）、`from-cat`（PRD 5.7；H1 已建立） | H1、H7 |
 | 無憑證的 code runner | neko-hands 手上沒有 GitHub 鑰匙；但程式和 Chrome 在同一個使用者底下 | 部分，見 5.2 |
 | 私有入口（Tailscale） | Caddy＋已配對裝置的 cookie；本機模式只開在 Unix socket | 已有（0.4.0） |
 | Mac 感知 helper | v1 不新增；眼睛和耳朵用現有的 App 功能 | 不在 v1 |
@@ -91,18 +91,18 @@ ChatGPT 那份是在**看不到本分支**的情況下寫的（本分支沒有 p
 | A04 | 改前端、偽造輸入、直接連 VNC／CDP、換 session ID，都拿不到控制權 | H1、H6 | ↔ | VNC 和 Chrome 除錯埠只綁 127.0.0.1（PRD 5.9），網際網路連不到；看畫面要已配對裝置（PRD 6）。「只看」只在畫面這一層切換，不做伺服器強制：只有你一個使用者，看的人就是你（PRD 6）。neko-hands 自己連得到 VNC／CDP，這是 5.2 的範圍。 |
 | A05 | 接手時還在跑的瀏覽器動作、兩台裝置搶控制、舊 worker 復活：同時只有一個操作者 | H2、H6 | 🟡 | 已有：舊的一輪打不了 worker API（FencingTests）。➕ H6：接手時由 worker（我們寫的程式，不是 LLM）暫停整組 agent 程序，因為 agent 能直接連 Chrome 的除錯介面，光「請它停」攔不住。➕ H6：同一時間只有一台裝置能接手。 |
 | A06 | 接手中斷線維持暫停；關掉只在看的畫面不停工作；交還後重新觀察，不重播舊指令 | H6 | ⬜ | 依 D12 採用對方的做法（PRD 第 6 節）：接手狀態存在辦公室，斷線不算交還，交還後先看再做。 |
-| A07 | 未授權的 repo、分支、路徑、網站、上傳目的地、拿 token、碰 Docker socket，一律被拒 | H1、H4 | ⬜／↔ | ⬜ H4：只推 `neko/*`、擋 `.github/workflows/`、App 只裝在勾選的 repo（PRD 13.1 已列）。⬜ H1：neko-hands 不在 docker、sudo 群組。↔ 網站與上傳目的地見 5.3。 |
+| A07 | 未授權的 repo、分支、路徑、網站、上傳目的地、拿 token、碰 Docker socket，一律被拒 | H1、H4 | 🟡／↔ | ⬜ H4：只推 `neko/*`、擋 `.github/workflows/`、App 只裝在勾選的 repo（PRD 13.1 已列）。✅ H1（2026-10-23 VPS 實機）：neko-hands 只在 `neko-hands`、`neko` 群組；`sudo -l` 回「not allowed」；寫不了 Docker socket。↔ 網站與上傳目的地見 5.3。 |
 | A08 | 路徑穿越、symlink／hardlink、壓縮檔逃逸、批准後換檔、版本衝突 | 既有辦公室、H7 | 🟡 | 已有：資料目錄和附件拒絕符號連結。⬜ H7：同步時不跟隨連結、不刪 Mac 上的檔案、同名先備份。「批准後換檔」不適用：v1 不覆寫你的原檔。 |
 | A09 | 假冒擁有者、批准重播／過期／換參數／跨任務、撤銷後舊授權，全部被拒 | 既有辦公室、H4、H9 | 🟡 | 已有：`test_mobile.test_cookie_origin_and_token_all_required`、`test_revoke_forget_and_expiry`、`verify_public.py`（撤銷後 WSS 以 4401 關閉）。批准重播不適用：D7 規定收不回的事由你本人按，v1 沒有「批准後由貓咪代按」。⬜ H4、H9：鑰匙收回後立即失效。 |
 | A10 | 惡意網頁或 README 要它上傳 token、擴權；秘密不進 prompt、log、成果 | H1、H3、H4 | ⬜ | 原則 5.1-2：手上沒有長期鑰匙，就沒東西可以上傳。⬜ PRD 13.1：neko-hands 的環境裡找不到 GitHub 鑰匙。➕ H3：準備一頁含惡意指令的測試網頁，加上一個含惡意指令的測試 README，當成合成任務來跑。 |
-| A11 | npm／Python 安裝腳本讀不到 profile、token、控制平面、雲端 metadata | H1、H3 | 🟡／↔ | ⬜ H1：用 neko-hands 身分 `cat` 讀 `~neighbor/` 必須失敗（PRD 13.1）。worker socket 只回答這件 hands 任務本身（`test_hands.BoundaryTests`）。↔ 讀得到貓咪 Chrome 的 profile，見 5.2。➕ H3：測 Hostinger 有沒有雲端 metadata 端點、能不能連。 |
+| A11 | npm／Python 安裝腳本讀不到 profile、token、控制平面、雲端 metadata | H1、H3 | 🟡／↔ | ✅ H1（VPS 實機）：用 neko-hands 身分列 `~neighbor/`、讀 `office.sqlite3`、讀 VNC 密碼、列 `/root` 都失敗。worker socket 只回答這件 hands 任務本身（`test_hands.BoundaryTests`）。↔ 讀得到貓咪 Chrome 的 profile，見 5.2。✅ H1（VPS 實機）：neko-hands 連不到 `169.254.169.254`（3 秒逾時）。 |
 | A12 | 不同帳號、不同工作區的資料與登入狀態不混用；登入和接手時不錄步驟、不記鍵盤 | H3、H6 | ➕ | ⬜ H3：每件任務有自己的 `workspace/<任務 UUID>/`。v1 只有一個貓咪 profile，帳號分開的部分不適用。➕ H6：你接手時停止每一步的截圖，避免拍到驗證碼。 |
 | A13 | 停止在網路操作途中生效：不再產生新的副作用；收不回的要標明，不能回報假成功 | H2、H3、H4 | 🟡 | 已有：`test_hands` 的 StopTests 和 `test_cancel_stops_the_worker_and_keeps_no_result`（停止後 heartbeat 回 `continue: false`，events、complete 回 409，不留成果）。⬜ H3：worker 收到 `continue: false` 就結束 agent。⬜ H4：push 結果不明時標「待核對」（同 A02）。 |
 | A14 | 從交辦到檔案或 draft PR 的完整一條路，附真的測試輸出；不能拿模擬當完成證據 | H3、H4、H5 | ⬜ | 這就是 v1a 的完成點。 |
 | A15 | 連續 100 件短任務後，記憶體、分頁、程序、暫存、log 回到原本的水準；沒跑 24 小時測試就標未驗收 | H3 | ➕ | ➕ H3 驗收：連續 100 件合成任務，前後記錄記憶體、Chrome 分頁數、程序數、暫存和 log 大小。24 小時長跑另列，沒跑就寫 `NOT RUN`。 |
 | A16 | Mac 記憶體壓力下會降級、不殺其他 App；錄音、掉網、helper 重啟、原本的貼上流程不退化 | — | — | v1 不新增 Mac 感知 helper（PRD 4.3、8.1）。以後做 Mac bridge 或會議字幕常駐時再套用。 |
 | A17 | 只有舊副本時顯示時間和版本；Mac 睡著時不假裝拿得到新檔；寫回衝突不覆蓋 | H7 | 🟡 | ⬜ H7：拉回時同名檔先備份、不刪 Mac 上的檔案。➕ H7：貓咪引用「交給貓咪」的檔案時，附上最後同步時間。貓咪本來就只看得到已同步的副本，所以不會「假裝拿得到新檔」。 |
-| A18 | HTTP／WS 越權、Origin／CSRF、票券重播、撤銷的裝置、從網際網路掃埠，一律預設拒絕 | 既有辦公室、H2、H6 | 🟡 | 已有：`test_office.test_cross_origin_and_rebinding_rejected`、`test_mobile.test_revoke_forget_and_expiry`、`test_local_entry`（14 項）、`verify_public.py` 27 項（跨站 POST 403、匿名 401、撤銷後 4401、本機 TCP 421）。➕ H1 之後：從外部掃 VNC 和除錯埠，必須連不到。⬜ H6：viewer 的 WebSocket 要套同樣的檢查。 |
+| A18 | HTTP／WS 越權、Origin／CSRF、票券重播、撤銷的裝置、從網際網路掃埠，一律預設拒絕 | 既有辦公室、H2、H6 | 🟡 | 已有：`test_office.test_cross_origin_and_rebinding_rejected`、`test_mobile.test_revoke_forget_and_expiry`、`test_local_entry`（14 項）、`verify_public.py` 27 項（跨站 POST 403、匿名 401、撤銷後 4401、本機 TCP 421）。✅ H1 之後（從 Mac 掃 VPS，實機）：只有 22、80、443 開著；5900、5901、6001、9222、8421、2019、11434、65529 都沒有回應。Chrome 除錯埠 H3 開始監聽後要再掃一次。⬜ H6：viewer 的 WebSocket 要套同樣的檢查。 |
 | A19 | 費用、步數、時間、磁碟超過上限就停或等待，不會無限重試；取消不靠前端開著 | H2、H3 | 🟡 | 已有：重試 3 次就停，取消在伺服器端（`test_hands.test_silent_worker_is_retried_then_reported`）。⬜ H3：每件最多 30 分鐘、事件最多 4 MB（PRD 7）。➕ H3：工作區設磁碟上限。模型費用：Codex 用你的 ChatGPT 方案額度，沒有每件預算，不適用。 |
 | A20 | Chromium 自動測試和真的 Chrome 實測分開列；桌機和手機分開列；沒測的不能標通過 | 全部 | ➕ | 收進 HANDOFF 的共用規則（見第 8 節）。 |
 

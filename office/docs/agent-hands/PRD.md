@@ -318,11 +318,13 @@ v1 要做到：VPS 上的貓可以用自己的 Chrome 操作網頁、在 GitHub 
 
 | 位置 | 誰能寫 | 方向 |
 |---|---|---|
-| Mac `~/貓咪/交給貓咪/` → VPS `/srv/neko-handoff/給貓/` | 只有 Mac（經 `neighbor`） | 資料夾一有變動就推過去（launchd `WatchPaths`）；neko-hands **唯讀** |
-| VPS `/srv/neko-handoff/貓交回/` → Mac `~/貓咪/貓咪交回/` | 只有 neko-hands | Mac 醒著時每分鐘拉一次；**不刪 Mac 上的檔案**，同名檔先備份再覆蓋 |
+| Mac `~/貓咪/交給貓咪/` → VPS `/srv/neko-handoff/to-cat/` | 只有 Mac（經 `neighbor`） | 資料夾一有變動就推過去（launchd `WatchPaths`）；neko-hands **唯讀** |
+| VPS `/srv/neko-handoff/from-cat/` → Mac `~/貓咪/貓咪交回/` | 只有 neko-hands | Mac 醒著時每分鐘拉一次；**不刪 Mac 上的檔案**，同名檔先備份再覆蓋 |
 | VPS `~neko-hands/workspace/` | neko-hands | 自由區：clone、下載、暫存 |
 
-- `/srv/neko-handoff/` 用群組權限控管：`給貓/` 只有 neighbor 能寫，`貓交回/` 只有 neko-hands 能寫，雙方都能讀。
+- `/srv/neko-handoff/` 用群組 `neko`（neighbor 與 neko-hands）控管：`to-cat/` 只有 neighbor 能寫，`from-cat/` 只有 neko-hands 能寫，雙方都能讀。兩個資料夾都是 2750（setgid），新檔案自動屬於 `neko` 群組。H1 已建立並實測（2026-10-23）。
+- VPS 上的資料夾用 ASCII 名稱，方便腳本與 rsync 使用；使用者只會看到 Mac 上的中文名稱。
+- H7 的 rsync 要加 `--chmod=D2750,F640`。Mac 上的原檔可能是 600，沒有加的話，貓咪讀不到推上去的檔案。
 - 它需要 Obsidian 筆記時，你放**複本**進「交給貓咪」，不開放整個 vault。
 - 現有的手機附件上傳照舊，是最常用的那條路；資料夾用在大量檔案。
 
