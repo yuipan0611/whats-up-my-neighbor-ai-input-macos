@@ -461,7 +461,7 @@ v1b 驗收要**實際演練一次**完整撤銷，然後再恢復。
 - worker 憑證只能呼叫 worker 端點，跟頁面 token、裝置 cookie 互不相通。
 - 任務新增欄位：`executor='auto'|'hands'`、`needs_human`（`kind: login|approve|grant`、網站、連結、原因、預估秒數）、`screenshots[]`、`github`（repo、分支、PR 連結）。資料表遷移只能新增，不能動既有資料。
 
-### 9.1 worker API v1（H2 已實作，office 0.5.0，尚未部署）
+### 9.1 worker API v1（H2 已實作；office 0.5.0 於 2026-10-23 部署，worker 入口 `/srv/neko-office/worker.sock`）
 
 **怎麼連：**
 - 用 `--worker-socket <路徑>` 開啟一個 Unix socket，權限 660，所在資料夾不能讓其他人進入。不給這個參數就不開。

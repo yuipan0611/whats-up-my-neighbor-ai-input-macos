@@ -104,3 +104,9 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
   - VPS 上的資料夾改用 ASCII 名稱 `to-cat`／`from-cat`（PRD 5.7 已改）。
   - NOT RUN：重開機後是否保留、用螢幕共享實際看畫面、Chrome 在桌面上開啟（H3）。
   - 下一步：部署 0.5.0 並開 `--worker-socket /srv/neko-office/worker.sock`（服務設定是 neighbor 的 user unit，不需要 root），然後做 H3。
+- 2026-10-23｜Claude｜部署 0.5.0｜完成（YUI 同意，實機）
+  - `current` → `releases/public-20261023-11a383a`；備份 `backups/pre-11a383a-20261023T133923Z`。
+  - unit 加上 `--worker-socket /srv/neko-office/worker.sock`；`worker.sock` 為 `srw-rw---- neighbor:neko`。
+  - 104 項測試在 Mac 與 VPS 都通過；`verify_public.py` 27 項全過。
+  - 跨使用者：neko-hands 能 claim，碰擁有者的路徑一律 404；`nobody` 連不上。
+  - 紀錄見 `reports/agent-hands/DEPLOY-0.5.0-2026-10-23.md`。

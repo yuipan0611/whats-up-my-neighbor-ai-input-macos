@@ -2,7 +2,7 @@
 
 狀態（2026-10-22）：公網 HTTPS／WSS 已部署。iPhone Chrome 開啟配對頁無憑證警告，已配對、交辦，並在鎖屏超過五分鐘後確認仍能看到完成成果與進度。手動斷網重送、撤銷這台 iPhone 尚未實測；自動測試已涵蓋重送與短暫測試裝置撤銷。詳細證據見 `reports/office-mobile/PUBLIC-DEPLOYMENT-2026-10-22.md`。
 
-目前版本（2026-10-23 起）：`current` 指向 `releases/public-20261023-52108bd`（office 0.4.0，分支 `claude/agent-hands-prd` 的 `52108bd`，**尚未合併 main**）。上一版是 `releases/public-20261022-5f9c559`（main `5f9c559`，含手機聊天介面與附件）。部署紀錄見 `reports/agent-hands/DEPLOY-0.4.0-2026-10-23.md`。每次部署後，從 Mac 執行 `python3 -I office/verify_public.py --expect-version <版本>`，共 27 項。
+目前版本（2026-10-23 13:39 UTC 起）：`current` 指向 `releases/public-20261023-11a383a`，也就是 office 0.5.0（分支 `claude/agent-hands-prd` 的 `11a383a`，**尚未合併 main**）。這一版加上 worker 入口（`--worker-socket /srv/neko-office/worker.sock`）。上一版是 `releases/public-20261023-52108bd`（0.4.0）。部署紀錄見 `reports/agent-hands/DEPLOY-0.5.0-2026-10-23.md`。每次部署後，從 Mac 執行 `python3 -I office/verify_public.py --expect-version <版本>`，共 27 項。
 
 上面的 iPhone 驗收是在 `fix3` 完成的；5f9c559 起的新聊天介面與附件，還沒在 iPhone 驗收。
 
@@ -43,6 +43,20 @@ YUI 已同意部署 `office.nekonode.cloud`。本次使用 Hostinger DNS 與 VPS
    - **備份：** `~/neighbor-office/backups/pre-52108bd-20261023T074835Z`。
    - **檢查：** `verify_public.py` 27 項全過。
    - **回復：** `ln -sfn releases/public-20261022-5f9c559 current.new && mv -T current.new current`，再重啟。
+8. **0.5.0（worker API、hands 執行者、收回開關；開啟 worker 入口）：2026-10-23 13:39 UTC 經 YUI 同意後部署**
+   - **服務設定：** user unit 的 ExecStart 加上 `--worker-socket /srv/neko-office/worker.sock`。範本 `services/neighbor-office-public.service.example` 已同步。
+   - **前提：** H1 建好的 `/srv/neko-office`，neighbor:neko，權限 2750。
+   - **備份：** `~/neighbor-office/backups/pre-11a383a-20261023T133923Z`（含部署前的 unit 檔）。
+   - **檢查：**
+     - `verify_public.py` 27 項全過。
+     - `worker.sock` 為 `srw-rw---- neighbor:neko`。
+     - neko-hands 能 claim；碰擁有者的路徑一律 404。
+     - 其他使用者連不上 worker socket。
+   - **回復：**
+     1. `ln -sfn releases/public-20261023-52108bd current.new && mv -T current.new current`。
+     2. 把 unit 換回備份裡的版本。
+     3. `systemctl --user daemon-reload`，再重啟。
+     - 資料表多出的欄位不影響 0.4.0。
    - **服務設定不用改：** socket 預設放在 `--data` 旁邊的 `run/office.sock`。
    - **切換後檢查：**
      - `stat -c '%A %U' ~/neighbor-office/run/office.sock` 應為 `srw------- neighbor`。
