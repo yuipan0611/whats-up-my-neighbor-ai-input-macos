@@ -1,35 +1,49 @@
 ---
 title: 貓咪的手：交接板
 date: 2026-10-23
-status: H0 草案完成；等 YUI 拍板 D1–D9，之後才開始 H1
+status: H0 v0.2 草案完成；等 YUI 拍板 D1–D11，之後才開始 H1
 ---
 
 # 交接板
 
-需求、決策與權限以 [PRD.md](PRD.md) 為準。本檔只記錄分工與進度。
+需求、決策、權限與體驗規則以 [PRD.md](PRD.md) 為準。本檔只記錄分工與進度。
 
 ## 分工
 
 | ID | 任務 | 負責 | 擁有的檔案／範圍 | 依賴 | 狀態 |
 |---|---|---|---|---|---|
-| H0 | PRD 與交接板 | Claude | `office/docs/agent-hands/*` | — | 草案完成，待拍板 |
+| H0 | PRD 與交接板 | Claude | `office/docs/agent-hands/*` | — | v0.2 草案，待拍板 |
 | H1 | VPS 基礎：swap、`neko-hands`、Chrome、VNC 改歸 neko-hands、`/srv/neko-handoff` | YUI（root）；Claude 提供指令並唯讀驗證 | VPS 系統設定 | D1、D2、D8 | 未開始 |
-| H2 | 辦公室：loopback 修補、worker API、`hands` 執行者、測試 | Claude | `office/office.py`、`office/tests/test_hands.py` | D1 | 未開始 |
+| H2 | 辦公室安全底座：loopback 修補、worker API、「手」執行者、先停一下與收回開關 | Claude | `office/office.py`、`office/tests/test_hands.py` | D1 | 未開始 |
 | H3 | worker＋Codex 登入＋瀏覽器 MCP；合成任務 | Claude＋YUI（登入） | `office/hands/*`（新增） | H1、H2、D9 | 未開始 |
-| H4 | GitHub token＋測試 repo 端到端與越權測試 | Claude＋YUI（建立 token） | 驗證紀錄 `reports/agent-hands/` | H3、D4 | 未開始 |
-| H5 | 交接資料夾同步（Mac launchd＋rsync） | Claude | `office/handoff-sync/*`（新增） | H1、D5 | 未開始 |
-| H6 | 只看模式、步驟截圖、手機驗收 | Claude＋YUI | `office/static/*`（與手機版協調）、VNC 設定 | H3、D6 | 未開始 |
-| H7 | 收回權限腳本、REVOKE.md、撤銷演練 | Claude＋YUI | `office/hands/lockdown*`、`docs/agent-hands/REVOKE.md` | H3–H6 | 未開始 |
+| H4 | GitHub App（營運者建立）、辦公室代為 clone／push／開 Draft PR、鑰匙收回、越權測試 | Claude＋YUI | `office/github_app.py`（新增）、`office/tests/test_github_push.py`、驗證紀錄 `reports/agent-hands/` | H2、H3、D4 | 未開始 |
+| H5 | 體驗層：自動轉交、三種卡片、鑰匙清單、文案清理、禁用詞掃描 | Claude | `office/static/*`（先在下方留言，與手機版協調）、`office/tests/test_copy.py` | H3、D10 | 未開始 |
+| — | **v1a 完成點** | — | — | H1–H5 | — |
+| H6 | 看看貓咪（noVNC＋WebSocket 轉接）、接手時自動停手 | Claude＋YUI | `office/static/viewer*`、`office.py` 的 viewer 端點 | H5、D6 | 未開始 |
+| H7 | 貓咪資料夾：Mac LaunchAgent＋rsync | Claude | `office/handoff-sync/*`（新增） | H1、D5 | 未開始 |
+| H8 | 通知 | Claude＋YUI | `office/notify*`（新增） | H5、D11 | 未開始 |
+| H9 | REVOKE.md、撤銷演練 | Claude＋YUI | `office/docs/agent-hands/REVOKE.md` | H4–H8 | 未開始 |
 
 ## 規則
 
 - **H2 的 loopback 修補完成並部署之前，不建立 neko-hands。**
-- 在 `claude/agent-hands-prd` 分支上 commit；合併到 main、push、部署 VPS 都要另外取得 YUI 同意。
+- **GitHub App 私鑰只放 neighbor。** neko-hands 的環境裡不能出現任何 GitHub 鑰匙；push 一律經過 `/api/worker/push`，而且只推 `neko/*`。
+- 在 `claude/agent-hands-prd` 分支上 commit。合併到 main、push、部署到 VPS，都要另外取得 YUI 同意。
 - 一個檔案只有一個負責人。要改別人的檔案，先在下方留言。
-- 不讀取、不輸入、不保存密碼、token、cookie 或配對碼，也不寫進報告或聊天。token 由 YUI 本人在 GitHub 建立，並貼進 VPS 上的檔案。
-- 需要 YUI 動手的步驟（root 指令、登入、VNC 密碼），先用確認問題講清楚要輸入什麼、什麼時候輸入，再開始。
-- 不把 `.impeccable/`、`design/` 或 `worktrees/neighbor-remote-agent` 的實驗混進來。
+- 新介面文案要通過 PRD 3.8 的禁用詞掃描。
+- 不讀取、不輸入、不保存密碼、token、cookie、配對碼或私鑰，也不寫進報告或聊天。
+- 需要 YUI 動手的步驟（root 指令、登入、建立 App），先用確認問題講清楚要輸入什麼、什麼時候輸入，再開始。
+- 不要把 `.impeccable/`、`design/` 或 `worktrees/neighbor-remote-agent` 的實驗混進來。
 
 ## 進度紀錄
 
-- 2026-10-23｜Claude｜H0｜草案｜新增 PRD.md、HANDOFF.md｜唯讀實測：Mac swap 7.07/8 GB、70 個 node 程序；VPS 2 vCPU、7.9 GB、無 swap、x86_64、只有 `neighbor` 使用者、沒有 Chrome／gh；確認辦公室的 local 模式信任 loopback（PRD 5.7）｜待 YUI 拍板 D1–D9
+- 2026-10-23｜Claude｜H0｜v0.1 草案
+  - 新增 PRD.md、HANDOFF.md。
+  - 唯讀實測：Mac swap 7.07/8 GB、70 個 node 程序；VPS 2 vCPU、7.9 GB、沒有 swap、x86_64、只有 `neighbor` 使用者、沒有 Chrome／gh。
+  - 確認辦公室 local 模式信任 loopback（PRD 5.8）。
+- 2026-10-23｜Claude｜H0｜v0.2 草案
+  - YUI 要求「工程做，使用者無感」，PRD 新增第 3 節體驗層：六樣可見元素、工程吸收清單、不能藏的四件事、互動預算、用到才設定、文案、禁用詞。
+  - 唯讀實測 GitHub：macOS repo 公開；`main` 沒有保護；`macos-release` 沒有審核規則；`build.yml` 的 `free-release-check` 在 push 到 `main` 或 `codex/neko-cicd-updates` 時，會拿到簽章憑證和 Sparkle 私鑰。因此改成 GitHub App，由辦公室代為 push，而且只推 `neko/*`。
+  - 撤回 v0.1 的「Chrome 登入 GitHub 網頁」。
+  - 範圍拆成 v1a（H1–H5）和 v1b（H6–H9）。
+  - 待 YUI 拍板 D1–D11。
