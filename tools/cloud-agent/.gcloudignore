@@ -1,0 +1,7 @@
+*
+!Dockerfile
+!runner.py
+!adapter.sh
+!codex_adapter.py
+!cloudbuild.yaml
+!.dockerignore

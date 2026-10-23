@@ -1,0 +1,179 @@
+name: Neko cloud development pilot
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/neko-cloud-pilot]
+    paths: ['tools/cloud-agent/**', '.github/workflows/neko-cloud-pilot.yml']
+  pull_request:
+    paths: ['tools/cloud-agent/**', '.github/workflows/neko-cloud-pilot.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: neko-cloud-pilot-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    # Noble's host AppArmor user-namespace policy blocks nested bwrap networking.
+    # Jammy tests the image without changing host-wide security policy.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Offline runner and publisher regression tests
+        run: python3 -m unittest discover -s tools/cloud-agent/tests -v
+      - name: Build the pinned Codex container without credentials
+        run: docker build -t neko-codex-pilot tools/cloud-agent
+      - name: Validate CLI arguments and unprivileged sandbox
+        run: |
+          docker run --rm --security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined --entrypoint python3 neko-codex-pilot /app/codex_adapter.py --self-check
+
+  preflight:
+    needs: validate
+    if: >-
+      (vars.NEKO_GCP_PREFLIGHT_ENABLED == 'true' || vars.NEKO_GCP_PILOT_ENABLED == 'true') &&
+      github.event_name != 'pull_request' &&
+      github.repository == 'yuipan0611/whats-up-my-neighbor-ai-input-macos' &&
+      (github.ref == 'refs/heads/codex/neko-cloud-pilot' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NEKO_PROJECT: ${{ vars.NEKO_GCP_PROJECT }}
+      NEKO_REGION: ${{ vars.NEKO_GCP_REGION }}
+      NEKO_JOB: ${{ vars.NEKO_GCP_JOB }}
+      NEKO_BUCKET: ${{ vars.NEKO_GCP_BUCKET }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.NEKO_GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.NEKO_GCP_GITHUB_SA }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+      - name: Verify the actual Cloud Run sandbox without a model key
+        run: gcloud --quiet --project "$NEKO_PROJECT" run jobs execute "$NEKO_JOB-probe" --region "$NEKO_REGION" --wait
+      - name: Verify fixed-SHA checkout and durable GCS results without a model
+        env:
+          AUDIT_TASK: audit-${{ github.run_id }}
+          AUDIT_SHA: ${{ github.sha }}
+        run: python3 tools/cloud-agent/pipeline.py audit --directory "$RUNNER_TEMP/audit-results" --task-id "$AUDIT_TASK" --sha "$AUDIT_SHA"
+
+  generate:
+    needs: [validate, preflight]
+    if: vars.NEKO_GCP_PILOT_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NEKO_PROJECT: ${{ vars.NEKO_GCP_PROJECT }}
+      NEKO_REGION: ${{ vars.NEKO_GCP_REGION }}
+      NEKO_JOB: ${{ vars.NEKO_GCP_JOB }}
+      NEKO_BUCKET: ${{ vars.NEKO_GCP_BUCKET }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.NEKO_GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.NEKO_GCP_GITHUB_SA }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+      - name: Prepare immutable, fixed-scope documentation task
+        env:
+          TASK_ID: pilot-${{ github.run_id }}
+        run: |
+          git fetch --no-tags --depth=1 origin main
+          source_sha="$(git rev-parse FETCH_HEAD)"
+          python3 tools/cloud-agent/pipeline.py prepare --directory "$RUNNER_TEMP/pilot-results" --task-id "$TASK_ID" --sha "$source_sha"
+      - name: Run Codex on GCP and retrieve private patch
+        run: python3 tools/cloud-agent/pipeline.py cloud --directory "$RUNNER_TEMP/pilot-results"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pilot-result-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/pilot-results/task.json
+            ${{ runner.temp }}/pilot-results/status.json
+            ${{ runner.temp }}/pilot-results/changes.patch
+          retention-days: 3
+          if-no-files-found: error
+
+  publish:
+    needs: generate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      head_sha: ${{ steps.publish.outputs.head_sha }}
+      pr_url: ${{ steps.publish.outputs.pr_url }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          path: trusted
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pilot-result-${{ github.run_id }}
+          path: ${{ runner.temp }}/pilot-results
+      - name: Fetch the exact source into a separate clean checkout
+        run: |
+          source_sha="$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/pilot-results/task.json"))["sha"])')"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+          git clone --no-checkout "https://github.com/$GITHUB_REPOSITORY.git" candidate
+          git -C candidate checkout --detach "$source_sha"
+      - name: Validate docs patch and create or reuse one Draft PR
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 trusted/tools/cloud-agent/pipeline.py publish --repo candidate --directory "$RUNNER_TEMP/pilot-results"
+
+  macos:
+    needs: publish
+    runs-on: macos-14
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.publish.outputs.head_sha }}
+          persist-credentials: false
+      - name: Native macOS build of the exact PR commit
+        run: ./scripts/build.sh
+      - name: Offline regression tests of the exact PR commit
+        run: ./scripts/test-all.sh
+
+  report:
+    needs: [publish, macos]
+    if: always() && needs.publish.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Attach macOS evidence to the generated PR SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PILOT_SHA: ${{ needs.publish.outputs.head_sha }}
+          MACOS_RESULT: ${{ needs.macos.result }}
+          PR_URL: ${{ needs.publish.outputs.pr_url }}
+        run: |
+          python3 tools/cloud-agent/pipeline.py report --sha "$PILOT_SHA" --result "$MACOS_RESULT"
+          echo "Draft PR: $PR_URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "macOS build and offline tests: $MACOS_RESULT; physical-device and release checks remain separate." >> "$GITHUB_STEP_SUMMARY"
