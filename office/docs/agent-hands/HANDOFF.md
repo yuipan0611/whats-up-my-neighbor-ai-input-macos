@@ -15,7 +15,7 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
 | H0 | PRD 與交接板 | Claude | `office/docs/agent-hands/*` | — | 完成（D1–D11 已拍板） |
 | H1 | VPS 基礎：swap、`neko-hands`、Chrome、VNC 改歸 neko-hands、`/srv/neko-handoff`；worker 群組與 worker socket 的資料夾（neighbor 與 neko-hands 同屬一個群組，資料夾 2750） | Claude（依 YUI 指示以 root 執行）；腳本 `office/hands/setup-h1.sh` | VPS 系統設定 | D1、D2、D8 | **完成**（2026-10-23，VPS 實機）。見 `reports/agent-hands/H1-VERIFICATION-2026-10-23.md` |
 | H2 | 辦公室安全底座：loopback 修補、worker API、「手」執行者、先停一下與收回開關 | Claude | `office/office.py`、`office/tests/test_local_entry.py`、`office/tests/test_hands.py` | D1 | **完成**。loopback 修補已部署（0.4.0）；worker API／hands 執行者／收回開關在本機完成（0.5.0，未部署，等 H1 建好群組後一起開） |
-| H3 | worker＋Codex 登入＋瀏覽器 MCP；合成任務 | Claude＋YUI（登入） | `office/hands/*`（新增） | H1、H2、D9、D13 | 未開始 |
+| H3 | worker＋Codex 登入＋瀏覽器 MCP；合成任務 | Claude＋YUI（登入） | `office/hands/*`（新增） | H1、H2、D9、D13 | **進行中**：worker 寫好並測過（`1af9d21`）；VPS 上 Chrome、worker、Codex、瀏覽器工具已裝好並在跑（`setup-h3.sh`）；等 YUI 替貓咪的 Codex 登入，再跑第一件真任務 |
 | H4 | GitHub App（營運者建立）、辦公室代為 clone／push／開 Draft PR、鑰匙收回、越權測試 | Claude＋YUI | `office/github_app.py`（新增）、`office/tests/test_github_push.py`、驗證紀錄 `reports/agent-hands/` | H2、H3、D4 | 未開始 |
 | H5 | 體驗層：自動轉交、三種卡片、鑰匙清單、文案清理、禁用詞掃描 | Claude | `office/static/*`（先在下方留言，與手機版協調）、`office/tests/test_copy.py` | H3、D10 | 未開始 |
 | — | **v1a 完成點** | — | — | H1–H5 | — |
@@ -110,3 +110,13 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
   - 104 項測試在 Mac 與 VPS 都通過；`verify_public.py` 27 項全過。
   - 跨使用者：neko-hands 能 claim，碰擁有者的路徑一律 404；`nobody` 連不上。
   - 紀錄見 `reports/agent-hands/DEPLOY-0.5.0-2026-10-23.md`。
+- 2026-10-23｜Claude｜H3｜worker 與 VPS 設定（實機）
+  - `office/hands/worker.py`：claim、跑 Codex（workspace-write＋網路、交回資料夾可寫、瀏覽器工具）、分批送步驟、每 30 秒 heartbeat、結構化結果。取消、暫停、收回或 lease 被取代時，結束整組程序。上限 30 分鐘／4 MB／2 GB。lease 和 socket 不進 agent 的環境或 prompt。
+  - 10 項 worker 測試（真的辦公室＋假的 Codex），全部 114 項通過；5 組 mutation 全部被抓到。
+  - office 0.5.1：`incomplete` 也顯示原因。尚未部署。
+  - 實測決定（PRD U2）：Codex 0.163.0 的 workspace-write 沙箱在 VPS 上以 neko-hands 可用：工作區能寫、外面寫不了；`network_access=true` 才連得到網路。
+  - Codex 內建的 browser_use 綁桌面 App，不採用；改用 chrome-devtools-mcp 1.12.0（零依賴）。
+  - `office/hands/setup-h3.sh`（root）：Node 22.22.1、Codex 0.163.0（SHA-256 核對）、chrome-devtools-mcp 1.12.0（不跑安裝腳本），都由 root 擁有；`neko-chrome.service` 與 `neko-hands-worker.service` 以 neko-hands 執行，在 user-1001.slice 裡。
+  - 第一次執行時，本機的輸出過濾器語法錯誤，中斷在 apt 之後；確認 dpkg 乾淨後重跑成功。
+  - 獨立複查：兩個服務都在跑、開機會啟動；行程在 user-1001.slice；9222 只聽 127.0.0.1，外部掃描沒有回應；貓咪改不了工具。
+  - 下一步：YUI 用裝置碼替貓咪的 Codex 登入 → 第一件真任務 → ADR 第 7 節的 H3 驗收（惡意網頁、惡意 README、連續 100 件、磁碟上限、D13 的說明）。
