@@ -32,7 +32,7 @@ from urllib.parse import parse_qs, urlsplit
 import uuid
 from datetime import datetime, timezone
 
-VERSION = '0.4.0'
+VERSION = '0.5.0'
 ACTIVE = ('planning', 'running', 'saving')
 ACTIONS = ['summarize', 'write', 'list_files', 'status', 'clarify', 'external']
 PLAN_SCHEMA = {
@@ -142,12 +142,14 @@ class Store:
                 at TEXT NOT NULL, status TEXT NOT NULL, message TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             INSERT OR IGNORE INTO settings VALUES ('paused', '0');
+            INSERT OR IGNORE INTO settings VALUES ('hands_locked', '0');
             ''')
             if 'source_snapshot' not in {r[1] for r in c.execute('PRAGMA table_info(tasks)')}:
                 c.execute('ALTER TABLE tasks ADD COLUMN source_snapshot TEXT')
             columns = {r[1] for r in c.execute('PRAGMA table_info(tasks)')}
             for name, definition in [('executor', "TEXT NOT NULL DEFAULT 'gemma'"), ('parent_id', "TEXT NOT NULL DEFAULT ''"),
-                                     ('journal_ids', "TEXT NOT NULL DEFAULT '[]'"), ('context_snapshot', "TEXT NOT NULL DEFAULT ''")]:
+                                     ('journal_ids', "TEXT NOT NULL DEFAULT '[]'"), ('context_snapshot', "TEXT NOT NULL DEFAULT ''"),
+                                     ('attempts', 'INTEGER NOT NULL DEFAULT 0'), ('heartbeat', 'REAL NOT NULL DEFAULT 0')]:
                 if name not in columns:
                     c.execute(f'ALTER TABLE tasks ADD COLUMN {name} {definition}')
             c.executescript('''
@@ -176,9 +178,11 @@ class Store:
 
     def recover(self):
         with self.connect() as c:
-            rows = c.execute("SELECT id FROM tasks WHERE status IN ('planning','running','saving')").fetchall()
+            rows = c.execute("SELECT id FROM tasks WHERE status IN ('planning','running','saving') AND executor!='hands'").fetchall()
             for row in rows:
                 self._change(c, row['id'], 'interrupted', '服務曾重啟，工作中斷；請檢查已有資料後重新交辦。')
+            # The hands worker is a separate process that outlives an office restart; its lease decides.
+            c.execute("UPDATE tasks SET heartbeat=? WHERE executor='hands' AND status IN ('planning','running','saving')", (time.time(),))
         return len(rows)
 
     def paused(self):
@@ -336,7 +340,7 @@ class Store:
             raise OfficeError('任務編號格式不正確。')
         if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= 5000:
             raise OfficeError('請輸入 1 至 5,000 字的交辦內容。')
-        if executor not in ('gemma', 'codex') or not isinstance(parent_id, str):
+        if executor not in ('gemma', 'codex', 'hands') or not isinstance(parent_id, str):
             raise OfficeError('執行者或接續任務不正確。')
         journal_ids = journal_ids if journal_ids is not None else []
         if not isinstance(journal_ids, list) or len(journal_ids) > 10 or not all(isinstance(i, str) for i in journal_ids) or len(set(journal_ids)) != len(journal_ids):
@@ -393,7 +397,7 @@ class Store:
         with self.connect() as c:
             if c.execute("SELECT value FROM settings WHERE key='paused'").fetchone()[0] == '1':
                 return None
-            row = c.execute("SELECT id FROM tasks WHERE status='queued' ORDER BY rowid LIMIT 1").fetchone()
+            row = c.execute("SELECT id FROM tasks WHERE status='queued' AND executor!='hands' ORDER BY rowid LIMIT 1").fetchone()
             if row:
                 self._change(c, row[0], 'planning', '正在準備交辦。')
                 return self.get(row[0])
@@ -412,6 +416,109 @@ class Store:
             ids = [r[0] for r in c.execute("SELECT id FROM tasks WHERE status IN ('planning','running','saving')")]
             for id_ in ids:
                 self.cancel(id_)
+
+    # --- Hands: tasks run by the worker in the cat's own Linux account (agent-hands PRD 5.2, 9). ---
+    # The agent the worker runs shares that account and can call these too, so they hand
+    # out nothing beyond the hands task itself: no journal list, no other tasks, no submitting.
+
+    HANDS_LEASE = 120
+    HANDS_ATTEMPTS = 3
+    HANDS_FIELDS = ('id', 'prompt', 'source', 'source_snapshot', 'context_snapshot', 'parent_id', 'attempts', 'created')
+    HANDS_TEXT_LIMIT = 150000
+
+    def hands_locked(self):
+        with self.connect() as c:
+            return c.execute("SELECT value FROM settings WHERE key='hands_locked'").fetchone()[0] == '1'
+
+    def set_hands_locked(self, value):
+        """The take-back switch: while locked no hands task is handed out, and the running one stops."""
+        with self.connect() as c:
+            old = c.execute("SELECT value FROM settings WHERE key='hands_locked'").fetchone()[0] == '1'
+            c.execute("UPDATE settings SET value=? WHERE key='hands_locked'", ('1' if value else '0',))
+            if old != bool(value):
+                self._office_event(c, 'hands_locked' if value else 'hands_unlocked',
+                                   '已收回貓咪動手做事的權限。' if value else '貓咪可以再動手做事了。')
+            ids = [r[0] for r in c.execute("SELECT id FROM tasks WHERE executor='hands' AND status IN ('planning','running','saving')")] if value else []
+        for id_ in ids:
+            self.cancel(id_)
+
+    def claim_hands(self):
+        """Give the worker the oldest queued hands task, one at a time."""
+        with self.connect() as c:
+            if c.execute("SELECT 1 FROM settings WHERE key IN ('paused','hands_locked') AND value='1'").fetchone():
+                return None
+            if c.execute("SELECT 1 FROM tasks WHERE executor='hands' AND status IN ('planning','running','saving')").fetchone():
+                return None
+            row = c.execute("SELECT id,prompt FROM tasks WHERE executor='hands' AND status='queued' ORDER BY rowid LIMIT 1").fetchone()
+            if row is None:
+                return None
+            c.execute('UPDATE tasks SET attempts=attempts+1, heartbeat=? WHERE id=?', (time.time(), row['id']))
+            self._change(c, row['id'], 'running', '貓咪開始動手做了。', title=row['prompt'][:50])
+        with self.connect() as c:
+            return dict(c.execute(f"SELECT {','.join(self.HANDS_FIELDS)} FROM tasks WHERE id=?", (row['id'],)).fetchone())
+
+    def _hands_row(self, c, id_):
+        row = c.execute('SELECT id,status,executor FROM tasks WHERE id=?', (id_,)).fetchone() if isinstance(id_, str) else None
+        if row is None or row['executor'] != 'hands':
+            raise OfficeError('找不到這件工作。', 404)
+        return row
+
+    def _active_hands(self, c, id_):
+        row = self._hands_row(c, id_)
+        if row['status'] not in ACTIVE:
+            raise OfficeError('這件工作已經停止，請停下手邊的動作。', 409, {'status': row['status']})
+        c.execute('UPDATE tasks SET heartbeat=? WHERE id=?', (time.time(), id_))
+
+    def hands_heartbeat(self, id_):
+        """Keep the lease; `continue` turns false once the task is cancelled, paused, locked or finished."""
+        with self.connect() as c:
+            row = self._hands_row(c, id_)
+            if row['status'] in ACTIVE:
+                c.execute('UPDATE tasks SET heartbeat=? WHERE id=?', (time.time(), id_))
+            return {'continue': row['status'] in ACTIVE, 'status': row['status']}
+
+    def hands_notes(self, id_, events):
+        if not isinstance(events, list) or not 1 <= len(events) <= 50 or not all(
+                isinstance(e, dict) and e.get('kind') in self.NOTE_KINDS and isinstance(e.get('message'), str) and e['message'].strip() for e in events):
+            raise OfficeError('events 需為 1 至 50 筆，每筆有 kind（thinking、message、tool）與文字。')
+        with self.connect() as c:
+            self._active_hands(c, id_)
+        for event in events:
+            self.note(id_, event['kind'], event['message'])
+        return {'recorded': len(events)}
+
+    def hands_complete(self, id_, outcome, text, reason=''):
+        if outcome not in ('completed', 'incomplete', 'failed'):
+            raise OfficeError('outcome 只能是 completed、incomplete 或 failed。')
+        if not isinstance(text, str) or len(text.encode('utf-8')) > self.HANDS_TEXT_LIMIT:
+            raise OfficeError('成果需為 150KB 以內的文字。', 413)
+        if outcome != 'failed' and not text.strip():
+            raise OfficeError('成果不可為空白。')
+        if not isinstance(reason, str) or len(reason) > 300:
+            raise OfficeError('原因需為 300 字以內。')
+        with self.lock:
+            with self.connect() as c:
+                self._active_hands(c, id_)
+            fields = {}
+            if text.strip():
+                fields = {'result': text, 'artifact': self.save(id_, text, 'result.md' if outcome == 'completed' else 'partial.md')}
+            message = {'completed': '做好了，成果已保存。', 'incomplete': '先做到這裡，部分成果已保存。',
+                       'failed': reason.strip() or '這件沒有做成，做到一半的步驟都保留著。'}[outcome]
+            self.change(id_, outcome, message, **fields)
+        return {'id': id_, 'status': outcome}
+
+    def expire_hands(self, t=None):
+        """A silent worker gives its task back to the queue; after HANDS_ATTEMPTS tries the user is told."""
+        t = time.time() if t is None else t
+        with self.connect() as c:
+            rows = c.execute("SELECT id,attempts FROM tasks WHERE executor='hands' AND status IN ('planning','running','saving') AND heartbeat<?",
+                             (t - self.HANDS_LEASE,)).fetchall()
+            for row in rows:
+                if row['attempts'] < self.HANDS_ATTEMPTS:
+                    self._change(c, row['id'], 'queued', '連線中斷了，貓咪等一下會自己重試。')
+                else:
+                    self._change(c, row['id'], 'interrupted', f'連續 {self.HANDS_ATTEMPTS} 次連不上，先停下來了；做到一半的步驟都還在，可以再交辦一次。')
+        return len(rows)
 
     def files(self):
         return [{'name': p.name, 'bytes': p.stat().st_size} for p in sorted((self.root / 'inbox').iterdir())
@@ -893,8 +1000,8 @@ class Office:
         id_ = body.get('id')
         try:
             executor = body.get('executor', 'codex' if self.agent else 'gemma')
-            task = self.store.submit(id_, prompt, source, self.agent.model if executor == 'codex' and self.agent else self.model.model,
-                                     executor, body.get('parent_id', ''), body.get('journal_ids', []))
+            model = 'hands' if executor == 'hands' else (self.agent.model if executor == 'codex' and self.agent else self.model.model)
+            task = self.store.submit(id_, prompt, source, model, executor, body.get('parent_id', ''), body.get('journal_ids', []))
         except (ValueError, TypeError, AttributeError):
             raise OfficeError('任務編號格式不正確。')
         return {'task': task, 'message': '交辦已保存，貓咪會依序處理。'}
@@ -904,7 +1011,11 @@ class Office:
         return ('辦公室暫停中。\n' if self.store.paused() else '') + ('\n'.join(f"{r['title']}：{r['stage']}" for r in rows) or '目前沒有其他任務。')
 
     def worker(self):
+        last_expire = 0
         while not self.stopping.is_set():
+            if time.monotonic() - last_expire >= 5:
+                last_expire = time.monotonic()
+                self.store.expire_hands()
             task = self.store.claim()
             if task:
                 try:
@@ -1036,19 +1147,19 @@ LOCAL_TUNNEL_PORT = 18421
 SOCKET_PATH_MAX = 100  # sun_path is 104 bytes on macOS, 108 on Linux
 
 
-def private_socket_path(path):
-    """Return a socket path whose directory only this user can enter.
+def private_socket_path(path, group_shared=False):
+    """Return a socket path whose directory only this user (and, if shared, its group) can enter.
 
     A stale socket left by a crash is replaced; anything else is refused, never deleted."""
     path = Path(path)
     if len(os.fsencode(path)) > SOCKET_PATH_MAX:
-        raise ValueError(f'Local socket path is longer than {SOCKET_PATH_MAX} bytes: {path}')
+        raise ValueError(f'Socket path is longer than {SOCKET_PATH_MAX} bytes: {path}')
     parent = path.parent
     if not parent.exists():
-        parent.mkdir(mode=0o700, parents=True)
+        parent.mkdir(mode=0o750 if group_shared else 0o700, parents=True)
     info = parent.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-        raise ValueError(f'{parent} must be a directory only this user can open (mode 700)')
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & (0o007 if group_shared else 0o077):
+        raise ValueError(f'{parent} must be a directory owned by this user and closed to others (mode {750 if group_shared else 700})')
     try:
         existing = path.lstat()
     except FileNotFoundError:
@@ -1099,9 +1210,9 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
     PER_DEVICE = 2
     LOCAL_SOCKETS = 8
-    local = False
+    local = worker = False
 
-    def __init__(self, port, office, public_origin=None, local_socket=None, dev_tcp_local=False):
+    def __init__(self, port, office, public_origin=None, local_socket=None, dev_tcp_local=False, worker_socket=None):
         self.office = office
         self.dev_tcp_local = dev_tcp_local
         self.token = secrets.token_urlsafe(32)
@@ -1117,19 +1228,22 @@ class Server(ThreadingHTTPServer):
         self.limiter = PairLimiter()
         self.sockets, self.sockets_lock = [], threading.Lock()
         self.stopping = threading.Event()
-        self.local_server = self.local_thread = None  # server_close() runs if the TCP bind fails
+        self.unix_servers, self.unix_threads = [], []  # server_close() runs if the TCP bind fails
         super().__init__(('127.0.0.1', port), Handler)
         try:
             if local_socket:
-                self.local_server = LocalServer(local_socket, self)
+                self.unix_servers.append(LocalServer(local_socket, self))
+            if worker_socket:
+                self.unix_servers.append(WorkerServer(worker_socket, self))
         except Exception:
-            super().server_close()
+            self.server_close()
             raise
 
     def serve_forever(self, poll_interval=0.5):
-        if self.local_server:
-            self.local_thread = threading.Thread(target=self.local_server.serve_forever, args=(poll_interval,), daemon=True)
-            self.local_thread.start()
+        for server in self.unix_servers:
+            thread = threading.Thread(target=server.serve_forever, args=(poll_interval,), daemon=True)
+            thread.start()
+            self.unix_threads.append(thread)
         super().serve_forever(poll_interval)
 
     def device_token(self, device_id):
@@ -1156,14 +1270,14 @@ class Server(ThreadingHTTPServer):
 
     def shutdown(self):
         self.stopping.set()
-        if self.local_thread:
-            self.local_server.shutdown()
+        for server in self.unix_servers[:len(self.unix_threads)]:
+            server.shutdown()
         super().shutdown()
 
     def server_close(self):
         super().server_close()
-        if self.local_server:
-            self.local_server.server_close()
+        for server in self.unix_servers:
+            server.server_close()
 
 
 class LocalServer(socketserver.ThreadingUnixStreamServer):
@@ -1173,13 +1287,14 @@ class LocalServer(socketserver.ThreadingUnixStreamServer):
     logs in as that user. Office, token, WebSocket registry and stop flag are shared
     with the TCP Server (the hub)."""
     daemon_threads = True
-    local = True
+    local, worker = True, False
+    MODE, GROUP_SHARED = 0o600, False
 
     def __init__(self, path, hub):
         self.hub, self.inode = hub, None
-        self.path = private_socket_path(path)
+        self.path = private_socket_path(path, self.GROUP_SHARED)
         super().__init__(str(self.path), Handler)
-        os.chmod(self.path, 0o600)
+        os.chmod(self.path, self.MODE)
         self.inode = self.path.lstat().st_ino
 
     def __getattr__(self, name):
@@ -1192,6 +1307,15 @@ class LocalServer(socketserver.ThreadingUnixStreamServer):
         with contextlib.suppress(FileNotFoundError):
             if self.inode is not None and self.path.lstat().st_ino == self.inode:
                 self.path.unlink()
+
+
+class WorkerServer(LocalServer):
+    """The hands worker's entry: a mode-660 socket in a directory closed to others.
+
+    The worker's Linux group (set up by root, agent-hands H1) can open it. It serves
+    only /api/worker/*, whose answers stay within the hands task itself."""
+    local, worker = False, True
+    MODE, GROUP_SHARED = 0o660, True
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1236,10 +1360,16 @@ class Handler(BaseHTTPRequestHandler):
         Local mode needs the private Unix socket: on loopback TCP a local Host header
         proves nothing, because any process on the machine can send one."""
         self.device = None
+        if self.server.worker:
+            # No browser can reach a Unix socket, so Host and Origin carry no meaning here.
+            self.mode = 'worker'
+            if write and self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
+                raise OfficeError('請以 JSON 傳送。', 415)
+            return
         host = self.headers.get('Host', '')
         port = self.server.server_port
         forwarded = any(self.headers.get(h) for h in FORWARD_HEADERS)
-        local_host = host in {f'{name}:{p}' for name in ('127.0.0.1', 'localhost') for p in (port, LOCAL_TUNNEL_PORT)} and not forwarded
+        local_host =host in {f'{name}:{p}' for name in ('127.0.0.1', 'localhost') for p in (port, LOCAL_TUNNEL_PORT)} and not forwarded
         if local_host and (self.server.local or self.server.dev_tcp_local):
             self.mode, expected = 'local', 'http://' + host
         elif not self.server.local and self.server.public_host and host.lower() == self.server.public_host:
@@ -1305,6 +1435,8 @@ class Handler(BaseHTTPRequestHandler):
             parts = urlsplit(self.path)
             path = parts.path
             self.boundary(upgrade=path == '/api/ws')
+            if self.mode == 'worker':
+                raise OfficeError('找不到這個頁面。', 404)
             office = self.server.office
             if not path.startswith('/api/'):
                 file, mime = self.static_file(path)
@@ -1382,19 +1514,23 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.boundary(True)
             path = urlsplit(self.path).path
-            if path == '/api/attachments':
+            upload = path == '/api/attachments' and self.mode != 'worker'
+            if upload:
                 self.authenticate()
                 self.check_token()
             try:
                 size = int(self.headers.get('Content-Length', '0'))
             except ValueError:
                 raise OfficeError('請求長度不正確。')
-            if not 0 < size <= (24 * 1024 * 1024 if path == '/api/attachments' else 200000):
+            if not 0 < size <= (24 * 1024 * 1024 if upload else 200000):
                 raise OfficeError('請求大小超過上限。', 413)
             body = json.loads(self.rfile.read(size))
             if not isinstance(body, dict):
                 raise OfficeError('請求格式不正確。')
             office = self.server.office
+            if self.mode == 'worker':
+                self.send(200, self.worker_call(path, body))
+                return
             if path == '/api/pair':
                 self.pair(body)
                 return
@@ -1428,6 +1564,20 @@ class Handler(BaseHTTPRequestHandler):
             self.send(400, {'error': '請求格式不正確。'})
         except Exception:
             self.send(500, {'error': '操作失敗，請重新整理後檢查任務紀錄。'})
+
+    def worker_call(self, path, body):
+        """The only routes on the worker socket (agent-hands PRD 9)."""
+        store = self.server.office.store
+        if path == '/api/worker/claim':
+            return {'task': store.claim_hands(), 'paused': store.paused(), 'locked': store.hands_locked()}
+        task_id = body.get('task_id')
+        if path == '/api/worker/heartbeat':
+            return store.hands_heartbeat(task_id)
+        if path == '/api/worker/events':
+            return store.hands_notes(task_id, body.get('events'))
+        if path == '/api/worker/complete':
+            return store.hands_complete(task_id, body.get('outcome'), body.get('text', ''), body.get('reason', ''))
+        raise OfficeError('找不到這個操作。', 404)
 
     def pair(self, body):
         if self.mode != 'public':
@@ -1591,7 +1741,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.ws_close(error)
 
 
-CLI_COMMANDS = ('pair', 'devices', 'revoke')
+CLI_COMMANDS = ('pair', 'devices', 'revoke', 'hands-lock')
 
 
 def cli(argv):
@@ -1602,6 +1752,7 @@ def cli(argv):
     commands.add_parser('pair', parents=[data], help='產生一組 10 分鐘、只能用一次的手機配對碼')
     commands.add_parser('devices', parents=[data], help='列出已配對的裝置')
     commands.add_parser('revoke', parents=[data], help='撤銷一台裝置').add_argument('device_id')
+    commands.add_parser('hands-lock', parents=[data], help='收回（on）或恢復（off）貓咪動手做事的權限').add_argument('state', choices=('on', 'off', 'status'))
     args = parser.parse_args(argv)
     args.data = getattr(args, 'data', Path.home() / 'neighbor-office/data')
     os.umask(0o077)
@@ -1616,6 +1767,10 @@ def cli(argv):
             print(f"{d['id']}  {d['name']}  建立 {d['created']}  最後使用 {d['last_seen']}  {state}")
         if not rows:
             print('還沒有配對的裝置。')
+    elif args.command == 'hands-lock':
+        if args.state != 'status':
+            store.set_hands_locked(args.state == 'on')
+        print('貓咪動手做事的權限：' + ('已收回，不會領到新工作。' if store.hands_locked() else '開啟中。'))
     else:
         try:
             device = store.revoke_device(args.device_id)
@@ -1634,6 +1789,7 @@ def main():
     parser.add_argument('--public-origin', help='e.g. https://office.nekonode.cloud; enables paired phone access through a TLS proxy')
     parser.add_argument('--local-socket', type=Path, help='private local entry for the Mac SSH tunnel (default: <data>/../run/office.sock)')
     parser.add_argument('--dev-tcp-local', action='store_true', help='development only: also serve local mode on the TCP port, which any local process can reach')
+    parser.add_argument('--worker-socket', type=Path, help='hands worker entry (mode 660 for its group; off unless given)')
     args = parser.parse_args()
     os.umask(0o077)
     store = Store(args.data)
@@ -1645,7 +1801,7 @@ def main():
     office = Office(store, Ollama(args.model, managed=True), CodexAgent(args.data.parent / 'runtime'))
     local_socket = args.local_socket or args.data.parent / 'run' / 'office.sock'
     try:
-        server = Server(args.port, office, args.public_origin, local_socket, args.dev_tcp_local)
+        server = Server(args.port, office, args.public_origin, local_socket, args.dev_tcp_local, args.worker_socket)
     except ValueError as e:
         raise SystemExit(str(e))
     # Exclusive server bind happens before worker start, so an accidental second
@@ -1657,7 +1813,8 @@ def main():
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     print(f'Neighbor Office {VERSION} listening on loopback:{server.server_port}' + (f' for {server.public_origin}' if server.public_origin else '')
-          + f'; local entry {local_socket}' + ('; dev TCP local mode ON' if args.dev_tcp_local else ''), flush=True)
+          + f'; local entry {local_socket}' + (f'; worker entry {args.worker_socket}' if args.worker_socket else '')
+          + ('; dev TCP local mode ON' if args.dev_tcp_local else ''), flush=True)
     try:
         server.serve_forever(poll_interval=0.25)
     finally:

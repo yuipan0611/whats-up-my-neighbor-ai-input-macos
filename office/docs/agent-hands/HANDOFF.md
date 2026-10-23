@@ -13,8 +13,8 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
 | ID | 任務 | 負責 | 擁有的檔案／範圍 | 依賴 | 狀態 |
 |---|---|---|---|---|---|
 | H0 | PRD 與交接板 | Claude | `office/docs/agent-hands/*` | — | 完成（D1–D11 已拍板） |
-| H1 | VPS 基礎：swap、`neko-hands`、Chrome、VNC 改歸 neko-hands、`/srv/neko-handoff` | YUI（root）；Claude 提供指令並唯讀驗證 | VPS 系統設定 | D1、D2、D8 | 未開始 |
-| H2 | 辦公室安全底座：loopback 修補、worker API、「手」執行者、先停一下與收回開關 | Claude | `office/office.py`、`office/tests/test_local_entry.py`、`office/tests/test_hands.py` | D1 | loopback 修補完成並已部署（0.4.0，2026-10-23）；worker API／執行者／收回開關進行中 |
+| H1 | VPS 基礎：swap、`neko-hands`、Chrome、VNC 改歸 neko-hands、`/srv/neko-handoff`；worker 群組與 worker socket 的資料夾（neighbor 與 neko-hands 同屬一個群組，資料夾 2750） | YUI（root）；Claude 提供指令並唯讀驗證 | VPS 系統設定 | D1、D2、D8 | 未開始 |
+| H2 | 辦公室安全底座：loopback 修補、worker API、「手」執行者、先停一下與收回開關 | Claude | `office/office.py`、`office/tests/test_local_entry.py`、`office/tests/test_hands.py` | D1 | **完成**。loopback 修補已部署（0.4.0）；worker API／hands 執行者／收回開關在本機完成（0.5.0，未部署，等 H1 建好群組後一起開） |
 | H3 | worker＋Codex 登入＋瀏覽器 MCP；合成任務 | Claude＋YUI（登入） | `office/hands/*`（新增） | H1、H2、D9 | 未開始 |
 | H4 | GitHub App（營運者建立）、辦公室代為 clone／push／開 Draft PR、鑰匙收回、越權測試 | Claude＋YUI | `office/github_app.py`（新增）、`office/tests/test_github_push.py`、驗證紀錄 `reports/agent-hands/` | H2、H3、D4 | 未開始 |
 | H5 | 體驗層：自動轉交、三種卡片、鑰匙清單、文案清理、禁用詞掃描 | Claude | `office/static/*`（先在下方留言，與手機版協調）、`office/tests/test_copy.py` | H3、D10 | 未開始 |
@@ -61,3 +61,13 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
   - VPS 上 83 項測試通過；新增 `office/verify_public.py`，27 項全過。
   - 紀錄見 `reports/agent-hands/DEPLOY-0.4.0-2026-10-23.md`。
   - Mac 在合併 main 之前，要用這個分支的 `open-office.command`。
+- 2026-10-23｜Claude｜H2 worker API｜完成（本機，未部署）
+  - office 0.5.0：新增 hands 執行者，辦公室內建的 worker 不會領它。
+  - worker socket 預設不開，用 `--worker-socket` 開啟，權限 660、資料夾不對其他人開放。它只提供 claim／heartbeat／events／complete，只回答 hands 任務本身。
+  - 一次只發一件；租約 120 秒，重試 3 次後才標成中斷；辦公室重啟不會中斷 hands 任務。
+  - 收回開關：`office.py hands-lock`；「先停一下」也會停掉 hands 任務。
+  - 資料表新增 `attempts`、`heartbeat` 欄位，沒有改動既有資料。
+  - 測試：`tests/test_hands.py` 18 項；全部 101 項通過；13 組 mutation 全部被抓到。
+  - 契約見 PRD 9.1。
+  - 手機介面把 hands 任務顯示成「Codex」，H5 再改。
+  - 下一步：H1（需要 YUI 以 root 執行）→ 部署 0.5.0 並開啟 worker socket → H3。

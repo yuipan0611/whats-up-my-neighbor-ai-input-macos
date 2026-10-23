@@ -56,6 +56,8 @@ HTTP 維持 Host／Origin／頁面 token 檢查，以純文字顯示內容，不
 - **`--local-socket`：** 可以改 socket 路徑。路徑上限 100 bytes，資料夾必須只有自己能進入。
 - **啟動規則：** 啟動時會換掉當機留下的舊 socket；如果 socket 還有服務在聽，就拒絕啟動。不是 socket 的檔案一律不刪。
 - **`--dev-tcp-local`：** 只限單人使用的開發機。它讓 TCP 也提供本機模式，**不可在 VPS 使用**。
+- **`--worker-socket`（0.5.0 起）：** 開啟「手」（`executor: hands`）專用的 worker 入口。權限 660，給 worker 的群組使用，預設不開。它只回答 hands 任務本身；契約見 `docs/agent-hands/PRD.md` 9.1。
+- **收回開關：** `office.py hands-lock on|off|status`。
 - **在 VPS 上直接呼叫本機 API：** `curl --unix-socket ~/neighbor-office/run/office.sock -H 'Host: 127.0.0.1:18421' http://127.0.0.1:18421/api/health`。`verify_live.py` 已改走這個 socket。
 
 ## 手機 Chrome 直連

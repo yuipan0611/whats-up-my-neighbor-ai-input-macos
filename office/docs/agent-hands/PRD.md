@@ -435,6 +435,40 @@ v1b 驗收要**實際演練一次**完整撤銷，然後再恢復。
 - worker 憑證只能呼叫 worker 端點，跟頁面 token、裝置 cookie 互不相通。
 - 任務新增欄位：`executor='auto'|'hands'`、`needs_human`（`kind: login|approve|grant`、網站、連結、原因、預估秒數）、`screenshots[]`、`github`（repo、分支、PR 連結）。資料表遷移只能新增，不能動既有資料。
 
+### 9.1 worker API v1（H2 已實作，office 0.5.0，尚未部署）
+
+**怎麼連：**
+- 用 `--worker-socket <路徑>` 開啟一個 Unix socket，權限 660，所在資料夾不能讓其他人進入。不給這個參數就不開。
+- 憑證就是作業系統的群組：只有 worker 的群組能連進來。這個群組和資料夾由 root 在 H1 建立，辦公室只負責檢查權限。
+- worker 和它啟動的 agent 是同一個 Linux 使用者，所以 **agent 也能呼叫這些端點**。因此這些端點設計成「只回答這件 hands 任務本身」：不給生活紀錄列表、不給其他任務、不能交辦，也碰不到任何擁有者用的路徑（GET 一律 404）。
+- 本機與公網入口反過來，也呼叫不到 `/api/worker/*`。
+
+**規則：**
+- 全部是 POST，內容用 JSON，以 UTF-8 原字送出（`ensure_ascii=False`）。請求上限 200KB。
+
+| 端點 | 送 | 回 |
+|---|---|---|
+| `/api/worker/claim` | `{}` | `{task, paused, locked}`。`task` 只有 `id, prompt, source, source_snapshot, context_snapshot, parent_id, attempts, created`；沒有可領的就是 `null`。一次只發一件 |
+| `/api/worker/heartbeat` | `{task_id}` | `{continue, status}`。`continue` 變成 false，就立刻停手（取消、先停一下、收回權限、已結束都會這樣） |
+| `/api/worker/events` | `{task_id, events:[{kind, message}]}`，1–50 筆，`kind` 是 `thinking`／`message`／`tool` | `{recorded}`；任務已停止回 409 |
+| `/api/worker/complete` | `{task_id, outcome, text, reason?}`；`outcome` 是 `completed`／`incomplete`／`failed`，`text` 最多 150KB | `{id, status}`。`completed` 存成 `result.md`；`incomplete`／`failed` 有文字就存成 `partial.md`；任務已停止回 409，不會留下成果 |
+
+**租約與重試：**
+- 任何 worker 呼叫都會續租。超過 120 秒沒有任何呼叫，任務就回到佇列重試，每次領取算一次。第 3 次仍然沒有回應，才標成 `interrupted` 讓使用者看到。
+- worker 應每 30 秒左右送一次 heartbeat。
+- 辦公室重啟時不會中斷 hands 任務，會重新起算它的租約。
+
+**停止：**
+- 「先停一下」會取消進行中的任務，佇列保留。
+- 收回開關：`office.py hands-lock on|off|status`。開啟時不發新工作，並取消進行中的那件。介面按鈕在 H5。
+
+**之後才加：**
+- `push`（H4）。
+- 截圖（H6）。
+- `needs_human` 卡片（H5）。
+- 附件交給手（H3）：目前圖片和 PDF 仍然只能交給 Codex。
+- 手機介面目前把 hands 任務顯示成「Codex」，H5 的自動轉交會一起改。
+
 ## 10. 決策（2026-10-23 YUI 拍板：全部照「推薦」欄）
 
 | # | 問題 | 推薦 | 其他選項 | v0.2 變更 |
