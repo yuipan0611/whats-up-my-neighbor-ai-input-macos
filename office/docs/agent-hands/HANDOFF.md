@@ -15,11 +15,11 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
 | H0 | PRD 與交接板 | Claude | `office/docs/agent-hands/*` | — | 完成（D1–D11 已拍板） |
 | H1 | VPS 基礎：swap、`neko-hands`、Chrome、VNC 改歸 neko-hands、`/srv/neko-handoff`；worker 群組與 worker socket 的資料夾（neighbor 與 neko-hands 同屬一個群組，資料夾 2750） | YUI（root）；Claude 提供指令並唯讀驗證 | VPS 系統設定 | D1、D2、D8 | 未開始 |
 | H2 | 辦公室安全底座：loopback 修補、worker API、「手」執行者、先停一下與收回開關 | Claude | `office/office.py`、`office/tests/test_local_entry.py`、`office/tests/test_hands.py` | D1 | **完成**。loopback 修補已部署（0.4.0）；worker API／hands 執行者／收回開關在本機完成（0.5.0，未部署，等 H1 建好群組後一起開） |
-| H3 | worker＋Codex 登入＋瀏覽器 MCP；合成任務 | Claude＋YUI（登入） | `office/hands/*`（新增） | H1、H2、D9 | 未開始 |
+| H3 | worker＋Codex 登入＋瀏覽器 MCP；合成任務 | Claude＋YUI（登入） | `office/hands/*`（新增） | H1、H2、D9、D13 | 未開始 |
 | H4 | GitHub App（營運者建立）、辦公室代為 clone／push／開 Draft PR、鑰匙收回、越權測試 | Claude＋YUI | `office/github_app.py`（新增）、`office/tests/test_github_push.py`、驗證紀錄 `reports/agent-hands/` | H2、H3、D4 | 未開始 |
 | H5 | 體驗層：自動轉交、三種卡片、鑰匙清單、文案清理、禁用詞掃描 | Claude | `office/static/*`（先在下方留言，與手機版協調）、`office/tests/test_copy.py` | H3、D10 | 未開始 |
 | — | **v1a 完成點** | — | — | H1–H5 | — |
-| H6 | 看看貓咪（noVNC＋WebSocket 轉接）、接手時自動停手 | Claude＋YUI | `office/static/viewer*`、`office.py` 的 viewer 端點 | H5、D6 | 未開始 |
+| H6 | 看看貓咪（noVNC＋WebSocket 轉接）、接手時自動停手。接手中斷線**維持暫停**，按「交還」才繼續；接手狀態存在辦公室；同時只有一台裝置接手；交還後先看再做；接手時間不算進 30 分鐘，斷線超過 2 分鐘算一件「等你」；接手中由 worker 暫停整組 agent 程序、停止截圖；heartbeat 多回 `hold`（PRD 第 6 節、D12） | Claude＋YUI | `office/static/viewer*`、`office.py` 的 viewer 端點與 `hands_heartbeat` 的 `hold`、`office/hands/*` 的暫停與恢復（H3 完成後接手）、`office/tests/test_viewer.py`（新增） | H3、H5、D6、D12 | 未開始 |
 | H7 | 貓咪資料夾：Mac LaunchAgent＋rsync | Claude | `office/handoff-sync/*`（新增） | H1、D5 | 未開始 |
 | H8 | 通知 | Claude＋YUI | `office/notify*`（新增） | H5、D11 | 未開始 |
 | H9 | REVOKE.md、撤銷演練 | Claude＋YUI | `office/docs/agent-hands/REVOKE.md` | H4–H8 | 未開始 |
@@ -82,3 +82,12 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
 - 2026-10-23｜Claude｜H0｜ADR-001
   - 對照 nekonode-site 的 VPS-first PRD：沿用辦公室＋SQLite，不另做 FastAPI＋PostgreSQL。A01–A20 逐項對到 H 任務；新增工作列在 ADR 第 7 節。
   - 待 YUI 決定（ADR 第 5 節）：接手中斷線是否維持暫停（推薦維持）；程式與 Chrome 同一個使用者（推薦 v1 維持）；網站白名單（推薦 v1 不做）。
+- 2026-10-23｜YUI｜H0｜拍板 D12–D14（ADR-001 第 5 節全部照推薦）
+  - D12：只在看時關掉畫面不影響工作；接手中斷線維持暫停，按「交還」才繼續。
+  - D13：v1 程式和 Chrome 同在 neko-hands；Chrome 要登入有價值的帳號時再加 `neko-runner`。
+  - D14：v1 不做網站白名單。
+- 2026-10-23｜Claude｜H0｜PRD v0.3
+  - 第 6 節改寫接手與斷線：接手狀態存在辦公室；同時只有一台裝置接手；交還後先看再做；接手時間不算進 30 分鐘；斷線超過 2 分鐘算一件「等你」（D11 通知）；接手中由 worker 暫停整組 agent 程序並停止截圖；heartbeat 多回 `hold`。
+  - 跟著改：3.3、3.7（新增「你接手到一半離開了」文案）、第 7 節、第 9 節、第 12 節、13.2（新增兩項驗收）；5.2 補 D13，5.9 補 D14，第 10 節新增 D12–D14。
+  - H6 表格列改寫，依賴加上 H3（要用 worker 暫停 agent），檔案加 `hands_heartbeat` 的 `hold` 和 `office/tests/test_viewer.py`。H3 依賴加上 D13。
+  - 只改文件，沒有改程式。
