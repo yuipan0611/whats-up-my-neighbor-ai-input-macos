@@ -14,7 +14,7 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
 |---|---|---|---|---|---|
 | H0 | PRD 與交接板 | Claude | `office/docs/agent-hands/*` | — | 完成（D1–D11 已拍板） |
 | H1 | VPS 基礎：swap、`neko-hands`、Chrome、VNC 改歸 neko-hands、`/srv/neko-handoff` | YUI（root）；Claude 提供指令並唯讀驗證 | VPS 系統設定 | D1、D2、D8 | 未開始 |
-| H2 | 辦公室安全底座：loopback 修補、worker API、「手」執行者、先停一下與收回開關 | Claude | `office/office.py`、`office/tests/test_local_entry.py`、`office/tests/test_hands.py` | D1 | loopback 修補完成（0.4.0，本機＋VPS 暫時實例驗證，**未部署**）；worker API／執行者／收回開關未開始 |
+| H2 | 辦公室安全底座：loopback 修補、worker API、「手」執行者、先停一下與收回開關 | Claude | `office/office.py`、`office/tests/test_local_entry.py`、`office/tests/test_hands.py` | D1 | loopback 修補完成並已部署（0.4.0，2026-10-23）；worker API／執行者／收回開關進行中 |
 | H3 | worker＋Codex 登入＋瀏覽器 MCP；合成任務 | Claude＋YUI（登入） | `office/hands/*`（新增） | H1、H2、D9 | 未開始 |
 | H4 | GitHub App（營運者建立）、辦公室代為 clone／push／開 Draft PR、鑰匙收回、越權測試 | Claude＋YUI | `office/github_app.py`（新增）、`office/tests/test_github_push.py`、驗證紀錄 `reports/agent-hands/` | H2、H3、D4 | 未開始 |
 | H5 | 體驗層：自動轉交、三種卡片、鑰匙清單、文案清理、禁用詞掃描 | Claude | `office/static/*`（先在下方留言，與手機版協調）、`office/tests/test_copy.py` | H3、D10 | 未開始 |
@@ -56,3 +56,8 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
   - 在 `/tmp` 隔離的暫時實例實測：TCP 本機 Host 回 421、Mac 經 SSH 轉送到 socket 回 200、socket 權限 `srw------- neighbor`、停止後自動移除。暫時資料夾已刪除，正式服務沒有動。
   - 下一步：部署 0.4.0（需 YUI 同意，照 `docs/mobile/DEPLOY.md` 第 7 點）；接著做 worker API。
   - 注意：VPS 桌面的 `neighbor-office.desktop` 捷徑部署後會失效，這是刻意的。
+- 2026-10-23｜Claude｜H2 部署 0.4.0｜完成（YUI 同意）
+  - `current` → `releases/public-20261023-52108bd`；備份 `backups/pre-52108bd-20261023T074835Z`（SQLite integrity ok）。
+  - VPS 上 83 項測試通過；新增 `office/verify_public.py`，27 項全過。
+  - 紀錄見 `reports/agent-hands/DEPLOY-0.4.0-2026-10-23.md`。
+  - Mac 在合併 main 之前，要用這個分支的 `open-office.command`。

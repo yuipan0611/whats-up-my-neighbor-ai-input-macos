@@ -333,7 +333,7 @@ v1 要做到：VPS 上的貓可以用自己的 Chrome 操作網頁、在 GitHub 
 
 **這一項沒完成，就不建立 neko-hands。**
 
-**實作狀態（2026-10-23，採 A，office 0.4.0，尚未部署）：**
+**實作狀態（2026-10-23，採 A，office 0.4.0；同日 07:48 UTC 已部署，`verify_public.py` 27 項全過）：**
 - **TCP：** 只認公網模式，本機 Host 一律回 421。
 - **本機模式：** 只開在 `~/neighbor-office/run/office.sock`（權限 600，資料夾 700）。Mac 的 `open-office.command` 改成轉送到這個 socket。
 - **開發用旗標：** `--dev-tcp-local` 只給開發機。

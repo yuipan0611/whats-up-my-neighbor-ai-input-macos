@@ -2,7 +2,9 @@
 
 狀態（2026-10-22）：公網 HTTPS／WSS 已部署。iPhone Chrome 開啟配對頁無憑證警告，已配對、交辦，並在鎖屏超過五分鐘後確認仍能看到完成成果與進度。手動斷網重送、撤銷這台 iPhone 尚未實測；自動測試已涵蓋重送與短暫測試裝置撤銷。詳細證據見 `reports/office-mobile/PUBLIC-DEPLOYMENT-2026-10-22.md`。
 
-目前版本：`current` 指向 `releases/public-20261022-5f9c559`（main `5f9c559`，含手機聊天介面與附件），上一版是 `releases/public-20261022-fix3`。上面的 iPhone 驗收是在上一版完成的；新版只跑過 VPS 測試與公網 HTTPS／WSS 檢查，新介面與附件還沒在 iPhone 驗收。部署紀錄見 `reports/office-mobile/DEPLOY-5f9c559-2026-10-22.md`。
+目前版本（2026-10-23 起）：`current` 指向 `releases/public-20261023-52108bd`（office 0.4.0，分支 `claude/agent-hands-prd` 的 `52108bd`，**尚未合併 main**）。上一版是 `releases/public-20261022-5f9c559`（main `5f9c559`，含手機聊天介面與附件）。部署紀錄見 `reports/agent-hands/DEPLOY-0.4.0-2026-10-23.md`。每次部署後，從 Mac 執行 `python3 -I office/verify_public.py --expect-version <版本>`，共 27 項。
+
+上面的 iPhone 驗收是在 `fix3` 完成的；5f9c559 起的新聊天介面與附件，還沒在 iPhone 驗收。
 
 ## 架構
 
@@ -37,7 +39,10 @@ YUI 已同意部署 `office.nekonode.cloud`。本次使用 Hostinger DNS 與 VPS
 4. UFW 只開放 22／80／443；8421 維持 loopback。公開端已驗證 HTTPS 憑證、HTTP 轉 HTTPS、匿名 API 拒絕與 WSS 連線／撤銷。每次更新都重跑這些檢查。
 5. 若更新失敗，將 `current` 指回上個版本並重啟服務；必要時使用上述備份還原資料。不要刪除使用中的資料目錄。
 6. 2026-10-22 更新到 main `5f9c559`：切換前的備份在 `~/neighbor-office/backups/pre-5f9c559-20261022T070121Z`，回復時把 `current` 指回 `releases/public-20261022-fix3`。服務是使用者層級的 unit，重啟要用 `systemctl --user restart neighbor-office.service`。
-7. **0.4.0（本機入口改為私有 socket；尚未部署，需 YUI 同意）**
+7. **0.4.0（本機入口改為私有 socket）：2026-10-23 07:48 UTC 經 YUI 同意後部署**
+   - **備份：** `~/neighbor-office/backups/pre-52108bd-20261023T074835Z`。
+   - **檢查：** `verify_public.py` 27 項全過。
+   - **回復：** `ln -sfn releases/public-20261022-5f9c559 current.new && mv -T current.new current`，再重啟。
    - **服務設定不用改：** socket 預設放在 `--data` 旁邊的 `run/office.sock`。
    - **切換後檢查：**
      - `stat -c '%A %U' ~/neighbor-office/run/office.sock` 應為 `srw------- neighbor`。

@@ -42,6 +42,7 @@ VPS `~/neighbor-office/data/`，目錄權限 700，服務檔案預設 600：
 `deploy.sh` 僅供舊版 SSH 通道服務使用；偵測到手機公網版時會停止，避免覆蓋其服務設定。Gemma 的開機啟動保持停用。office 的 TCP 僅監聽 `127.0.0.1:8421`，只給 Caddy 對外提供 HTTPS／WSS（公網模式）；本機模式另走私有 socket（見下方）。Gemma 使用時僅監聽 `127.0.0.1:11434`。
 
 離線測試：`python3 -I -m unittest discover -s office/tests -v`。
+部署後檢查（從 Mac）：`python3 -I office/verify_public.py --expect-version <版本>`，共 27 項：公網、短暫測試裝置的配對與撤銷、本機 socket、Mac 通道。測試裝置會在結束前撤銷，輸出不含配對碼、cookie 或 token。
 真實服務驗證：`python3 office/verify_v2.py --report reports/office-v2/codex-live.json`；Gemma 加 `--provider gemma`。會新增明確標示的合成紀錄，不能將其視為真實生活事件。詳細通過與未驗收項目見 `reports/office-v2/VERIFICATION.md`。
 
 HTTP 維持 Host／Origin／頁面 token 檢查，以純文字顯示內容，不執行模型 HTML。資料庫遷移前的備份在 VPS `~/neighbor-office/backups/office-v2-20261021T124049Z/`，包含當時 SQLite、app 與兩份使用者服務設定。
