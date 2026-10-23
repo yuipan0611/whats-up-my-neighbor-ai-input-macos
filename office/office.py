@@ -17,6 +17,8 @@ import shutil
 import select
 import signal
 import socket
+import socketserver
+import stat
 import struct
 import subprocess
 import selectors
@@ -30,7 +32,7 @@ from urllib.parse import parse_qs, urlsplit
 import uuid
 from datetime import datetime, timezone
 
-VERSION = '0.3.0'
+VERSION = '0.4.0'
 ACTIVE = ('planning', 'running', 'saving')
 ACTIONS = ['summarize', 'write', 'list_files', 'status', 'clarify', 'external']
 PLAN_SCHEMA = {
@@ -1030,6 +1032,36 @@ STATIC_NAME = re.compile(r'[a-z0-9][a-z0-9-]*\.(js|mjs|css|svg|png|webmanifest)'
 STATIC_TYPES = {'js': 'application/javascript; charset=utf-8', 'mjs': 'application/javascript; charset=utf-8', 'css': 'text/css; charset=utf-8', 'svg': 'image/svg+xml',
                 'png': 'image/png', 'webmanifest': 'application/manifest+json'}
 FORWARD_HEADERS = ('X-Forwarded-For', 'X-Forwarded-Host', 'Forwarded')
+LOCAL_TUNNEL_PORT = 18421
+SOCKET_PATH_MAX = 100  # sun_path is 104 bytes on macOS, 108 on Linux
+
+
+def private_socket_path(path):
+    """Return a socket path whose directory only this user can enter.
+
+    A stale socket left by a crash is replaced; anything else is refused, never deleted."""
+    path = Path(path)
+    if len(os.fsencode(path)) > SOCKET_PATH_MAX:
+        raise ValueError(f'Local socket path is longer than {SOCKET_PATH_MAX} bytes: {path}')
+    parent = path.parent
+    if not parent.exists():
+        parent.mkdir(mode=0o700, parents=True)
+    info = parent.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ValueError(f'{parent} must be a directory only this user can open (mode 700)')
+    try:
+        existing = path.lstat()
+    except FileNotFoundError:
+        return path
+    if not stat.S_ISSOCK(existing.st_mode):
+        raise ValueError(f'{path} exists and is not a socket; refusing to replace it')
+    with contextlib.closing(socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)) as probe:
+        try:
+            probe.connect(str(path))
+        except OSError:
+            path.unlink()
+            return path
+    raise ValueError(f'Another office is already listening on {path}')
 
 
 class PairLimiter:
@@ -1060,12 +1092,18 @@ class Socket:
 
 
 class Server(ThreadingHTTPServer):
+    """Loopback TCP entry for the TLS proxy, which only serves public mode.
+
+    Every process on the VPS can reach 127.0.0.1, so local mode lives on
+    LocalServer's Unix socket instead; --dev-tcp-local is for a development machine."""
     daemon_threads = True
     PER_DEVICE = 2
     LOCAL_SOCKETS = 8
+    local = False
 
-    def __init__(self, port, office, public_origin=None):
+    def __init__(self, port, office, public_origin=None, local_socket=None, dev_tcp_local=False):
         self.office = office
+        self.dev_tcp_local = dev_tcp_local
         self.token = secrets.token_urlsafe(32)
         self.key = secrets.token_bytes(32)
         self.static = Path(__file__).parent / 'static'
@@ -1079,7 +1117,20 @@ class Server(ThreadingHTTPServer):
         self.limiter = PairLimiter()
         self.sockets, self.sockets_lock = [], threading.Lock()
         self.stopping = threading.Event()
+        self.local_server = self.local_thread = None  # server_close() runs if the TCP bind fails
         super().__init__(('127.0.0.1', port), Handler)
+        try:
+            if local_socket:
+                self.local_server = LocalServer(local_socket, self)
+        except Exception:
+            super().server_close()
+            raise
+
+    def serve_forever(self, poll_interval=0.5):
+        if self.local_server:
+            self.local_thread = threading.Thread(target=self.local_server.serve_forever, args=(poll_interval,), daemon=True)
+            self.local_thread.start()
+        super().serve_forever(poll_interval)
 
     def device_token(self, device_id):
         return hmac.new(self.key, b'device:' + device_id.encode(), hashlib.sha256).hexdigest()
@@ -1105,7 +1156,42 @@ class Server(ThreadingHTTPServer):
 
     def shutdown(self):
         self.stopping.set()
+        if self.local_thread:
+            self.local_server.shutdown()
         super().shutdown()
+
+    def server_close(self):
+        super().server_close()
+        if self.local_server:
+            self.local_server.server_close()
+
+
+class LocalServer(socketserver.ThreadingUnixStreamServer):
+    """Local mode's only entry: a mode-600 socket in a mode-700 directory.
+
+    Only the service user can open it; the Mac reaches it through an SSH tunnel that
+    logs in as that user. Office, token, WebSocket registry and stop flag are shared
+    with the TCP Server (the hub)."""
+    daemon_threads = True
+    local = True
+
+    def __init__(self, path, hub):
+        self.hub, self.inode = hub, None
+        self.path = private_socket_path(path)
+        super().__init__(str(self.path), Handler)
+        os.chmod(self.path, 0o600)
+        self.inode = self.path.lstat().st_ino
+
+    def __getattr__(self, name):
+        if name == 'hub':
+            raise AttributeError(name)
+        return getattr(self.hub, name)
+
+    def server_close(self):
+        super().server_close()
+        with contextlib.suppress(FileNotFoundError):
+            if self.inode is not None and self.path.lstat().st_ino == self.inode:
+                self.path.unlink()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1145,14 +1231,18 @@ class Handler(BaseHTTPRequestHandler):
         self.send(e.code, {'error': str(e), **e.extra}, headers=e.headers)
 
     def boundary(self, write=False, upgrade=False):
-        """Decide local or public mode and enforce Host, Origin and fetch-site rules."""
+        """Decide local or public mode and enforce Host, Origin and fetch-site rules.
+
+        Local mode needs the private Unix socket: on loopback TCP a local Host header
+        proves nothing, because any process on the machine can send one."""
         self.device = None
         host = self.headers.get('Host', '')
         port = self.server.server_port
         forwarded = any(self.headers.get(h) for h in FORWARD_HEADERS)
-        if host in {f'{name}:{p}' for name in ('127.0.0.1', 'localhost') for p in (port, 18421)} and not forwarded:
+        local_host = host in {f'{name}:{p}' for name in ('127.0.0.1', 'localhost') for p in (port, LOCAL_TUNNEL_PORT)} and not forwarded
+        if local_host and (self.server.local or self.server.dev_tcp_local):
             self.mode, expected = 'local', 'http://' + host
-        elif self.server.public_host and host.lower() == self.server.public_host:
+        elif not self.server.local and self.server.public_host and host.lower() == self.server.public_host:
             self.mode, expected = 'public', self.server.public_origin
         else:
             raise OfficeError('連線位址不允許。', 421)
@@ -1542,6 +1632,8 @@ def main():
     parser.add_argument('--model', default='gemma3:4b')
     parser.add_argument('--port', type=int, default=8421)
     parser.add_argument('--public-origin', help='e.g. https://office.nekonode.cloud; enables paired phone access through a TLS proxy')
+    parser.add_argument('--local-socket', type=Path, help='private local entry for the Mac SSH tunnel (default: <data>/../run/office.sock)')
+    parser.add_argument('--dev-tcp-local', action='store_true', help='development only: also serve local mode on the TCP port, which any local process can reach')
     args = parser.parse_args()
     os.umask(0o077)
     store = Store(args.data)
@@ -1551,7 +1643,11 @@ def main():
     except BlockingIOError:
         raise SystemExit('Office is already running for this data directory')
     office = Office(store, Ollama(args.model, managed=True), CodexAgent(args.data.parent / 'runtime'))
-    server = Server(args.port, office, args.public_origin)
+    local_socket = args.local_socket or args.data.parent / 'run' / 'office.sock'
+    try:
+        server = Server(args.port, office, args.public_origin, local_socket, args.dev_tcp_local)
+    except ValueError as e:
+        raise SystemExit(str(e))
     # Exclusive server bind happens before worker start, so an accidental second
     # process cannot consume queued tasks. Deployment is one user service.
     office.start()
@@ -1560,7 +1656,8 @@ def main():
         threading.Thread(target=server.shutdown, daemon=True).start()
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    print(f'Neighbor Office {VERSION} listening on loopback:{server.server_port}' + (f' for {server.public_origin}' if server.public_origin else ''), flush=True)
+    print(f'Neighbor Office {VERSION} listening on loopback:{server.server_port}' + (f' for {server.public_origin}' if server.public_origin else '')
+          + f'; local entry {local_socket}' + ('; dev TCP local mode ON' if args.dev_tcp_local else ''), flush=True)
     try:
         server.serve_forever(poll_interval=0.25)
     finally:

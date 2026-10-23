@@ -1,6 +1,8 @@
+import http.client
 import importlib.util
 import json
 from pathlib import Path
+import socket
 import sys
 import tempfile
 import subprocess
@@ -14,6 +16,28 @@ import uuid
 spec = importlib.util.spec_from_file_location('office_app', Path(__file__).parents[1] / 'office.py')
 app = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(app)
+LOCAL_HOST = '127.0.0.1:18421'
+
+
+class UnixHTTPConnection(http.client.HTTPConnection):
+    """HTTP over the office's private socket, as the Mac's SSH tunnel delivers it."""
+    def __init__(self, socket_path, timeout=5):
+        super().__init__('127.0.0.1', 18421, timeout=timeout)
+        self.socket_path = str(socket_path)
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(self.socket_path)
+
+
+def local_request(socket_path, path, body=None, headers=None, method=None):
+    conn = UnixHTTPConnection(socket_path)
+    try:
+        conn.request(method or ('GET' if body is None else 'POST'), path, body, headers or {})
+        response = conn.getresponse()
+        return response.status, response.read(), response.headers
+    finally:
+        conn.close()
 
 
 class FakeModel:
@@ -190,21 +214,16 @@ class HTTPTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory()
         self.store=app.Store(Path(self.temp.name)/'data')
         self.office=app.Office(self.store,FakeModel())
-        self.server=app.Server(0,self.office)
+        self.socket_path=Path(self.temp.name)/'run/office.sock'
+        self.server=app.Server(0,self.office,local_socket=self.socket_path)
         self.thread=threading.Thread(target=self.server.serve_forever,daemon=True)
         self.thread.start()
-        self.url='http://127.0.0.1:'+str(self.server.server_port)
     def tearDown(self):
         self.server.shutdown();self.server.server_close();self.thread.join()
         self.temp.cleanup()
     def request(self,path,body=None,headers=None):
-        req=urllib.request.Request(self.url+path,None if body is None else json.dumps(body).encode(),headers or {})
-        try:
-            with urllib.request.urlopen(req,timeout=2) as r:
-                return r.status,r.read(),dict(r.headers)
-        except urllib.error.HTTPError as e:
-            with e:
-                return e.code,e.read(),dict(e.headers)
+        code,data,headers=local_request(self.socket_path,path,None if body is None else json.dumps(body).encode(),headers)
+        return code,data,dict(headers)
     def test_cross_origin_and_rebinding_rejected(self):
         self.assertEqual(self.request('/api/tasks',headers={'Host':'evil.example'})[0],421)
         self.assertEqual(self.request('/api/tasks',headers={'Origin':'https://evil.example'})[0],403)

@@ -14,7 +14,7 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
 |---|---|---|---|---|---|
 | H0 | PRD 與交接板 | Claude | `office/docs/agent-hands/*` | — | 完成（D1–D11 已拍板） |
 | H1 | VPS 基礎：swap、`neko-hands`、Chrome、VNC 改歸 neko-hands、`/srv/neko-handoff` | YUI（root）；Claude 提供指令並唯讀驗證 | VPS 系統設定 | D1、D2、D8 | 未開始 |
-| H2 | 辦公室安全底座：loopback 修補、worker API、「手」執行者、先停一下與收回開關 | Claude | `office/office.py`、`office/tests/test_hands.py` | D1 | 未開始 |
+| H2 | 辦公室安全底座：loopback 修補、worker API、「手」執行者、先停一下與收回開關 | Claude | `office/office.py`、`office/tests/test_local_entry.py`、`office/tests/test_hands.py` | D1 | loopback 修補完成（0.4.0，本機＋VPS 暫時實例驗證，**未部署**）；worker API／執行者／收回開關未開始 |
 | H3 | worker＋Codex 登入＋瀏覽器 MCP；合成任務 | Claude＋YUI（登入） | `office/hands/*`（新增） | H1、H2、D9 | 未開始 |
 | H4 | GitHub App（營運者建立）、辦公室代為 clone／push／開 Draft PR、鑰匙收回、越權測試 | Claude＋YUI | `office/github_app.py`（新增）、`office/tests/test_github_push.py`、驗證紀錄 `reports/agent-hands/` | H2、H3、D4 | 未開始 |
 | H5 | 體驗層：自動轉交、三種卡片、鑰匙清單、文案清理、禁用詞掃描 | Claude | `office/static/*`（先在下方留言，與手機版協調）、`office/tests/test_copy.py` | H3、D10 | 未開始 |
@@ -48,3 +48,11 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
   - 範圍拆成 v1a（H1–H5）和 v1b（H6–H9）。
   - 待 YUI 拍板 D1–D11。
 - 2026-10-23｜YUI｜H0｜拍板｜D1–D11 全部照 PRD 推薦；指示開始 v1a，先做 H2 的 loopback 修補｜手機 PRD 的 D4（暫不通知）由本 PRD 的 D11 取代，已在手機 PRD 註記
+- 2026-10-23｜Claude｜H2 loopback 修補｜完成（本機，未部署）
+  - office 0.4.0：本機模式只開在私有 Unix socket `~/neighbor-office/run/office.sock`（600／700）；TCP 只認公網模式；新增 `--local-socket`、`--dev-tcp-local`（只限開發機）。
+  - `open-office.command` 改成轉送到 socket；VPS 還是 0.3.0 時自動沿用 8421。`verify_live.py` 改走 socket。
+  - 測試：新增 `tests/test_local_entry.py` 14 項；共用測試的本機請求改走 socket（`test_office.py`、`test_mobile.py` 的 helper）。全部 83 項通過；9 組 mutation 全部被抓到（含連接埠被占用時要回報原本的錯誤）。
+  - VPS 唯讀確認：sshd 允許轉送到 Unix socket；`/home/neighbor` 750、`~/neighbor-office` 700，沒有額外 ACL。
+  - 在 `/tmp` 隔離的暫時實例實測：TCP 本機 Host 回 421、Mac 經 SSH 轉送到 socket 回 200、socket 權限 `srw------- neighbor`、停止後自動移除。暫時資料夾已刪除，正式服務沒有動。
+  - 下一步：部署 0.4.0（需 YUI 同意，照 `docs/mobile/DEPLOY.md` 第 7 點）；接著做 worker API。
+  - 注意：VPS 桌面的 `neighbor-office.desktop` 捷徑部署後會失效，這是刻意的。

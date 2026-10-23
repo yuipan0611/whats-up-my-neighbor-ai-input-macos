@@ -10,7 +10,11 @@
 iPhone Chrome
   → https://office.nekonode.cloud / wss://office.nekonode.cloud/api/ws
   → Caddy :443
-  → 127.0.0.1:8421（neighbor-office.service）
+  → 127.0.0.1:8421（neighbor-office.service，只認公網模式）
+
+Mac（open-office.command）
+  → SSH 轉送 127.0.0.1:18421
+  → ~/neighbor-office/run/office.sock（本機模式；0.4.0 起，權限 600）
 ```
 
 Caddy 設定範本在 `office/services/Caddyfile.public.example`。Caddy 的 `reverse_proxy` 會處理 WebSocket 升級；office 仍只監聽 VPS 本機位址。主網域 `nekonode.cloud` 不變。
@@ -33,6 +37,17 @@ YUI 已同意部署 `office.nekonode.cloud`。本次使用 Hostinger DNS 與 VPS
 4. UFW 只開放 22／80／443；8421 維持 loopback。公開端已驗證 HTTPS 憑證、HTTP 轉 HTTPS、匿名 API 拒絕與 WSS 連線／撤銷。每次更新都重跑這些檢查。
 5. 若更新失敗，將 `current` 指回上個版本並重啟服務；必要時使用上述備份還原資料。不要刪除使用中的資料目錄。
 6. 2026-10-22 更新到 main `5f9c559`：切換前的備份在 `~/neighbor-office/backups/pre-5f9c559-20261022T070121Z`，回復時把 `current` 指回 `releases/public-20261022-fix3`。服務是使用者層級的 unit，重啟要用 `systemctl --user restart neighbor-office.service`。
+7. **0.4.0（本機入口改為私有 socket；尚未部署，需 YUI 同意）**
+   - **服務設定不用改：** socket 預設放在 `--data` 旁邊的 `run/office.sock`。
+   - **切換後檢查：**
+     - `stat -c '%A %U' ~/neighbor-office/run/office.sock` 應為 `srw------- neighbor`。
+     - VPS 上 `curl -H 'Host: 127.0.0.1:8421' http://127.0.0.1:8421/api/bootstrap` 應回 **421**。
+     - 用 `curl --unix-socket` 連 socket 應回 200。
+     - Mac 用新版 `open-office.command` 能開啟辦公室。
+     - 再跑一次上方的公網檢查。
+   - **Mac 舊通道：** 舊版 `open-office.command`（直接轉送到 8421）在切換後會拿到 421。新版會自動判斷：VPS 有 socket 就轉送到 socket，沒有就沿用 8421，所以 Mac 和 VPS 不用同時更新。
+   - **VPS 桌面捷徑：** `~/Desktop/neighbor-office.desktop` 用的是 TCP 本機模式，切換後會失效，這是刻意的。H1 會把桌面交給貓咪的手（neko-hands）；那個桌面上的瀏覽器永遠不能進辦公室，也永遠不和辦公室配對。
+   - **回復：** 把 `current` 指回 `releases/public-20261022-5f9c559` 並重啟。舊版不會用到 socket；`run/` 目錄留著也沒有影響。
 
 ## iPhone 配對
 

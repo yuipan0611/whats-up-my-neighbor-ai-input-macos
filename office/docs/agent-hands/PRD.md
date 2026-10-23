@@ -333,6 +333,19 @@ v1 要做到：VPS 上的貓可以用自己的 Chrome 操作網頁、在 GitHub 
 
 **這一項沒完成，就不建立 neko-hands。**
 
+**實作狀態（2026-10-23，採 A，office 0.4.0，尚未部署）：**
+- **TCP：** 只認公網模式，本機 Host 一律回 421。
+- **本機模式：** 只開在 `~/neighbor-office/run/office.sock`（權限 600，資料夾 700）。Mac 的 `open-office.command` 改成轉送到這個 socket。
+- **開發用旗標：** `--dev-tcp-local` 只給開發機。
+- **驗證：**
+  - 14 項新測試；9 組 mutation 全部被抓到。
+  - 在 VPS 用隔離的暫時實例實測：TCP 本機 Host 回 421；Mac 經 SSH 轉送到 socket 回 200；socket 權限是 `srw------- neighbor`；停止後 socket 自動移除。
+- **還沒做：**
+  - 正式部署。
+  - 以 neko-hands 身分實際被拒（H1 建立使用者後驗證）。
+
+**新增規則：** 貓咪的 Chrome（以及 neko-hands 桌面上的任何瀏覽器）**永遠不和辦公室配對**。配對 cookie 等於本機模式之外的另一把鑰匙，它一旦拿到，就讀得到生活紀錄。
+
 ### 5.9 網路
 
 - v1 不限制 neko-hands 的出站連線（它需要上網）。
