@@ -2,7 +2,7 @@
 
 狀態（2026-10-22）：公網 HTTPS／WSS 已部署。iPhone Chrome 開啟配對頁無憑證警告，已配對、交辦，並在鎖屏超過五分鐘後確認仍能看到完成成果與進度。手動斷網重送、撤銷這台 iPhone 尚未實測；自動測試已涵蓋重送與短暫測試裝置撤銷。詳細證據見 `reports/office-mobile/PUBLIC-DEPLOYMENT-2026-10-22.md`。
 
-目前版本（2026-10-23 13:39 UTC 起）：`current` 指向 `releases/public-20261023-11a383a`，也就是 office 0.5.0（分支 `claude/agent-hands-prd` 的 `11a383a`，**尚未合併 main**）。這一版加上 worker 入口（`--worker-socket /srv/neko-office/worker.sock`）。上一版是 `releases/public-20261023-52108bd`（0.4.0）。部署紀錄見 `reports/agent-hands/DEPLOY-0.5.0-2026-10-23.md`。每次部署後，從 Mac 執行 `python3 -I office/verify_public.py --expect-version <版本>`，共 27 項。
+目前版本（2026-10-23 14:10 UTC 起）：`current` 指向 `releases/public-20261023-f74a50a`，也就是 office 0.5.1（分支 `claude/agent-hands-prd` 的 `f74a50a`，**尚未合併 main**）。上一版是 `releases/public-20261023-11a383a`（0.5.0）。release 從這一版起多放 `hands/`，讓 worker 測試也能在 VPS 上跑；服務不使用它，worker 實際裝在 `/opt/neko-hands`。部署紀錄見 `reports/agent-hands/DEPLOY-0.5.1-2026-10-23.md`。每次部署後，從 Mac 執行 `python3 -I office/verify_public.py --expect-version <版本>`，共 27 項。
 
 上面的 iPhone 驗收是在 `fix3` 完成的；5f9c559 起的新聊天介面與附件，還沒在 iPhone 驗收。
 
@@ -57,6 +57,11 @@ YUI 已同意部署 `office.nekonode.cloud`。本次使用 Hostinger DNS 與 VPS
      2. 把 unit 換回備份裡的版本。
      3. `systemctl --user daemon-reload`，再重啟。
      - 資料表多出的欄位不影響 0.4.0。
+9. **0.5.1（hands 任務提早停下時，也顯示原因）：2026-10-23 14:10 UTC 經 YUI 同意後部署**
+   - **備份：** `backups/pre-f74a50a-20261023T141025Z`。
+   - **檢查：** VPS 上 114 項測試通過（含 10 項 worker 測試）；`verify_public.py` 27 項全過；worker 在辦公室重啟後照常運作。
+   - **回復：** `current` 指回 `releases/public-20261023-11a383a`，再重啟。
+   - **release 打包：** 從這一版起，`git archive` 要包含 `office/hands`。上一次沒包到時，VPS 上的 worker 測試匯入失敗，所以重新打包。
    - **服務設定不用改：** socket 預設放在 `--data` 旁邊的 `run/office.sock`。
    - **切換後檢查：**
      - `stat -c '%A %U' ~/neighbor-office/run/office.sock` 應為 `srw------- neighbor`。
