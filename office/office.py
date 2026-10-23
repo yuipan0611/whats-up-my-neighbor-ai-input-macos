@@ -32,7 +32,7 @@ from urllib.parse import parse_qs, urlsplit
 import uuid
 from datetime import datetime, timezone
 
-VERSION = '0.5.0'
+VERSION = '0.5.1'
 ACTIVE = ('planning', 'running', 'saving')
 ACTIONS = ['summarize', 'write', 'list_files', 'status', 'clarify', 'external']
 PLAN_SCHEMA = {
@@ -520,7 +520,7 @@ class Store:
             fields = {}
             if text.strip():
                 fields = {'result': text, 'artifact': self.save(id_, text, 'result.md' if outcome == 'completed' else 'partial.md')}
-            message = {'completed': '做好了，成果已保存。', 'incomplete': '先做到這裡，部分成果已保存。',
+            message = {'completed': '做好了，成果已保存。', 'incomplete': reason.strip() or '先做到這裡，部分成果已保存。',
                        'failed': reason.strip() or '這件沒有做成，做到一半的步驟都保留著。'}[outcome]
             self.change(id_, outcome, message, **fields)
         return {'id': id_, 'status': outcome}
