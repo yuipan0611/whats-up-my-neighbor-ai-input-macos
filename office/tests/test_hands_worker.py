@@ -223,9 +223,11 @@ class BoundaryTests(WorkerBase):
         for expected in ('--sandbox workspace-write', 'sandbox_workspace_write.network_access=true', '--add-dir ' + str(self.worker.handoff_dir),
                          'mcp_servers.browser.command="/usr/bin/node"',
                          'mcp_servers.browser.args=["/opt/mcp/server.js", "--browser-url=http://127.0.0.1:9222"]',
+                         'mcp_servers.browser.default_tools_approval_mode="approve"',
                          '--disable browser_use', '--disable computer_use', '--ignore-user-config'):
             self.assertIn(expected, joined)
         self.assertNotIn('dangerously', joined)
+        self.assertNotIn('skip_host_skill_discovery', joined)
         self.assertEqual(args[-1], '-')
 
 

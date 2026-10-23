@@ -125,3 +125,9 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
   - VPS 上 114 項測試通過（含 worker 測試）；`verify_public.py` 27 項全過。
   - release 從這一版起包含 `office/hands`。
 - 2026-10-23｜YUI／Claude｜H3｜Codex 裝置碼登入：Claude 在 14:07 UTC 啟動裝置碼登入，碼在聊天裡給 YUI。過了 7 分鐘仍未登入（裝置碼 15 分鐘後失效）。待 YUI 完成，或改用瀏覽器登入加 SSH 通道。
+- 2026-10-24｜Claude｜H3｜第一件真任務（實機）
+  - 貓咪的 Codex 經瀏覽器登入完成（YUI 本人按「Yui PAN」）。裝置碼兩次都逾時。
+  - 第一次：瀏覽器工具被核准機制擋下，回報 incomplete。修正：`default_tools_approval_mode="approve"`。
+  - 第二次：42 秒完成，標題、第一段文字、截圖都對。
+  - 獨立確認時發現交回檔案只有貓咪讀得到，worker 遮罩已改成 027。
+  - 紀錄見 `reports/agent-hands/H3-FIRST-TASK-2026-10-24.md`。剩下 ADR 第 7 節的 H3 驗收（惡意網頁與 README、連續 100 件、磁碟上限、重開機、D13）。

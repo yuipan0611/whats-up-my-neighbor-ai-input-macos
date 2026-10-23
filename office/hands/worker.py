@@ -297,7 +297,7 @@ class Worker:
         args = [self.codex, '-a', 'never', 'exec', '--ignore-user-config', '--ignore-rules', '--ephemeral', '--skip-git-repo-check',
                 '--sandbox', self.sandbox, '--json', '--color', 'never',
                 '--disable', 'multi_agent', '--disable', 'apps', '--disable', 'plugins', '--disable', 'skill_search',
-                '--enable', 'skip_host_skill_discovery', '--disable', 'computer_use', '--disable', 'browser_use',
+                '--disable', 'computer_use', '--disable', 'browser_use',
                 '--disable', 'image_generation', '-c', 'web_search="live"', '-c', 'project_doc_max_bytes=0',
                 '-c', 'model_reasoning_effort="medium"', '-c', 'model_reasoning_summary="detailed"', '-c', 'hide_agent_reasoning=false',
                 '--cd', str(workspace), '--output-schema', str(schema_path), '--output-last-message', str(output_path)]
@@ -308,7 +308,10 @@ class Worker:
         if self.browser:
             command, extra = self.browser
             args += ['-c', f'mcp_servers.browser.command={json.dumps(command)}', '-c', f'mcp_servers.browser.args={json.dumps(extra)}',
-                     '-c', 'mcp_servers.browser.startup_timeout_sec=30', '-c', 'mcp_servers.browser.tool_timeout_sec=120']
+                     '-c', 'mcp_servers.browser.startup_timeout_sec=30', '-c', 'mcp_servers.browser.tool_timeout_sec=120',
+                     # Nobody is there to answer a prompt; what the browser may reach is limited by which accounts its
+                     # profile is logged into (PRD 5.3, 5.5), not by per-call approval.
+                     '-c', 'mcp_servers.browser.default_tools_approval_mode="approve"']
         return args + ['-']
 
     def prompt(self, task, workspace):
@@ -346,7 +349,7 @@ def main(argv=None):
     parser.add_argument('--browser-arg', action='append', default=[], help='argument for the browser tool server (repeatable)')
     parser.add_argument('--sandbox', choices=('workspace-write', 'danger-full-access'), default='workspace-write')
     args = parser.parse_args(argv)
-    os.umask(0o077)
+    os.umask(0o027)  # deliverables in the handoff folder must be readable by its group (the office); home stays 750
     browser = (args.browser_command, args.browser_arg) if args.browser_command else None
     worker = Worker(Office(args.socket), args.codex, args.codex_home, args.workspace, args.handoff, browser, args.sandbox)
     signal.signal(signal.SIGTERM, lambda *_: setattr(worker, 'stopping', True))  # finish the current task, then exit
