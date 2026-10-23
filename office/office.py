@@ -149,7 +149,8 @@ class Store:
             columns = {r[1] for r in c.execute('PRAGMA table_info(tasks)')}
             for name, definition in [('executor', "TEXT NOT NULL DEFAULT 'gemma'"), ('parent_id', "TEXT NOT NULL DEFAULT ''"),
                                      ('journal_ids', "TEXT NOT NULL DEFAULT '[]'"), ('context_snapshot', "TEXT NOT NULL DEFAULT ''"),
-                                     ('attempts', 'INTEGER NOT NULL DEFAULT 0'), ('heartbeat', 'REAL NOT NULL DEFAULT 0')]:
+                                     ('attempts', 'INTEGER NOT NULL DEFAULT 0'), ('heartbeat', 'REAL NOT NULL DEFAULT 0'),
+                                     ('lease', "TEXT NOT NULL DEFAULT ''")]:
                 if name not in columns:
                     c.execute(f'ALTER TABLE tasks ADD COLUMN {name} {definition}')
             c.executescript('''
@@ -384,6 +385,7 @@ class Store:
             if row is None:
                 raise OfficeError('找不到任務。', 404)
             task = dict(row)
+            del task['lease']  # only the worker that claimed this attempt holds it
             task['events'] = [dict(e) for e in c.execute('SELECT * FROM events WHERE task_id=? ORDER BY seq', (id_,))]
             return task
 
@@ -423,7 +425,7 @@ class Store:
 
     HANDS_LEASE = 120
     HANDS_ATTEMPTS = 3
-    HANDS_FIELDS = ('id', 'prompt', 'source', 'source_snapshot', 'context_snapshot', 'parent_id', 'attempts', 'created')
+    HANDS_FIELDS = ('id', 'prompt', 'source', 'source_snapshot', 'context_snapshot', 'parent_id', 'attempts', 'lease', 'created')
     HANDS_TEXT_LIMIT = 150000
 
     def hands_locked(self):
@@ -443,7 +445,10 @@ class Store:
             self.cancel(id_)
 
     def claim_hands(self):
-        """Give the worker the oldest queued hands task, one at a time."""
+        """Give the worker the oldest queued hands task, one at a time, with a lease for this attempt only.
+
+        Every later call must carry that lease. A caller from an earlier attempt (an orphaned agent,
+        or a worker that wakes up after its task was requeued and claimed again) holds a stale one."""
         with self.connect() as c:
             if c.execute("SELECT 1 FROM settings WHERE key IN ('paused','hands_locked') AND value='1'").fetchone():
                 return None
@@ -452,42 +457,55 @@ class Store:
             row = c.execute("SELECT id,prompt FROM tasks WHERE executor='hands' AND status='queued' ORDER BY rowid LIMIT 1").fetchone()
             if row is None:
                 return None
-            c.execute('UPDATE tasks SET attempts=attempts+1, heartbeat=? WHERE id=?', (time.time(), row['id']))
+            c.execute('UPDATE tasks SET attempts=attempts+1, heartbeat=?, lease=? WHERE id=?',
+                      (time.time(), secrets.token_urlsafe(18), row['id']))
             self._change(c, row['id'], 'running', '貓咪開始動手做了。', title=row['prompt'][:50])
         with self.connect() as c:
             return dict(c.execute(f"SELECT {','.join(self.HANDS_FIELDS)} FROM tasks WHERE id=?", (row['id'],)).fetchone())
 
-    def _hands_row(self, c, id_):
-        row = c.execute('SELECT id,status,executor FROM tasks WHERE id=?', (id_,)).fetchone() if isinstance(id_, str) else None
+    def _hands_row(self, c, id_, lease):
+        row = c.execute('SELECT id,status,executor,lease FROM tasks WHERE id=?', (id_,)).fetchone() if isinstance(id_, str) else None
         if row is None or row['executor'] != 'hands':
             raise OfficeError('找不到這件工作。', 404)
+        if not isinstance(lease, str) or not lease:
+            raise OfficeError('lease 需為領取這件工作時拿到的字串。')
         return row
 
-    def _active_hands(self, c, id_):
-        row = self._hands_row(c, id_)
+    @staticmethod
+    def _current_lease(row, lease):
+        return hmac.compare_digest(row['lease'].encode(), lease.encode())
+
+    def _active_hands(self, c, id_, lease):
+        row = self._hands_row(c, id_, lease)
         if row['status'] not in ACTIVE:
             raise OfficeError('這件工作已經停止，請停下手邊的動作。', 409, {'status': row['status']})
+        if not self._current_lease(row, lease):
+            raise OfficeError('這件工作已經交給新的一輪，請停下手邊的動作。', 409, {'status': row['status'], 'superseded': True})
         c.execute('UPDATE tasks SET heartbeat=? WHERE id=?', (time.time(), id_))
 
-    def hands_heartbeat(self, id_):
-        """Keep the lease; `continue` turns false once the task is cancelled, paused, locked or finished."""
+    def hands_heartbeat(self, id_, lease):
+        """Keep the lease; `continue` turns false once the task is cancelled, paused, locked, finished or claimed again."""
         with self.connect() as c:
-            row = self._hands_row(c, id_)
-            if row['status'] in ACTIVE:
-                c.execute('UPDATE tasks SET heartbeat=? WHERE id=?', (time.time(), id_))
-            return {'continue': row['status'] in ACTIVE, 'status': row['status']}
+            row = self._hands_row(c, id_, lease)
+            if row['status'] not in ACTIVE:
+                return {'continue': False, 'status': row['status']}
+            if not self._current_lease(row, lease):
+                return {'continue': False, 'status': row['status'], 'superseded': True}
+            c.execute('UPDATE tasks SET heartbeat=? WHERE id=?', (time.time(), id_))
+            return {'continue': True, 'status': row['status']}
 
-    def hands_notes(self, id_, events):
+    def hands_notes(self, id_, lease, events):
         if not isinstance(events, list) or not 1 <= len(events) <= 50 or not all(
                 isinstance(e, dict) and e.get('kind') in self.NOTE_KINDS and isinstance(e.get('message'), str) and e['message'].strip() for e in events):
             raise OfficeError('events 需為 1 至 50 筆，每筆有 kind（thinking、message、tool）與文字。')
-        with self.connect() as c:
-            self._active_hands(c, id_)
-        for event in events:
-            self.note(id_, event['kind'], event['message'])
+        with self.lock:
+            with self.connect() as c:
+                self._active_hands(c, id_, lease)
+            for event in events:
+                self.note(id_, event['kind'], event['message'])
         return {'recorded': len(events)}
 
-    def hands_complete(self, id_, outcome, text, reason=''):
+    def hands_complete(self, id_, lease, outcome, text, reason=''):
         if outcome not in ('completed', 'incomplete', 'failed'):
             raise OfficeError('outcome 只能是 completed、incomplete 或 failed。')
         if not isinstance(text, str) or len(text.encode('utf-8')) > self.HANDS_TEXT_LIMIT:
@@ -498,7 +516,7 @@ class Store:
             raise OfficeError('原因需為 300 字以內。')
         with self.lock:
             with self.connect() as c:
-                self._active_hands(c, id_)
+                self._active_hands(c, id_, lease)
             fields = {}
             if text.strip():
                 fields = {'result': text, 'artifact': self.save(id_, text, 'result.md' if outcome == 'completed' else 'partial.md')}
@@ -1570,13 +1588,13 @@ class Handler(BaseHTTPRequestHandler):
         store = self.server.office.store
         if path == '/api/worker/claim':
             return {'task': store.claim_hands(), 'paused': store.paused(), 'locked': store.hands_locked()}
-        task_id = body.get('task_id')
+        task_id, lease = body.get('task_id'), body.get('lease')
         if path == '/api/worker/heartbeat':
-            return store.hands_heartbeat(task_id)
+            return store.hands_heartbeat(task_id, lease)
         if path == '/api/worker/events':
-            return store.hands_notes(task_id, body.get('events'))
+            return store.hands_notes(task_id, lease, body.get('events'))
         if path == '/api/worker/complete':
-            return store.hands_complete(task_id, body.get('outcome'), body.get('text', ''), body.get('reason', ''))
+            return store.hands_complete(task_id, lease, body.get('outcome'), body.get('text', ''), body.get('reason', ''))
         raise OfficeError('找不到這個操作。', 404)
 
     def pair(self, body):

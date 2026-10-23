@@ -52,6 +52,10 @@ class HandsBase(unittest.TestCase):
         self.assertEqual(status, 200, body)
         return body['task']
 
+    def as_worker(self, path, claimed, **fields):
+        """Call a worker route as the attempt that `claimed` came from."""
+        return self.worker(path, {'task_id': claimed['id'], 'lease': claimed['lease'], **fields})
+
 
 class ClaimTests(HandsBase):
     def test_internal_worker_never_takes_hands_tasks(self):
@@ -65,7 +69,7 @@ class ClaimTests(HandsBase):
         claimed = self.claim()
         self.assertEqual((claimed['id'], claimed['attempts']), (first['id'], 1))
         self.assertIsNone(self.claim())
-        self.worker('/api/worker/complete', {'task_id': first['id'], 'outcome': 'completed', 'text': '# 好了'})
+        self.as_worker('/api/worker/complete', claimed, outcome='completed', text='# 好了')
         self.assertEqual(self.claim()['id'], second['id'])
 
     def test_claim_carries_only_the_task_itself(self):
@@ -121,41 +125,39 @@ class BoundaryTests(HandsBase):
 class LifecycleTests(HandsBase):
     def test_heartbeat_steps_and_completion(self):
         task = self.hands_task()
-        self.claim()
-        self.assertEqual(self.worker('/api/worker/heartbeat', {'task_id': task['id']})[1], {'continue': True, 'status': 'running'})
+        claimed = self.claim()
+        self.assertEqual(self.as_worker('/api/worker/heartbeat', claimed)[1], {'continue': True, 'status': 'running'})
         events = [{'kind': 'tool', 'message': '打開報表頁面'}, {'kind': 'message', 'message': '找到上個月的報表'}]
-        self.assertEqual(self.worker('/api/worker/events', {'task_id': task['id'], 'events': events})[1], {'recorded': 2})
-        status, body = self.worker('/api/worker/complete', {'task_id': task['id'], 'outcome': 'completed', 'text': '# 報表\n\n已下載。'})
+        self.assertEqual(self.as_worker('/api/worker/events', claimed, events=events)[1], {'recorded': 2})
+        status, body = self.as_worker('/api/worker/complete', claimed, outcome='completed', text='# 報表\n\n已下載。')
         self.assertEqual((status, body['status']), (200, 'completed'))
         saved = self.store.get(task['id'])
         self.assertEqual((saved['status'], saved['result'], saved['artifact']), ('completed', '# 報表\n\n已下載。', f"tasks/{task['id']}/result.md"))
         self.assertEqual([e['message'] for e in saved['events'] if e['status'] in ('tool', 'message')], ['打開報表頁面', '找到上個月的報表'])
-        self.assertEqual(self.worker('/api/worker/heartbeat', {'task_id': task['id']})[1], {'continue': False, 'status': 'completed'})
-        self.assertEqual(self.worker('/api/worker/complete', {'task_id': task['id'], 'outcome': 'completed', 'text': 'again'})[0], 409)
+        self.assertEqual(self.as_worker('/api/worker/heartbeat', claimed)[1], {'continue': False, 'status': 'completed'})
+        self.assertEqual(self.as_worker('/api/worker/complete', claimed, outcome='completed', text='again')[0], 409)
 
     def test_partial_and_failed_outcomes(self):
         partial = self.hands_task('做一半')
-        self.claim()
-        self.worker('/api/worker/complete', {'task_id': partial['id'], 'outcome': 'incomplete', 'text': '先做到這裡'})
+        self.as_worker('/api/worker/complete', self.claim(), outcome='incomplete', text='先做到這裡')
         self.assertEqual((self.store.get(partial['id'])['status'], self.store.get(partial['id'])['artifact']), ('incomplete', f"tasks/{partial['id']}/partial.md"))
         failed = self.hands_task('做不到')
-        self.claim()
-        self.worker('/api/worker/complete', {'task_id': failed['id'], 'outcome': 'failed', 'text': '', 'reason': '網站要你登入'})
+        self.as_worker('/api/worker/complete', self.claim(), outcome='failed', text='', reason='網站要你登入')
         saved = self.store.get(failed['id'])
         self.assertEqual((saved['status'], saved['stage'], saved['artifact']), ('failed', '網站要你登入', None))
 
     def test_bad_requests_change_nothing(self):
         task = self.hands_task()
-        self.claim()
-        bad = [('/api/worker/events', {'task_id': task['id'], 'events': [{'kind': 'shell', 'message': 'rm -rf'}]}),
-               ('/api/worker/events', {'task_id': task['id'], 'events': []}),
-               ('/api/worker/complete', {'task_id': task['id'], 'outcome': 'done', 'text': 'x'}),
-               ('/api/worker/complete', {'task_id': task['id'], 'outcome': 'completed', 'text': '  '}),
-               ('/api/worker/complete', {'task_id': task['id'], 'outcome': 'completed', 'text': 'x' * 150001})]
-        for path, body in bad:
-            self.assertIn(self.worker(path, body)[0], (400, 413), body)
+        claimed = self.claim()
+        bad = [('/api/worker/events', {'events': [{'kind': 'shell', 'message': 'rm -rf'}]}),
+               ('/api/worker/events', {'events': []}),
+               ('/api/worker/complete', {'outcome': 'done', 'text': 'x'}),
+               ('/api/worker/complete', {'outcome': 'completed', 'text': '  '}),
+               ('/api/worker/complete', {'outcome': 'completed', 'text': 'x' * 150001})]
+        for path, fields in bad:
+            self.assertIn(self.as_worker(path, claimed, **fields)[0], (400, 413), fields)
         gemma = self.office.command({'id': uid(), 'prompt': '一般工作', 'executor': 'gemma'})['task']
-        valid = {'events': [{'kind': 'tool', 'message': 'x'}], 'outcome': 'completed', 'text': 'x'}
+        valid = {'lease': claimed['lease'], 'events': [{'kind': 'tool', 'message': 'x'}], 'outcome': 'completed', 'text': 'x'}
         for path in ('/api/worker/heartbeat', '/api/worker/events', '/api/worker/complete'):
             self.assertEqual(self.worker(path, {'task_id': gemma['id'], **valid})[0], 404)
             self.assertEqual(self.worker(path, {'task_id': 42, **valid})[0], 404)
@@ -164,11 +166,11 @@ class LifecycleTests(HandsBase):
 
     def test_cancel_stops_the_worker_and_keeps_no_result(self):
         task = self.hands_task()
-        self.claim()
+        claimed = self.claim()
         self.store.cancel(task['id'])
-        self.assertEqual(self.worker('/api/worker/heartbeat', {'task_id': task['id']})[1], {'continue': False, 'status': 'cancelled'})
-        self.assertEqual(self.worker('/api/worker/events', {'task_id': task['id'], 'events': [{'kind': 'tool', 'message': 'x'}]})[0], 409)
-        self.assertEqual(self.worker('/api/worker/complete', {'task_id': task['id'], 'outcome': 'completed', 'text': 'late'})[0], 409)
+        self.assertEqual(self.as_worker('/api/worker/heartbeat', claimed)[1], {'continue': False, 'status': 'cancelled'})
+        self.assertEqual(self.as_worker('/api/worker/events', claimed, events=[{'kind': 'tool', 'message': 'x'}])[0], 409)
+        self.assertEqual(self.as_worker('/api/worker/complete', claimed, outcome='completed', text='late')[0], 409)
         saved = self.store.get(task['id'])
         self.assertEqual((saved['status'], saved['result']), ('cancelled', None))
         self.assertFalse((self.store.root / 'tasks' / task['id'] / 'result.md').exists())
@@ -177,9 +179,9 @@ class LifecycleTests(HandsBase):
 class StopTests(HandsBase):
     def test_pause_command_stops_and_holds_hands_work(self):
         running, waiting = self.hands_task('一'), self.hands_task('二')
-        self.claim()
+        claimed = self.claim()
         self.office.command({'prompt': '先停一下'})
-        self.assertFalse(self.worker('/api/worker/heartbeat', {'task_id': running['id']})[1]['continue'])
+        self.assertFalse(self.as_worker('/api/worker/heartbeat', claimed)[1]['continue'])
         status, body = self.worker('/api/worker/claim')
         self.assertEqual((body['task'], body['paused']), (None, True))
         self.office.command({'prompt': '繼續工作'})
@@ -187,10 +189,10 @@ class StopTests(HandsBase):
 
     def test_take_back_switch(self):
         running, waiting = self.hands_task('一'), self.hands_task('二')
-        self.claim()
+        claimed = self.claim()
         self.store.set_hands_locked(True)
         self.assertEqual(self.store.get(running['id'])['status'], 'cancelled')
-        self.assertFalse(self.worker('/api/worker/heartbeat', {'task_id': running['id']})[1]['continue'])
+        self.assertFalse(self.as_worker('/api/worker/heartbeat', claimed)[1]['continue'])
         status, body = self.worker('/api/worker/claim')
         self.assertEqual((body['task'], body['locked']), (None, True))
         self.assertEqual(self.store.get(waiting['id'])['status'], 'queued')
@@ -222,16 +224,16 @@ class LeaseTests(HandsBase):
 
     def test_any_worker_call_renews_the_lease(self):
         task = self.hands_task()
-        self.claim()
+        claimed = self.claim()
         with self.store.connect() as c:
             c.execute('UPDATE tasks SET heartbeat=? WHERE id=?', (time.time() - app.Store.HANDS_LEASE - 5, task['id']))
-        self.worker('/api/worker/events', {'task_id': task['id'], 'events': [{'kind': 'tool', 'message': '還在做'}]})
+        self.as_worker('/api/worker/events', claimed, events=[{'kind': 'tool', 'message': '還在做'}])
         self.assertEqual(self.store.expire_hands(), 0)
         self.assertEqual(self.store.get(task['id'])['status'], 'running')
 
     def test_office_restart_keeps_the_worker_task(self):
         hands = self.hands_task()
-        self.claim()
+        claimed = self.claim()
         gemma = self.office.command({'id': uid(), 'prompt': '一般工作', 'executor': 'gemma'})['task']
         self.store.claim()
         with self.store.connect() as c:
@@ -241,6 +243,60 @@ class LeaseTests(HandsBase):
         self.assertEqual(restarted.get(hands['id'])['status'], 'running')
         self.assertEqual(restarted.get(gemma['id'])['status'], 'interrupted')
         self.assertEqual(restarted.expire_hands(), 0)
+        self.assertEqual(restarted.hands_heartbeat(hands['id'], claimed['lease']), {'continue': True, 'status': 'running'})
+
+
+class FencingTests(HandsBase):
+    """A call left over from an earlier attempt must not touch the attempt that replaced it."""
+
+    def requeue(self, task):
+        self.assertEqual(self.store.expire_hands(time.time() + app.Store.HANDS_LEASE + 1), 1)
+        self.assertEqual(self.store.get(task['id'])['status'], 'queued')
+
+    def test_each_attempt_gets_its_own_lease(self):
+        task = self.hands_task()
+        first = self.claim()
+        self.requeue(task)
+        self.assertEqual(self.as_worker('/api/worker/complete', first, outcome='completed', text='# 太晚了')[0], 409)
+        second = self.claim()
+        self.assertEqual((first['id'], second['id'], second['attempts']), (task['id'], task['id'], 2))
+        self.assertGreaterEqual(len(first['lease']), 24)
+        self.assertNotEqual(first['lease'], second['lease'])
+        self.assertNotIn('lease', self.store.get(task['id']))
+        self.assertNotIn('lease', self.store.list()[0])
+
+    def test_stale_attempt_cannot_renew_report_or_finish(self):
+        task = self.hands_task()
+        stale = self.claim()
+        self.requeue(task)
+        current = self.claim()
+        with self.store.connect() as c:
+            c.execute('UPDATE tasks SET heartbeat=0 WHERE id=?', (task['id'],))
+        self.assertEqual(self.as_worker('/api/worker/heartbeat', stale)[1], {'continue': False, 'status': 'running', 'superseded': True})
+        status, body = self.as_worker('/api/worker/events', stale, events=[{'kind': 'tool', 'message': '舊的一輪還在動'}])
+        self.assertEqual((status, body.get('superseded')), (409, True))
+        status, body = self.as_worker('/api/worker/complete', stale, outcome='completed', text='# 舊成果')
+        self.assertEqual((status, body.get('superseded')), (409, True))
+        saved = self.store.get(task['id'])
+        self.assertEqual((saved['status'], saved['result'], saved['heartbeat']), ('running', None, 0))
+        self.assertNotIn('舊的一輪還在動', [e['message'] for e in saved['events']])
+        self.assertFalse((self.store.root / 'tasks' / task['id'] / 'result.md').exists())
+        self.assertEqual(self.as_worker('/api/worker/heartbeat', current)[1], {'continue': True, 'status': 'running'})
+        self.assertEqual(self.as_worker('/api/worker/complete', current, outcome='completed', text='# 新成果')[0], 200)
+        self.assertEqual(self.store.get(task['id'])['result'], '# 新成果')
+
+    def test_a_missing_or_guessed_lease_does_nothing(self):
+        task = self.hands_task()
+        claimed = self.claim()
+        valid = {'task_id': task['id'], 'events': [{'kind': 'tool', 'message': 'x'}], 'outcome': 'completed', 'text': 'x'}
+        for path in ('/api/worker/heartbeat', '/api/worker/events', '/api/worker/complete'):
+            for lease in ({}, {'lease': ''}, {'lease': 42}, {'lease': ['x']}):
+                self.assertEqual(self.worker(path, {**valid, **lease})[0], 400, (path, lease))
+        guessed = {**claimed, 'lease': 'x' * len(claimed['lease'])}
+        self.assertEqual(self.as_worker('/api/worker/heartbeat', guessed)[1]['continue'], False)
+        self.assertEqual(self.as_worker('/api/worker/complete', guessed, outcome='completed', text='x')[0], 409)
+        saved = self.store.get(task['id'])
+        self.assertEqual((saved['status'], saved['result']), ('running', None))
 
 
 if __name__ == '__main__':
