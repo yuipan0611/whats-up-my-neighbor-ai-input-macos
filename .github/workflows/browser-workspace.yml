@@ -1,0 +1,43 @@
+name: Browser workspace
+
+on:
+  pull_request:
+    paths:
+      - 'office/**'
+      - '.github/workflows/browser-workspace.yml'
+  push:
+    branches: [main, codex/vps-browser-session-foundation]
+    paths:
+      - 'office/**'
+      - '.github/workflows/browser-workspace.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-workspace-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  chrome-persistence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Existing office and optional-dependency boundary tests
+        run: python3 -I -m unittest discover -s office/tests -v
+      - name: Install isolated browser dependencies
+        run: |
+          python3 -m venv "$RUNNER_TEMP/browser-venv"
+          "$RUNNER_TEMP/browser-venv/bin/python" -m pip install --require-hashes -r office/requirements-browser.txt
+      - name: Verify actual Chrome and display prerequisites
+        run: |
+          google-chrome --version
+          command -v xvfb-run
+      - name: Real headed Chrome persistence and ownership checks
+        env:
+          NEKO_BROWSER_E2E: '1'
+          NEKO_BROWSER_HEADLESS: '0'
+        run: xvfb-run -a "$RUNNER_TEMP/browser-venv/bin/python" -I -m unittest discover -s office/tests -p 'test_browser_chrome_e2e.py' -v

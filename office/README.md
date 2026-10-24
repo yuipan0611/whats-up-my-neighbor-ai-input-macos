@@ -2,6 +2,8 @@
 
 VPS 常駐的獨立原型：自然語言交辦、進度與成果保存、工作交接、生活原話紀錄。正式語音 App 未替換；Mac 可透過獨立的瀏覽器入口開啟。
 
+選配的 [VPS 持久 Chrome 實驗元件](docs/browser-workspace.md) 已另設生命週期／profile 邊界及測試，尚未接入辦公室執行者或正式 VPS；文件包含 Agent Zero 的工程評估、啟動方式與下一步觀看／接管驗收。
+
 ## 使用
 
 1. 執行 `office/open-office.command`。它使用既有 `neighbor-vps` SSH 別名，確認 HTTP 服務後才在 Mac 瀏覽器顯示辦公室。
