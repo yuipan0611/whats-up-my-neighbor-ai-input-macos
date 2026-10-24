@@ -1,8 +1,14 @@
-# 辦公室執行追蹤：第一個切片
+# 辦公室執行追蹤
 
 此切片把既有的任務執行與 Codex CLI 事件接到 OpenTelemetry，使用 OpenInference 的 AI 追蹤欄位。SDK 負責批次傳輸與 OTLP 格式；辦公室只轉換實際觀察到的事件，讓 Phoenix 等相容工具能顯示執行關係。
 
-預設關閉。SQLite 仍保存任務、成果與進度，原有 HTTP／WebSocket 與斷線補回契約維持不變。本切片不安裝 Phoenix、不導入 DBOS、不遷移 PostgreSQL，也不執行 VPS 部署。
+預設關閉。SQLite 仍保存任務、成果與進度，原有 HTTP／WebSocket 與斷線補回契約維持不變。追蹤 SDK、觀測服務和辦公室分開安裝；Phoenix／Jaeger 的隔離啟動與替換驗證見 [觀測實驗](../lab/README.md)。
+
+## 可替換的介面
+
+核心使用標準庫的 `tracing_contract.py`，只傳任務識別與版本為 1 的中性 `AgentEvent`。`TaskReporter.outcome()` 接收本專案的狀態，核心不接觸 OTel span。Codex adapter 負責 CLI JSONL 解析；OTel adapter 只處理中性事件，供應商的新增格式不進入觀測後端。
+
+測試用的 Recording 實作能在沒有 OTel／OpenInference 的環境執行同一個任務；OTel 實作則透過標準 OTLP 連到不同接收端。這裡驗證的是接線、行為與新追蹤資料；各產品的歷史資料及專用功能需要另外遷移。其餘元件的邊界與尚未完成的限制見 [元件邊界](component-boundaries.md)。
 
 ## 能看到什麼
 
@@ -87,12 +93,12 @@ office/.venv-observability/bin/python -I office/office.py \
 
 ## 後續每次只驗證一層
 
-1. **本切片：**完成選配追蹤接線，驗證舊流程、事件關係、取消與故障隔離。
-2. **Phoenix 測試環境：**確認接收格式、查詢與顯示，量測追蹤帶來的記憶體與延遲。
+1. **追蹤接線：**選配 SDK、中性介面、舊流程、事件關係、取消與故障隔離。
+2. **可替換的測試環境：**Phoenix／Jaeger 真實接收與查回；驗收程式獨立於核心。效能與正式負載需另測。
 3. **DBOS 耐久執行試驗：**用獨立任務驗證重啟恢復、事件回放、重複投遞與外部動作冪等，再決定如何接入排程。
 4. **PostgreSQL 評估：**以實際事件量做負載與保留策略測試，確認備份與遷移／回復方案後再遷移。
 
-後三項是後續驗證順序；這份文件不表示它們已完成或已部署。
+DBOS 與 PostgreSQL 仍是後續驗證順序；這份文件不表示它們已完成或已部署。追蹤服務的目前驗收範圍與結果以觀測實驗文件及 CI 為準。
 
 ## 上游介面
 
