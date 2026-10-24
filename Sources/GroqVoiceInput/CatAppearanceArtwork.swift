@@ -191,7 +191,8 @@ final class CatAppearanceArtwork {
         rgb(.init(part: part, u: u, v: v)).color
     }
     func ink(_ part: CatBodyPart = .head, u: Double = 0.5, v: Double = 0.7) -> NSColor {
-        (rgb(.init(part: part, u: u, v: v)).luminance > 150 ? Self.darkInk : Self.lightInk).color
+        if appearance.hasOriginalCoat { return NSColor(srgbRed: 250 / 255, green: 250 / 255, blue: 249 / 255, alpha: 1) }
+        return (rgb(.init(part: part, u: u, v: v)).luminance > 150 ? Self.darkInk : Self.lightInk).color
     }
 
     /// Use original SVG path ordering to distinguish a tail behind the torso
@@ -251,7 +252,11 @@ final class CatAppearanceArtwork {
                 ctx.draw(maskCG, in: CGRect(x: 0, y: 0, width: w, height: h))
             }
         }
-        return data.withUnsafeMutableBytes { bytes -> NSImage? in
+        let head = Self.featureHead(layout: layout, width: w, height: h)
+        let leftEye = appearance.features.eyes.left.map(RGB.init)
+        let rightEye = appearance.features.eyes.right.map(RGB.init)
+        let hasEyeColors = leftEye != nil || rightEye != nil
+        let recolored = data.withUnsafeMutableBytes { bytes -> NSImage? in
             guard let context = CGContext(data: bytes.baseAddress, width: w, height: h, bitsPerComponent: 8,
                                           bytesPerRow: w * 4, space: space,
                                           bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
@@ -278,7 +283,27 @@ final class CatAppearanceArtwork {
                     let mouth = removeMouth && Double(x) / Double(w) > 0.448 && Double(x) / Double(w) < 0.552 &&
                         Double(y) / Double(h) > 0.755 && Double(y) / Double(h) < 0.84
                     let feature = mouth ? 0 : max(0, min(1, (l - 65) / 175))
-                    let ink = coat.luminance > 150 ? Self.darkInk : Self.lightInk
+                    var ink = coat.luminance > 150 ? Self.darkInk : Self.lightInk
+                    var customEye: RGB?
+                    if hasEyeColors, let head {
+                        let u = (Double(x) - Double(head.rect.minX)) / Double(head.rect.width)
+                        let v = (Double(y) - Double(head.rect.minY)) / Double(head.rect.height)
+                        let eyeY = head.recording ? 0.52...0.79 : 0.55...0.82
+                        if eyeY.contains(v) {
+                            if (0.13...0.36).contains(u) { customEye = leftEye }
+                            if (0.63...0.90).contains(u) { customEye = rightEye }
+                        }
+                    }
+                    // For the original black coat, keep every unmodified source
+                    // pixel. Color only the existing light eye glyph pixels.
+                    if appearance.hasOriginalCoat && !mouth {
+                        guard let customEye, feature > 0 else { continue }
+                        pixels[i] = UInt8(max(0, min(255, r * (1 - feature) + customEye.r * feature)) * alpha)
+                        pixels[i + 1] = UInt8(max(0, min(255, g * (1 - feature) + customEye.g * feature)) * alpha)
+                        pixels[i + 2] = UInt8(max(0, min(255, b * (1 - feature) + customEye.b * feature)) * alpha)
+                        continue
+                    }
+                    if let customEye { ink = customEye }
                     var detail = mouth ? 1 : min(1.08, max(0.72, 0.88 + l * 0.006))
                     // Original gray limb/contour strokes need dark contrast on
                     // pale coats, rather than turning into brighter white lines.
@@ -293,6 +318,24 @@ final class CatAppearanceArtwork {
             guard let result = context.makeImage() else { return nil }
             return NSImage(cgImage: result, size: source.size)
         }
+        guard let recolored, let head else { return recolored }
+        let features = appearance.features
+        let includeAccessories: Bool
+        if case .desktop = layout { includeAccessories = false } else { includeAccessories = true }
+        guard features.nose.shape != .none || features.nose.freckles ||
+            (includeAccessories && (features.collar.enabled || features.bow.enabled)) else { return recolored }
+        // Compose at native pixel dimensions once; retaining source.size keeps
+        // pickup hit/grip coordinates and the recording HUD layout unchanged.
+        let canvas = NSSize(width: CGFloat(w), height: CGFloat(h))
+        let decorated = NSImage(size: canvas, flipped: true) { _ in
+            recolored.draw(in: CGRect(origin: .zero, size: canvas), from: .zero,
+                operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            self.drawNose(headIn: head.rect, recording: head.recording)
+            if includeAccessories { self.drawAccessories(headIn: head.rect, recording: head.recording) }
+            return true
+        }
+        guard let result = decorated.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        return NSImage(cgImage: result, size: source.size)
     }
 
     /// A local paint texture fills native animated geometry and repairs closed
@@ -322,4 +365,134 @@ final class CatAppearanceArtwork {
         texture.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
         NSGraphicsContext.restoreGraphicsState()
     }
+
+    private struct FeatureHead {
+        let rect: CGRect
+        let recording: Bool
+    }
+    private static func featureHead(layout: CatAnatomy.Layout, width: Int, height: Int) -> FeatureHead? {
+        switch layout {
+        case .hud:
+            return FeatureHead(rect: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)), recording: true)
+        case .pickup(let map):
+            return FeatureHead(rect: CGRect(x: map.head[0], y: map.head[1], width: map.head[2], height: map.head[3]), recording: false)
+        case .desktop(let asset):
+            guard ["sit", "reply", "walk", "walk-front-face", "walk-head", "groom-head"].contains(asset) else { return nil }
+            let x = asset.hasPrefix("walk") ? 25.0 : 45.0
+            return FeatureHead(rect: CGRect(x: x / 400 * Double(width), y: 18.0 / 400 * Double(height),
+                width: 312.0 / 400 * Double(width), height: 208.0 / 400 * Double(height)), recording: false)
+        case .part: return nil
+        }
+    }
+
+    /// Attachments use authored anatomical coordinates, never screen position.
+    /// Desktop callers draw these inside the same breathing/head transform as
+    /// the body; pickup and HUD images bake them once into their cached image.
+    func drawAccessories(headIn head: CGRect, recording: Bool = false) {
+        let features = appearance.features
+        guard features.collar.enabled || features.bow.enabled else { return }
+        let neckY = recording ? head.minY + head.height * 0.90 : head.maxY + head.height * 0.015
+        let half = head.width * (recording ? 0.145 : 0.22)
+        if features.collar.enabled {
+            let band = NSBezierPath()
+            band.move(to: CGPoint(x: head.midX - half, y: neckY - head.height * 0.015))
+            band.curve(to: CGPoint(x: head.midX + half, y: neckY - head.height * 0.015),
+                controlPoint1: CGPoint(x: head.midX - half * 0.42, y: neckY + head.height * 0.045),
+                controlPoint2: CGPoint(x: head.midX + half * 0.42, y: neckY + head.height * 0.045))
+            band.lineWidth = head.height * (recording ? 0.022 : 0.042)
+            band.lineCapStyle = .round
+            RGB(features.collar.color).color.setStroke(); band.stroke()
+        }
+        if features.bow.enabled {
+            let center: CGPoint, size: CGSize, angle: CGFloat
+            switch features.bow.position {
+            case .neck:
+                center = CGPoint(x: head.midX, y: neckY + head.height * (recording ? 0.025 : 0.055))
+                size = CGSize(width: head.width * (recording ? 0.13 : 0.23), height: head.height * (recording ? 0.105 : 0.17))
+                angle = 0
+            case .leftEar, .rightEar:
+                let left = features.bow.position == .leftEar
+                center = CGPoint(x: head.minX + head.width * (left ? 0.20 : 0.80),
+                    y: head.minY + head.height * (recording ? 0.30 : 0.21))
+                size = CGSize(width: head.width * (recording ? 0.12 : 0.18), height: head.height * (recording ? 0.11 : 0.16))
+                angle = left ? -22 : 22
+            }
+            drawBow(at: center, size: size, angle: angle)
+        }
+    }
+
+    private func drawBow(at center: CGPoint, size: CGSize, angle: CGFloat) {
+        let bow = appearance.features.bow
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        let transform = NSAffineTransform()
+        transform.translateX(by: center.x, yBy: center.y)
+        transform.rotate(byDegrees: angle)
+        transform.concat()
+        let x = size.width / 2, y = size.height / 2
+        let loops = NSBezierPath()
+        loops.move(to: CGPoint(x: -x * 0.08, y: 0))
+        loops.curve(to: CGPoint(x: -x, y: -y * 0.72),
+            controlPoint1: CGPoint(x: -x * 0.58, y: -y * 0.9), controlPoint2: CGPoint(x: -x * 0.98, y: -y * 1.25))
+        loops.curve(to: CGPoint(x: -x, y: y * 0.72),
+            controlPoint1: CGPoint(x: -x * 1.08, y: -y * 0.2), controlPoint2: CGPoint(x: -x * 1.08, y: y * 0.2))
+        loops.curve(to: CGPoint(x: -x * 0.08, y: 0),
+            controlPoint1: CGPoint(x: -x * 0.98, y: y * 1.25), controlPoint2: CGPoint(x: -x * 0.58, y: y * 0.9))
+        loops.close()
+        loops.move(to: CGPoint(x: x * 0.08, y: 0))
+        loops.curve(to: CGPoint(x: x, y: -y * 0.72),
+            controlPoint1: CGPoint(x: x * 0.58, y: -y * 0.9), controlPoint2: CGPoint(x: x * 0.98, y: -y * 1.25))
+        loops.curve(to: CGPoint(x: x, y: y * 0.72),
+            controlPoint1: CGPoint(x: x * 1.08, y: -y * 0.2), controlPoint2: CGPoint(x: x * 1.08, y: y * 0.2))
+        loops.curve(to: CGPoint(x: x * 0.08, y: 0),
+            controlPoint1: CGPoint(x: x * 0.98, y: y * 1.25), controlPoint2: CGPoint(x: x * 0.58, y: y * 0.9))
+        loops.close()
+        RGB(bow.color).color.setFill(); loops.fill()
+        let knot = NSBezierPath(roundedRect: CGRect(x: -x * 0.18, y: -y * 0.42, width: x * 0.36, height: y * 0.84),
+            xRadius: y * 0.18, yRadius: y * 0.18)
+        RGB(bow.knotColor).color.setFill(); knot.fill()
+    }
+
+    func drawNose(headIn head: CGRect, recording: Bool = false) {
+        let nose = appearance.features.nose
+        guard nose.shape != .none || nose.freckles else { return }
+        let center = CGPoint(x: head.midX, y: head.minY + head.height * (recording ? 0.735 : 0.72))
+        let w = head.width * (recording ? 0.04 : 0.06), h = head.height * (recording ? 0.037 : 0.06)
+        let shape = NSBezierPath()
+        switch nose.shape {
+        case .none: break
+        case .triangle:
+            shape.move(to: CGPoint(x: center.x - w / 2, y: center.y - h / 2))
+            shape.line(to: CGPoint(x: center.x + w / 2, y: center.y - h / 2))
+            shape.curve(to: CGPoint(x: center.x, y: center.y + h / 2),
+                controlPoint1: CGPoint(x: center.x + w * 0.4, y: center.y), controlPoint2: CGPoint(x: center.x + w * 0.12, y: center.y + h / 2))
+            shape.curve(to: CGPoint(x: center.x - w / 2, y: center.y - h / 2),
+                controlPoint1: CGPoint(x: center.x - w * 0.12, y: center.y + h / 2), controlPoint2: CGPoint(x: center.x - w * 0.4, y: center.y))
+            shape.close()
+        case .round:
+            shape.appendOval(in: CGRect(x: center.x - w / 2, y: center.y - h / 2, width: w, height: h))
+        case .heart:
+            shape.move(to: CGPoint(x: center.x, y: center.y + h * 0.6))
+            shape.curve(to: CGPoint(x: center.x, y: center.y - h * 0.23),
+                controlPoint1: CGPoint(x: center.x - w, y: center.y - h * 0.35),
+                controlPoint2: CGPoint(x: center.x - w * 0.32, y: center.y - h * 0.95))
+            shape.curve(to: CGPoint(x: center.x, y: center.y + h * 0.6),
+                controlPoint1: CGPoint(x: center.x + w * 0.32, y: center.y - h * 0.95),
+                controlPoint2: CGPoint(x: center.x + w, y: center.y - h * 0.35))
+            shape.close()
+        }
+        RGB(nose.color).color.setFill(); shape.fill()
+        if nose.freckles {
+            let radius = head.width * (recording ? 0.0038 : 0.006)
+            let dots: [(CGFloat, CGFloat)] = [(0.088, 0.005), (0.115, 0.025), (0.080, 0.045)]
+            for side: CGFloat in [-1, 1] {
+                for (dx, dy) in dots {
+                    let dot = CGRect(x: center.x + side * head.width * dx - radius,
+                        y: center.y + head.height * dy - radius, width: radius * 2, height: radius * 2)
+                    NSBezierPath(ovalIn: dot).fill()
+                }
+            }
+        }
+    }
+
 }

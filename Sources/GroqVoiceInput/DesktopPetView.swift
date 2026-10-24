@@ -188,7 +188,7 @@ final class DesktopPetView: NSView {
 
     private var fur: NSColor { coatArtwork.color(.body) }
     private var ink: NSColor {
-        coatArtwork.appearance.isOriginal ? NSColor(srgbRed: 250 / 255, green: 250 / 255, blue: 249 / 255, alpha: 1) : coatArtwork.ink()
+        coatArtwork.appearance.hasOriginalCoat ? NSColor(srgbRed: 250 / 255, green: 250 / 255, blue: 249 / 255, alpha: 1) : coatArtwork.ink()
     }
 
     private func drawPickupFrame() {
@@ -249,12 +249,12 @@ final class DesktopPetView: NSView {
         paw.curve(to: CGPoint(x: 13, y: 20), controlPoint1: CGPoint(x: 22, y: 13), controlPoint2: CGPoint(x: 19, y: 18))
         let rim = paw.copy() as! NSBezierPath
         paw.close()
-        let pawFur = coatArtwork.appearance.isOriginal ? fur : coatArtwork.color(.frontLeftPaw)
-        let shade = coatArtwork.appearance.isOriginal
+        let pawFur = coatArtwork.appearance.hasOriginalCoat ? fur : coatArtwork.color(.frontLeftPaw)
+        let shade = coatArtwork.appearance.hasOriginalCoat
             ? (fur.blended(withFraction: palm.activity, of: NSColor(srgbRed: 38/255, green: 40/255, blue: 45/255, alpha: 1)) ?? fur)
             : pawFur
         shade.setFill(); paw.fill()
-        if !coatArtwork.appearance.isOriginal {
+        if !coatArtwork.appearance.hasOriginalCoat {
             coatArtwork.fill(paw, layout: .part(.frontLeftPaw), in: CGRect(x: -28, y: -30, width: 56, height: 60), cacheKey: "groom-paw")
         }
         NSColor(calibratedWhite: 0.48, alpha: palm.activity).setStroke()
@@ -292,6 +292,12 @@ final class DesktopPetView: NSView {
     private func drawImage(_ name: String, in rect: CGRect = CGRect(x: 0, y: 0, width: 400, height: 400)) {
         images[name]?.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1,
                            respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
+        if ["sit", "reply", "walk", "walk-front-face", "groom-head"].contains(name) {
+            let headX: CGFloat = name.hasPrefix("walk") ? 25 : 45
+            let head = CGRect(x: rect.minX + headX / 400 * rect.width, y: rect.minY + 18 / 400 * rect.height,
+                width: 312 / 400 * rect.width, height: 208 / 400 * rect.height)
+            coatArtwork.drawAccessories(headIn: head)
+        }
     }
 
     private func breathe(_ body: () -> Void) {
@@ -344,7 +350,7 @@ final class DesktopPetView: NSView {
                        controlPoint1: CGPoint(x: neck.x + neckHalf, y: neck.y - height * 0.3),
                        controlPoint2: CGPoint(x: root.x + rootHalf, y: root.y + height * 0.4))
             join.close()
-            if coatArtwork.appearance.isOriginal { fur.setFill(); join.fill() }
+            if coatArtwork.appearance.hasOriginalCoat { fur.setFill(); join.fill() }
             else {
                 coatArtwork.fill(join, layout: .desktop("walk-foot-\(index)"),
                     in: CGRect(x: 0, y: 0, width: 400, height: 400),
@@ -410,6 +416,7 @@ final class DesktopPetView: NSView {
                                                width: 25, height: 8 + opening * 30))
         mouth.lineWidth = 6
         mouth.stroke()
+        coatArtwork.drawNose(headIn: CGRect(x: 45, y: 18, width: 312, height: 208))
         if opening > 0.4 {
             closeEyes(inHeadAt: CGPoint.zero, scale: 1)
         }
@@ -425,6 +432,10 @@ final class DesktopPetView: NSView {
                                  from: CGRect(x: 0, y: 174, width: 400, height: 226),
                                  operation: .sourceOver, fraction: 1, respectFlipped: true,
                                  hints: [.interpolation: NSImageInterpolation.high])
+            // Neck attachments are drawn after the cropped head, so a bow is
+            // never cut off by the head-only source rectangle while loafing.
+            coatArtwork.drawAccessories(headIn: CGRect(x: 16 + 45 * 0.9, y: 118 + 18 * 0.9,
+                width: 312 * 0.9, height: 208 * 0.9))
             if sleeping { closeEyes(inHeadAt: CGPoint(x: 16, y: 118), scale: 0.9) }
         }
     }
@@ -439,7 +450,7 @@ final class DesktopPetView: NSView {
         fillFacePatch(NSBezierPath(ovalIn: CGRect(x: 247, y: 129, width: 77, height: 57)))
         ink.setStroke()
         for x: CGFloat in [99, 267] {
-            if !coatArtwork.appearance.isOriginal { coatArtwork.ink(.head, u: Double(x + 16 - 45) / 312, v: 0.68).setStroke() }
+            if !coatArtwork.appearance.hasOriginalCoat { coatArtwork.ink(.head, u: Double(x + 16 - 45) / 312, v: 0.68).setStroke() }
             let eyelid = NSBezierPath()
             eyelid.move(to: CGPoint(x: x, y: 159))
             eyelid.curve(to: CGPoint(x: x + 32, y: 159), controlPoint1: CGPoint(x: x + 9, y: 170),
@@ -452,7 +463,7 @@ final class DesktopPetView: NSView {
     }
 
     private func fillFacePatch(_ path: NSBezierPath) {
-        if coatArtwork.appearance.isOriginal { fur.setFill(); path.fill() }
+        if coatArtwork.appearance.hasOriginalCoat { fur.setFill(); path.fill() }
         else { coatArtwork.fill(path, layout: .desktop("sit"), in: CGRect(x: 0, y: 0, width: 400, height: 400), cacheKey: "face") }
     }
 

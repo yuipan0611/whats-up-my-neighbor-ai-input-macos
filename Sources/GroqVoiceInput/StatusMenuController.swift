@@ -13,6 +13,7 @@ final class StatusMenuController {
     private(set) var modeMenuItems: [TextOutputMode: NSMenuItem] = [:]
     private var nekoPositionItems: [NekoHUDPosition: NSMenuItem] = [:]
     private var catCoatItems: [String: NSMenuItem] = [:]
+    private var catPackMenu: NSMenu?
 
     func configure(target: AnyObject, toggleTitle: String, relayTitle: String, clipboardMenu: NSMenu? = nil, actions: [String: Selector]) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -82,6 +83,19 @@ final class StatusMenuController {
             let (catCoatItem, items) = CatCoatMenu.make(target: target, action: action)
             catCoatItems = items
             menu.addItem(catCoatItem)
+        }
+
+        let catLibrary = NSMenuItem(title: "我的貓咪", action: nil, keyEquivalent: "")
+        let library = NSMenu()
+        library.autoenablesItems = false
+        catLibrary.submenu = library
+        catPackMenu = library
+        menu.addItem(catLibrary)
+        for (title, key) in [("自訂貓咪…", "customizeCat"), ("匯入貓咪包…", "importCatPack"),
+                             ("匯出目前貓咪…", "exportCurrentCat")] {
+            let item = NSMenuItem(title: title, action: actions[key], keyEquivalent: "")
+            item.target = target
+            menu.addItem(item)
         }
 
         let nekoPreview = NSMenuItem(title: "小黑貓介面預覽…", action: actions["showNekoPreview"], keyEquivalent: "")
@@ -179,6 +193,24 @@ final class StatusMenuController {
 
     func updateCatCoat(_ selected: String) {
         for (id, item) in catCoatItems { item.state = id == selected ? .on : .off }
+    }
+
+    func updateCatPacks(_ packs: [CatPack], selectedID: String?, target: AnyObject, action: Selector) {
+        guard let menu = catPackMenu else { return }
+        menu.removeAllItems()
+        if packs.isEmpty {
+            let item = NSMenuItem(title: "自訂或匯入一隻貓，會保存在這裡", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        } else {
+            for pack in packs {
+                let item = NSMenuItem(title: pack.manifest.name, action: action, keyEquivalent: "")
+                item.target = target
+                item.representedObject = pack.manifest.id
+                item.state = selectedID == pack.manifest.id ? .on : .off
+                menu.addItem(item)
+            }
+        }
     }
 
     func updateIcon(_ state: NekoMenuBarIcon.State, description: String) {

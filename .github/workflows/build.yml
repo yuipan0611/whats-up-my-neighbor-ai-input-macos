@@ -27,6 +27,8 @@ jobs:
         run: ./scripts/test-all.sh
       - name: Package CI build
         run: PACKAGE_EXISTING_BUILD=1 ./scripts/package-release.sh
+      - name: Package first-use custom cat example
+        run: ./scripts/package-custom-cat.sh build/AI語音輸入.app build/cat-packs/Mochi.nekocat dist/NekoNode-Mochi-QA.zip
       - name: Upload development installer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -34,6 +36,7 @@ jobs:
           path: |
             dist/*.zip
             dist/*.sha256
+            build/cat-packs/Mochi.nekocat
           retention-days: 7
           if-no-files-found: error
       - name: Upload native macOS cat captures

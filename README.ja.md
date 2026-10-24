@@ -63,8 +63,9 @@ What's up my neighbor は、軽量なネイティブ macOS メニューバー音
 
 - **Command＋V で履歴を選択**：通常の `⌘V` はそのまま貼り付けます。`⌘V` を押したまま `↑`／`↓` を押すと履歴を表示し、Enter で確定、Esc で閉じます。`⌃⌥V` とメニューからも開けます。
 - **9 種類の毛色をすぐに切り替え**：メニューバーの「選擇貓咪花色」（毛色を選択）から選ぶと、デスクトップの猫に即時反映され、非表示の場合は表示されます。再起動は不要です。初期設定は元の黒猫で、最後の選択を記憶します。
+- **カスタム猫パック**：左右の目、鼻、首輪、リボンを設定し、`.nekocat` で読み込み・書き出しできます。初回インストール時に指定の猫を設定する配布パッケージも作れます。[形式・配布・QA の説明（繁体字中国語）](docs/CAT-PACKS.md)。
 
-正式版 1.4.5 にはこの 2 機能は含まれません。QA 版のメニューには「QA 測試版」とソースの識別番号を表示します。[インストールとデスクトップ QA の手順（繁体字中国語）](docs/QA_CLIPBOARD_CAT.md)。
+正式版 1.4.5 にはこれらの機能は含まれません。QA 版のメニューには「QA 測試版」とソースの識別番号を表示します。[インストールとデスクトップ QA の手順（繁体字中国語）](docs/QA_CLIPBOARD_CAT.md)。
 
 ## スクリーンショット
 
@@ -122,6 +123,7 @@ Claude Code や Codex などの AI にインストールを任せることもで
 |---|---|
 | すべての機能と設定を知る | [詳細ガイド](docs/GUIDE.md)、[公式サイトの使い方](https://nekonode.cloud/guide) |
 | 黒猫の画像やあいさつを変える | [CAT-CONFIG.md](CAT-CONFIG.md) |
+| カスタム猫パックの作成・共有・配布 | [docs/CAT-PACKS.md](docs/CAT-PACKS.md) |
 | バージョンごとの変更点 | [CHANGELOG.md](CHANGELOG.md)、[公式サイトの更新履歴](https://nekonode.cloud/changelog) |
 | アーキテクチャを理解する | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | ソースからビルド・テストする | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)、[docs/TESTING.md](docs/TESTING.md) |

@@ -60,8 +60,9 @@ What's up my neighbor 是輕量的原生 macOS 選單列語音輸入 App。在�
 
 - **Command＋V 歷史手勢**：一般短按 `⌘V` 照常貼上；按住 `⌘V`，再按 `↑`／`↓` 叫出歷史清單，Enter 確認，Esc 關閉。`⌃⌥V` 與選單入口也保留。
 - **九種毛色直接換**：從選單列的「選擇貓咪花色」選擇，桌面貓立即換色；收起時會直接放出，不需要重開 App。預設原版黑貓，會記住上次選擇。
+- **客製貓咪外觀包**：獨立設定左右眼、鼻子、項圈與蝴蝶結，匯入／匯出 `.nekocat`；客製交付包可在首次安裝時帶入指定貓咪。[格式、交付與驗收](docs/CAT-PACKS.md)。
 
-正式版 1.4.5 尚未包含這兩項。QA 安裝包的選單會另外顯示「QA 測試版」與來源編號；[安裝與桌面驗收步驟](docs/QA_CLIPBOARD_CAT.md)。
+正式版 1.4.5 尚未包含這些功能。QA 安裝包的選單會另外顯示「QA 測試版」與來源編號；[安裝與桌面驗收步驟](docs/QA_CLIPBOARD_CAT.md)。
 
 ## 操作畫面
 
@@ -117,6 +118,7 @@ What's up my neighbor 是輕量的原生 macOS 選單列語音輸入 App。在�
 |---|---|
 | 了解每個功能與設定 | [完整使用指南](docs/GUIDE.md)、[官網教學](https://nekonode.cloud/guide) |
 | 自訂小黑貓圖片與招呼 | [CAT-CONFIG.md](CAT-CONFIG.md) |
+| 客製、分享與交付貓咪外觀包 | [docs/CAT-PACKS.md](docs/CAT-PACKS.md) |
 | 看版本更新內容 | [CHANGELOG.md](CHANGELOG.md)、[官網更新紀錄](https://nekonode.cloud/changelog) |
 | 了解架構與資料流 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | 從原始碼建置、跑測試 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)、[docs/TESTING.md](docs/TESTING.md) |

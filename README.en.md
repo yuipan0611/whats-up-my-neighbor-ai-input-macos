@@ -63,8 +63,9 @@ What's up my neighbor is a lightweight, native macOS menu bar dictation app. Pre
 
 - **Command+V history gesture**: a normal tap of `⌘V` pastes as usual. Hold `⌘V`, then press `↑` or `↓` to open history. Enter confirms, Esc closes; `⌃⌥V` and the menu entry remain available.
 - **Nine coats, applied immediately**: choose “選擇貓咪花色” (Choose cat coat) from the menu bar. The real desktop cat changes coat and appears if hidden, without restarting. The original black cat is the default, and your selection is remembered.
+- **Custom cat packs**: customise each eye, the nose, a collar and a bow, then import or export a `.nekocat` file. A custom delivery can include a selected cat for first use. [Format, delivery and QA (Traditional Chinese)](docs/CAT-PACKS.md).
 
-Release 1.4.5 does not include these two features. The QA installer adds a “QA 測試版” label and source revision to the menu. [Installation and desktop QA steps (Traditional Chinese)](docs/QA_CLIPBOARD_CAT.md).
+Release 1.4.5 does not include these features. The QA installer adds a “QA 測試版” label and source revision to the menu. [Installation and desktop QA steps (Traditional Chinese)](docs/QA_CLIPBOARD_CAT.md).
 
 ## Screenshots
 
@@ -122,6 +123,7 @@ Most documents are written in Traditional Chinese.
 |---|---|
 | Learn every feature and setting | [Full manual](docs/GUIDE.md), [website guide](https://nekonode.cloud/guide) |
 | Customise the cat's images and greeting | [CAT-CONFIG.md](CAT-CONFIG.md) |
+| Create, share and deliver custom cat packs | [docs/CAT-PACKS.md](docs/CAT-PACKS.md) |
 | See what changed in each version | [CHANGELOG.md](CHANGELOG.md), [website changelog](https://nekonode.cloud/changelog) |
 | Understand the architecture | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Build from source and run the tests | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md), [docs/TESTING.md](docs/TESTING.md) |

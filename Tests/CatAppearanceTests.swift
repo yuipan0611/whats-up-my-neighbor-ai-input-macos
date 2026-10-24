@@ -256,9 +256,140 @@ import AppKit
         try png(sheet(lineup, labels: CatAppearance.presetNames, columns: 3, cell: NSSize(width: 320, height: 280)), to: output.appendingPathComponent("natural-coats.png"))
         try png(sheet(hudLineup, labels: CatAppearance.presetNames, columns: 3, cell: NSSize(width: 440, height: 280)), to: output.appendingPathComponent("greeting-coats.png"))
         try png(sheet(recordingLineup, labels: CatAppearance.presetNames, columns: 3, cell: NSSize(width: 368, height: 250)), to: output.appendingPathComponent("recording-coats.png"))
+        try featureChecks(root: root, output: output, resources: resources, hudURL: hudURL, maps: maps)
         try? FileManager.default.removeItem(at: configURL)
         let sortedTimes = paintMilliseconds.sorted()
         print(String(format: "Uncached pickup paint: median %.1f ms, p95 %.1f ms", sortedTimes[sortedTimes.count / 2], sortedTimes[Int(Double(sortedTimes.count - 1) * 0.95)]))
-        print("Cat appearance: \(checks) checks passed; 9 coats, 36 source frames each, 10 poses each, live overlay actions and full examples rendered.")
+        print("Cat appearance: \(checks) checks passed; 9 coats, 36 source frames each, 10 poses each, live overlay actions, full examples, custom eyes/noses/collars/bows rendered.")
     }
+
+    /// Pixel checks exercise real source frames and the native views. The eye
+    /// symbols must stay left/right, disappear when eyes close, and keep their
+    /// existing button callbacks after changing every feature.
+    static func featureChecks(root: URL, output: URL, resources: URL, hudURL: URL,
+                              maps: [CatAnatomy.PickupMap]) throws {
+        let data: [String: Any] = ["preset": "tuxedo", "features": [
+            "eyes": ["left": "#41B7DB", "right": "#E4A640"],
+            "nose": ["shape": "triangle", "color": "#CD8C92", "freckles": true],
+            "collar": ["enabled": true, "color": "#5C708A"],
+            "bow": ["enabled": true, "color": "#B36A85", "knotColor": "#69415A", "position": "neck"]]]
+        let appearance = try CatAppearance.parse(data)
+        check(try! CatAppearance.parse(appearance.jsonObject) == appearance, "complete facial/accessory features round trip")
+        check(!appearance.isOriginal && !appearance.features.isEmpty, "custom features enter the renderer")
+        check(try! CatAppearance.parse(["preset": "original", "features": [:]]).isOriginal, "empty features preserve the original bypass")
+        for shape in CatNoseShape.allCases {
+            check((try? CatAppearance.parse(["preset": "original", "features": ["nose": ["shape": shape.rawValue]]])) != nil,
+                  "all supported nose shapes parse")
+        }
+        let invalidFeatures: [[String: Any]] = [
+            ["eyes": ["left": "blue"]], ["eyes": ["left": "#12345678"]], ["eyes": ["upper": "#123456"]],
+            ["nose": ["shape": "folded"]], ["nose": ["freckles": 1]], ["nose": ["color": true]],
+            ["collar": ["enabled": 1]], ["collar": ["size": 100]],
+            ["bow": ["position": "tail"]], ["bow": ["enabled": "true"]], ["bow": ["knotColor": "red"]],
+            ["script": "untrusted"], ["eyes": NSNull()]
+        ]
+        for features in invalidFeatures {
+            check((try? CatAppearance.parse(["preset": "black", "features": features])) == nil, "invalid feature data is rejected")
+        }
+        func pixels(_ image: NSImage, matching hex: String) -> (count: Int, meanX: Double) {
+            let target = CatAppearanceArtwork.RGB(hex), raster = rgba(image)
+            var count = 0, sumX = 0.0
+            for y in 0..<raster.1 { for x in 0..<raster.0 {
+                let i = (y * raster.0 + x) * 4
+                if raster.2[i + 3] > 230 && abs(Double(raster.2[i]) - target.r) < 6 &&
+                    abs(Double(raster.2[i + 1]) - target.g) < 6 && abs(Double(raster.2[i + 2]) - target.b) < 6 {
+                    count += 1; sumX += Double(x)
+                }
+            } }
+            return (count, count > 0 ? sumX / Double(count) : 0)
+        }
+        func openEyes(_ image: NSImage, label: String) {
+            let left = pixels(image, matching: "#41B7DB"), right = pixels(image, matching: "#E4A640")
+            check(left.count > 1 && right.count > 1, "both eye colors visible: " + label)
+            check(left.meanX < right.meanX, "front-view left/right eyes never swap: " + label)
+        }
+        let painter = CatAppearanceArtwork(appearance)
+        var eyeOnly = CatFeatures()
+        eyeOnly.eyes = appearance.features.eyes
+        let eyePainter = CatAppearanceArtwork(CatAppearance.original.replacingFeatures(eyeOnly))
+        let firstSource = NSImage(contentsOf: resources.appendingPathComponent("Pickup/00.png"))!
+        let eyeImage = eyePainter.image(firstSource, layout: .pickup(maps[0]))!
+        let originalPixels = rgba(firstSource), eyePixels = rgba(eyeImage)
+        check(stride(from: 3, to: originalPixels.2.count, by: 4).allSatisfy { originalPixels.2[$0] == eyePixels.2[$0] },
+              "eye colors never change original transparency or silhouette")
+        openEyes(eyeImage, label: "original black coat")
+        var frames: [NSImage] = []
+        for i in 0..<36 {
+            let source = NSImage(contentsOf: resources.appendingPathComponent(String(format: "Pickup/%02d.png", i)))!
+            let decorated = painter.image(source, layout: .pickup(maps[i]))!
+            check(decorated.size == source.size, "features preserve pickup frame size")
+            let before = rgba(source), after = rgba(decorated)
+            check(before.0 == after.0 && before.1 == after.1, "feature composition keeps native raster dimensions")
+            check(stride(from: 3, to: before.2.count, by: 4).allSatisfy { before.2[$0] < 250 || after.2[$0] > 230 },
+                  "accessories never move or erase the original pickup silhouette")
+            openEyes(decorated, label: "pickup \(i)")
+            check(pixels(decorated, matching: "#5C708A").count > 1, "collar follows every pickup pose")
+            check(pixels(decorated, matching: "#B36A85").count > 1, "neck bow follows every pickup pose")
+            check(pixels(decorated, matching: "#CD8C92").count > 1, "nose survives every pickup pose")
+            frames.append(decorated)
+        }
+        try png(sheet(frames, labels: (0..<36).map { String(format: "%02d", $0) }, columns: 6,
+            cell: NSSize(width: 208, height: 220)), to: output.appendingPathComponent("features-pickup.png"))
+        let view = DesktopPetView(resources: resources, appearance: appearance)
+        let poses: [DesktopPetPose] = [.sitting, .standing, .walking, .curious, .petted, .carried, .grooming, .yawning, .loafing, .sleeping]
+        var poseImages: [NSImage] = []
+        for pose in poses {
+            let rendered = NSImage(data: view.renderPNG(pose: pose, phase: 1.6, walkDistance: 15))!
+            poseImages.append(rendered)
+            if [.petted, .grooming, .yawning, .sleeping].contains(pose) {
+                check(pixels(rendered, matching: "#41B7DB").count == 0 && pixels(rendered, matching: "#E4A640").count == 0,
+                      "closed eyes do not retain colored open glyphs: \(pose)")
+            } else { openEyes(rendered, label: pose.description) }
+            check(pixels(rendered, matching: "#B36A85").count > 0, "bow remains attached in pose: \(pose)")
+        }
+        for direction in [false, true] {
+            openEyes(NSImage(data: view.renderPNG(pose: .walking, facingLeft: direction, walkDistance: 33))!, label: "walking direction \(direction)")
+        }
+        check(!view.containsCat(CGPoint(x: 1, y: 1)), "custom accessories keep transparent desktop area clickable-through")
+        check(view.containsCat(CGPoint(x: 104, y: 69)), "customized head remains draggable")
+        try png(sheet(poseImages, labels: poses.map(\.description), columns: 5, cell: NSSize(width: 240, height: 235)),
+            to: output.appendingPathComponent("features-poses.png"))
+        let fresh = DesktopPetView(resources: resources, appearance: appearance)
+        view.setAppearance(.original); view.setAppearance(appearance)
+        check(view.renderPNG(pose: .carried, phase: 0.8) == fresh.renderPNG(pose: .carried, phase: 0.8), "feature hot switching leaves no stale pickup cache")
+        view.setAppearance(.original)
+        check(view.renderPNG(pose: .sitting) == DesktopPetView(resources: resources).renderPNG(pose: .sitting), "removing all features restores exact original art")
+        let config = CatConfiguration.defaults.replacingAppearance(appearance)
+        let overlay = CatOverlay(configuration: config, bundledImageURL: hudURL)
+        defer { overlay.dispose() }
+        let greeting = try overlay.testPNG(greeting: true, frame: 2)
+        try greeting.write(to: output.appendingPathComponent("features-greeting.png"))
+        let recording = NekoRecordingView(image: painter.image(NSImage(contentsOf: hudURL)!, layout: .hud))
+        recording.update(state: .recording)
+        var cancelled = 0, finished = 0
+        recording.onCancel = { cancelled += 1 }; recording.onFinish = { finished += 1 }
+        recording.cancelButton.performClick(nil); recording.finishButton.performClick(nil)
+        overlay.onCancel = { cancelled += 1 }; overlay.onFinish = { finished += 1 }
+        overlay.showRecording(); overlay.testClickCancel(); overlay.testClickFinish(); overlay.hide()
+        check(cancelled == 2 && finished == 2, "heterochromia keeps both recording and greeting eye button actions")
+        check(overlay.testCanReplaceMouth, "custom nose preserves greeting mouth animation")
+        let recordingImage = render(recording)
+        openEyes(recordingImage, label: "recording HUD")
+        openEyes(NSImage(data: greeting)!, label: "greeting")
+        try png(recordingImage, to: output.appendingPathComponent("features-recording.png"))
+        var variants: [NSImage] = [], labels: [String] = []
+        for position in CatBowPosition.allCases {
+            for shape in [CatNoseShape.triangle, .round, .heart] {
+                var features = appearance.features
+                features.bow.position = position; features.nose.shape = shape
+                let variant = appearance.replacingFeatures(features)
+                let variantView = DesktopPetView(resources: resources, appearance: variant)
+                variants.append(NSImage(data: variantView.renderPNG(pose: .sitting))!)
+                labels.append(position.rawValue + " / " + shape.rawValue)
+            }
+        }
+        try png(sheet(variants, labels: labels, columns: 3, cell: NSSize(width: 280, height: 250)),
+            to: output.appendingPathComponent("features-options.png"))
+    }
+
 }

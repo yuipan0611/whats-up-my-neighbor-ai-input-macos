@@ -1,5 +1,7 @@
 # 自訂你的貓咪 / Customize your cat
 
+要分享整隻貓，或製作安裝後就帶客製貓的交付檔，請看[貓咪外觀包與客製交付](docs/CAT-PACKS.md)。包含此功能的 QA 版也支援異瞳、鼻子、項圈與蝴蝶結；正式版 1.4.5 尚未支援。
+
 macOS 現在支援 **version 2**：問候、圖片設定之外，也能選自然毛色並逐一調整身體部位。舊 **version 1** 仍可原樣讀取，不會自動改寫。Windows 的 version 2 尚未實作或驗證；跨平台分享請繼續使用 version 1。設定不包含 API key。
 
 ## macOS 開始使用
@@ -142,3 +144,42 @@ Use a same-folder PNG filename for `image`, or `null` for the built-in cat. PNGs
 錄音／問候只顯示頭部，因此只有可見部位會出現；不把桌面圓臉替換成錄音長臉。眼睛的取消／完成位置不變，嘴型顏色配合口鼻對比。自訂 PNG（即使讀取失敗）維持既有圖片優先和停用嘴型的規則。
 
 未知部位、花紋、欄位、無效顏色、種子或版本會使整份設定回到預設並提示錯誤，原檔保留。設定不下載素材、不讀取官網帳號，不代表收藏或付費權益；官網抽取、收藏與同步不在本機預覽範圍。
+
+## 異瞳、鼻子與配件（包含角色包功能的 QA 版）
+
+`appearance.features` 描述固定造型模板上的個別特徵。省略整個物件時維持原有圖像；舊設定不需要遷移。此欄位只在包含角色包功能的版本中有效，先前只支援換色的 QA build 也可能尚不認得它。
+
+一般使用請從選單列選「自訂貓咪…」，調整後按「儲存並套用」；不需要手動編輯 JSON。已保存的角色放在「我的貓咪」選單，也可以用「匯出目前貓咪…」分享。
+
+```json
+{
+  "version": 2,
+  "appearance": {
+    "preset": "tuxedo",
+    "seed": 1,
+    "parts": {},
+    "features": {
+      "eyes": { "left": "#70A7B8", "right": "#D5A85C" },
+      "nose": { "shape": "triangle", "color": "#C98784", "freckles": true },
+      "collar": { "enabled": true, "color": "#A45E58" },
+      "bow": { "enabled": true, "color": "#C98784", "knotColor": "#9F5B60", "position": "neck" }
+    }
+  }
+}
+```
+
+| 欄位 | 說明與預設 |
+| --- | --- |
+| `eyes.left`、`eyes.right` | 正面觀看的左／右眼顏色，格式 `#RRGGBB`。省略任一側即沿用那一側的原圖／自動對比色。保留叉叉和勾勾的形狀，睡眠與閉眼時維持對應表情。 |
+| `nose.shape` | `none`（預設，不新增鼻形）、`triangle`、`round`、`heart`。 |
+| `nose.color` | 鼻子顏色，預設 `#C98784`。 |
+| `nose.freckles` | 是否加上鼻旁小斑點，預設 `false`。 |
+| `collar.enabled` | 是否顯示頸部項圈，預設 `false`。 |
+| `collar.color` | 項圈顏色，預設 `#A45E58`。 |
+| `bow.enabled` | 是否顯示蝴蝶結，預設 `false`。 |
+| `bow.color`、`bow.knotColor` | 蝴蝶結兩翼與中央結的顏色，預設分別為 `#C98784`、`#9F5B60`。 |
+| `bow.position` | `neck`（預設）、`leftEar`、`rightEar`；左右依正面觀看命名。 |
+
+項圈與蝴蝶結可以同時顯示。配件使用模板提供的附著位置，與部位一起繪製；本版不接受任意座標、外部配件圖片或更換身體輪廓。這些外觀設定不改動錄音取消／完成的點擊區域。
+
+角色包的 `appearance.json` 使用上例中 `appearance` 裡面的物件，不包含最外層的 `version` 與 `appearance`。包格式版本與角色版本另外放在 `manifest.json`，詳見[包格式 v1](docs/CAT-PACKS.md#外觀包格式-v1)。

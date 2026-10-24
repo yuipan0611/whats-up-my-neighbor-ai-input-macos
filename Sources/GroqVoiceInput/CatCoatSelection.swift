@@ -22,7 +22,29 @@ enum CatCoatSelection {
     /// Selects a complete preset without changing greetings, custom images or other settings.
     /// A detailed per-part appearance stays under the user's manual control.
     static func save(_ preset: String, to file: URL = CatConfiguration.directoryURL.appendingPathComponent("cat.config.json")) throws {
-        guard CatAppearance.presetIDs.contains(preset) else { throw Error.unknownCoat }
+        guard let appearance = CatAppearance.makePreset(preset) else { throw Error.unknownCoat }
+        try write(appearance, to: file, preservingCustomAppearance: true)
+    }
+
+    /// An explicit editor/import action replaces appearance only. Greetings,
+    /// custom HUD images and every unrelated preference remain in the document.
+    static func saveAppearance(_ appearance: CatAppearance,
+                              to file: URL = CatConfiguration.directoryURL.appendingPathComponent("cat.config.json")) throws {
+        try write(appearance, to: file, preservingCustomAppearance: false)
+    }
+
+    /// Setup documents may establish a first choice, but never overwrite an
+    /// existing configuration (including malformed files or dangling links).
+    static func mayApplyInitialPack(to file: URL = CatConfiguration.directoryURL.appendingPathComponent("cat.config.json")) -> Bool {
+        let manager = FileManager.default
+        return !manager.fileExists(atPath: file.path) &&
+            (try? manager.destinationOfSymbolicLink(atPath: file.path)) == nil
+    }
+
+    private static func write(_ appearance: CatAppearance, to file: URL, preservingCustomAppearance: Bool) throws {
+        guard let checked = try? CatAppearance.parse(appearance.jsonObject), checked == appearance else {
+            throw Error.invalidConfiguration
+        }
         let manager = FileManager.default
         var document: [String: Any] = [:]
         if (try? manager.destinationOfSymbolicLink(atPath: file.path)) != nil { throw Error.unsafeFile }
@@ -37,7 +59,7 @@ enum CatCoatSelection {
                 throw Error.invalidConfiguration
             }
             document = parsed
-            if document["appearance"] != nil {
+            if preservingCustomAppearance && document["appearance"] != nil {
                 // The bundled full examples resolve to the same preset. Only
                 // actual custom colors, patterns or seeds need manual care.
                 guard configuration.appearance == CatAppearance.makePreset(configuration.appearance.preset) else {
@@ -47,7 +69,7 @@ enum CatCoatSelection {
         }
 
         document["version"] = 2
-        document["appearance"] = ["preset": preset]
+        document["appearance"] = appearance.jsonObject
         let data = try JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys])
         guard data.count <= CatConfiguration.maximumFileBytes else { throw Error.configurationTooLarge }
 
@@ -57,7 +79,7 @@ enum CatCoatSelection {
         defer { try? manager.removeItem(at: validationFile) }
         try data.write(to: validationFile, options: .atomic)
         let validated = CatConfiguration.load(from: validationFile)
-        guard validated.loadError == nil, validated.appearance.preset == preset else { throw Error.invalidConfiguration }
+        guard validated.loadError == nil, validated.appearance == appearance else { throw Error.invalidConfiguration }
         try data.write(to: file, options: .atomic)
         try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
     }

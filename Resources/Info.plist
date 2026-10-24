@@ -26,6 +26,33 @@
     <string>13.0</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NekoCatPackSchemaVersion</key>
+    <integer>1</integer>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key><string>Neko 貓咪外觀包</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>LSHandlerRank</key><string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array><string>tw.panh.FreeVoiceType.cat-pack</string><string>tw.panh.FreeVoiceType.cat-setup</string></array>
+        </dict>
+    </array>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key><string>tw.panh.FreeVoiceType.cat-pack</string>
+            <key>UTTypeDescription</key><string>Neko 貓咪外觀包</string>
+            <key>UTTypeConformsTo</key><array><string>public.data</string><string>public.content</string></array>
+            <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>nekocat</string></array></dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key><string>tw.panh.FreeVoiceType.cat-setup</string>
+            <key>UTTypeDescription</key><string>Neko 首次貓咪設定</string>
+            <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+            <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>nekocatsetup</string></array></dict>
+        </dict>
+    </array>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>

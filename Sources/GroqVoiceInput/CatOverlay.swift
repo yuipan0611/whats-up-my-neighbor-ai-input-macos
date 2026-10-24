@@ -275,7 +275,7 @@ private final class CatArtworkView: NSView {
         transform.concat()
         let openings: [CGFloat] = [0, 3, 7, 4, 0, 0, 5, 7, 2, 0, 4, 0]
         let opening = openings[max(0, frame) % openings.count]
-        let ink = configuration.appearance.isOriginal
+        let ink = configuration.appearance.hasOriginalCoat
             ? NSColor(calibratedRed: 247 / 255, green: 247 / 255, blue: 249 / 255, alpha: 1)
             : CatAppearanceArtwork(configuration.appearance).ink(.muzzle, u: 0.5, v: 0.8)
         if opening > 0 {

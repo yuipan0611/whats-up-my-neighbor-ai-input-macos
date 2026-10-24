@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import unittest
 import sys
+import zipfile
 from unittest.mock import patch
 sys.dont_write_bytecode = True
 
@@ -47,6 +48,16 @@ def make_other_app(app):
     (app / "Contents/Resources").mkdir(parents=True)
     (app / "Contents/Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": "com.example.OtherVoiceInput"}))
     (app / "Contents/Resources/version-marker").write_bytes(b"other")
+
+
+def make_test_cat_pack(path):
+    """A data-only pack; import validation itself belongs to CatPackTests."""
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("manifest.json", json.dumps({
+            "schemaVersion": 1, "id": "custom-mochi", "name": "麻糬",
+            "version": "1.0.0", "templateId": "yui-cat-v1",
+        }))
+        archive.writestr("appearance.json", json.dumps({"preset": "tuxedo", "seed": 1, "parts": {}}))
 
 
 SYSTEM_TOOLS = ("pkill", "launchctl", "defaults", "security", "osascript", "open")
@@ -227,6 +238,7 @@ else: sys.exit(99)
             self.assertEqual(backups[0].read_bytes(), b"old")
             for relative, data in preserved.items():
                 self.assertEqual((profile / relative).read_bytes(), data, relative)
+            self.assertFalse((profile / "Library/Application Support/tw.panh.FreeVoiceType/IncomingCats").exists())
             # A corrupted replacement must fail before touching the working app.
             (source_app / "Contents/Resources/version-marker").write_bytes(b"tampered")
             result = subprocess.run(["zsh", str(installer)], env=environment, capture_output=True, text=True)
@@ -234,6 +246,145 @@ else: sys.exit(99)
             self.assertEqual((old_app / "Contents/Resources/version-marker").read_bytes(), b"new")
             for relative, data in preserved.items():
                 self.assertEqual((profile / relative).read_bytes(), data, relative)
+
+    def test_initial_cat_sidecar_is_bounded_before_install_and_keeps_settings(self):
+        with tempfile.TemporaryDirectory(prefix="neko-first-cat-") as directory:
+            base = Path(directory)
+            profile = base / "disposable profile"
+            package = base / "custom delivery"
+            package.mkdir()
+            source_app = package / "AI語音輸入.app"
+            installed_app = profile / "Applications/AI語音輸入.app"
+            make_test_app(source_app, b"new")
+            make_test_app(installed_app, b"old")
+            installer = package / "安裝.command"
+            shutil.copy(ROOT / "Packaging/安裝.command", installer)
+            setup = package / "FirstCat.nekocatsetup"
+            config = profile / "Library/Application Support/tw.panh.FreeVoiceType/cat.config.json"
+            config.parent.mkdir(parents=True)
+            config.write_text('{"version":2,"reply":"保留問候","appearance":{"preset":"white"}}')
+            preserved = config.read_bytes()
+            environment = dict(os.environ, NEKO_INSTALL_TEST_PROFILE=str(profile))
+            marker = installed_app / "Contents/Resources/version-marker"
+
+            outside = base / "outside.nekocat"
+            make_test_cat_pack(outside)
+            for invalid in ("symlink", "directory", "oversized", "empty"):
+                with self.subTest(sidecar=invalid):
+                    if invalid == "symlink":
+                        setup.symlink_to(outside)
+                    elif invalid == "directory":
+                        setup.mkdir()
+                    else:
+                        setup.write_bytes(b"x" * (1048577 if invalid == "oversized" else 0))
+                    result = subprocess.run(["zsh", str(installer)], env=environment, capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(marker.read_bytes(), b"old")
+                    self.assertEqual(config.read_bytes(), preserved)
+                    self.assertFalse(list(installed_app.parent.glob(".neighbor-update.*")))
+                    if setup.is_dir() and not setup.is_symlink():
+                        setup.rmdir()
+                    else:
+                        setup.unlink()
+
+            make_test_cat_pack(setup)
+            setup_bytes = setup.read_bytes()
+            incoming = config.parent / "IncomingCats"
+            outside_inbox = base / "unrelated inbox"
+            outside_inbox.mkdir()
+            sentinel = outside_inbox / "keep.txt"
+            sentinel.write_bytes(b"untouched")
+            incoming.symlink_to(outside_inbox, target_is_directory=True)
+            redirected = subprocess.run(["zsh", str(installer)], env=environment, capture_output=True, text=True)
+            self.assertNotEqual(redirected.returncode, 0)
+            self.assertEqual(marker.read_bytes(), b"old")
+            self.assertEqual(list(outside_inbox.iterdir()), [sentinel])
+            self.assertEqual(sentinel.read_bytes(), b"untouched")
+            incoming.unlink()
+
+            result = subprocess.run(["zsh", str(installer)], env=environment, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(marker.read_bytes(), b"new")
+            self.assertEqual(config.read_bytes(), preserved)
+            self.assertEqual(setup.read_bytes(), setup_bytes)
+            # The installer only adds a bounded pending document, never
+            # unpacks a cat or changes the selected appearance. Its snapshot
+            # survives cleanup of the original downloaded delivery.
+            self.assertFalse((config.parent / "Cats").exists())
+            pending = list(incoming.glob("*.nekocatsetup"))
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0].read_bytes(), setup_bytes)
+            self.assertEqual(incoming.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(pending[0].stat().st_mode & 0o777, 0o600)
+            setup.unlink()
+            self.assertEqual(pending[0].read_bytes(), setup_bytes)
+            # Test mode must not launch an app or deliver a document event.
+            self.assertNotIn("客製貓咪包已交給 App", result.stdout)
+
+    def test_custom_delivery_reuses_signed_app_and_keeps_pack_separate(self):
+        with tempfile.TemporaryDirectory(prefix="neko-custom-package-") as directory:
+            base = Path(directory)
+            app = base / "build with spaces/AI語音輸入.app"
+            make_test_app(app, b"one-shared-app")
+            original = tree_snapshot(app)
+            cat = base / "麻糬.nekocat"
+            make_test_cat_pack(cat)
+            app_alias = base / "source-app-alias"
+            app_alias.symlink_to(app, target_is_directory=True)
+            inside_bundle = subprocess.run([
+                "zsh", str(ROOT / "scripts/package-custom-cat.sh"), str(app), str(cat),
+                str(app_alias / "new folder/inside.zip"),
+            ], capture_output=True, text=True)
+            self.assertNotEqual(inside_bundle.returncode, 0)
+            self.assertEqual(tree_snapshot(app), original)
+            self.assertFalse((app / "new folder").exists())
+            output = base / "output with spaces/Mochi macOS.zip"
+            result = subprocess.run([
+                "zsh", str(ROOT / "scripts/package-custom-cat.sh"), str(app), str(cat), str(output),
+            ], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(tree_snapshot(app), original)
+            subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True, capture_output=True)
+            # Exercise the native macOS delivery, including its Unicode file
+            # names and resource metadata, instead of assuming Python's ZIP
+            # filename decoding matches ditto's archive conventions.
+            extracted = base / "extracted delivery"
+            subprocess.run(["ditto", "-x", "-k", str(output), str(extracted)], check=True, capture_output=True)
+            delivery = extracted / "NekoNode-客製貓咪"
+            self.assertTrue(delivery.is_dir())
+            self.assertEqual((delivery / "FirstCat.nekocatsetup").read_bytes(), cat.read_bytes())
+            self.assertEqual((delivery / "我的貓.nekocat").read_bytes(), cat.read_bytes())
+            delivered_app = delivery / "AI語音輸入.app"
+            self.assertEqual(tree_snapshot(delivered_app), original)
+            subprocess.run(["codesign", "--verify", "--deep", "--strict", str(delivered_app)], check=True, capture_output=True)
+            self.assertFalse(list((delivered_app / "Contents").rglob("*.nekocat")))
+            self.assertFalse(list((delivered_app / "Contents").rglob("*.nekocatsetup")))
+            installer = (delivery / "安裝.command").read_text()
+            self.assertIn('open -a "$TARGET_APP" "$PENDING_CAT"', installer)
+            checksum = Path(str(output) + ".sha256").read_text().split()[0]
+            self.assertEqual(checksum, hashlib.sha256(output.read_bytes()).hexdigest())
+            archive_bytes = output.read_bytes()
+            repeated = subprocess.run([
+                "zsh", str(ROOT / "scripts/package-custom-cat.sh"), str(app), str(cat), str(output),
+            ], capture_output=True, text=True)
+            self.assertNotEqual(repeated.returncode, 0)
+            self.assertEqual(output.read_bytes(), archive_bytes)
+            # A valid older app without a pack capability must not be sold as
+            # a custom first-use installer just because its bundle ID matches.
+            legacy = base / "legacy/AI語音輸入.app"
+            make_test_app(legacy, b"older-build")
+            legacy_info = legacy / "Contents/Info.plist"
+            info = plistlib.loads(legacy_info.read_bytes())
+            info.pop("NekoCatPackSchemaVersion", None)
+            legacy_info.write_bytes(plistlib.dumps(info))
+            subprocess.run(["codesign", "--force", "--sign", "-", "--requirements", '=designated => identifier "tw.panh.FreeVoiceType"', str(legacy)], check=True, capture_output=True)
+            legacy_output = base / "legacy.zip"
+            unsupported = subprocess.run([
+                "zsh", str(ROOT / "scripts/package-custom-cat.sh"), str(legacy), str(cat), str(legacy_output),
+            ], capture_output=True, text=True)
+            self.assertNotEqual(unsupported.returncode, 0)
+            self.assertIn("尚未支援角色包", unsupported.stderr)
+            self.assertFalse(legacy_output.exists())
 
     def test_install_and_uninstall_dialogs_never_block_unattended_runs(self):
         for name, count in (("安裝.command", 2), ("移除.command", 1)):

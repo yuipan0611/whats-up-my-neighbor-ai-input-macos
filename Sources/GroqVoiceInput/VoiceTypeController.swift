@@ -3,6 +3,7 @@ import AVFoundation
 import ApplicationServices
 import Carbon
 import Security
+import UniformTypeIdentifiers
 
 final class VoiceTypeController: NSObject, NSApplicationDelegate {
     private let statusMenu = StatusMenuController()
@@ -19,6 +20,11 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     private let recordingStore = TemporaryRecordingStore()
     private let micRecorder = PinnedMicrophoneRecorder()
     private var catConfiguration = CatConfiguration.load()
+    private let catPackStore = CatPackStore()
+    private lazy var catPackImporter = CatPackImporter(store: catPackStore)
+    private var catCustomizationWindow: CatCustomizationWindowController?
+    private var pendingCatDocuments: [URL] = []
+    private var catDocumentsReady = false
     private var recordingCatImage: NSImage? {
         guard catConfiguration.image == nil, let original = NekoAppearance.catImage else { return NekoAppearance.catImage }
         return CatAppearanceArtwork(catConfiguration.appearance).image(original, layout: .hud)
@@ -141,6 +147,9 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         correctionMonitor.onStatus = { [weak self] in self?.vocabularyLearning.report($0) }
         configureRemoteInput()
         registerHotKey()
+        catDocumentsReady = true
+        enqueuePendingInitialCats()
+        processPendingCatDocuments()
         requestPermissions()
         appUpdater.start()
 
@@ -158,6 +167,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        catCustomizationWindow?.close()
         meteringTimer?.invalidate()
         clipboardHistory.stop()
         clipboardPicker.dismiss()
@@ -181,10 +191,37 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         return false
     }
 
+    /// Finder and the installer use the same open-document route, including
+    /// when Launch Services has already started this menu-bar application.
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        guard filenames.count <= 16 else {
+            sender.reply(toOpenOrPrint: .failure)
+            return
+        }
+        var accepted = false
+        for filename in filenames {
+            let url = URL(fileURLWithPath: filename).standardizedFileURL
+            guard ["nekocat", "nekocatsetup"].contains(url.pathExtension.lowercased()) else { continue }
+            if pendingCatDocuments.contains(url) {
+                accepted = true
+            } else if pendingCatDocuments.count < 16 {
+                pendingCatDocuments.append(url)
+                accepted = true
+            }
+        }
+        sender.reply(toOpenOrPrint: accepted ? .success : .failure)
+        if catDocumentsReady {
+            DispatchQueue.main.async { [weak self] in self?.processPendingCatDocuments() }
+        }
+    }
+
     private func configureStatusItem() {
         statusMenu.configure(target: self, toggleTitle: toggleMenuTitle(), relayTitle: relayMenuTitle(), clipboardMenu: clipboardHistoryMenu.menu, actions: [
             "openCatSettings": #selector(openCatSettings),
             "selectCatCoat": #selector(selectCatCoat(_:)),
+            "customizeCat": #selector(customizeCat),
+            "importCatPack": #selector(importCatPack),
+            "exportCurrentCat": #selector(exportCurrentCat),
             "showVocabularyWindow": #selector(showVocabularyWindow),
             "showNekoPreview": #selector(showNekoPreview),
             "toggleDesktopPet": #selector(toggleDesktopPet),
@@ -212,6 +249,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         updateTextOutputModeMenu()
         statusMenu.updateNekoPosition(nekoHUD.position)
         statusMenu.updateCatCoat(catConfiguration.appearance.preset)
+        refreshCatPackMenu()
         updateRelayMenu()
         renderDictationState(.idle)
     }
@@ -793,6 +831,9 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             dictationTarget = nil
             targetCaptureFailure = nil
             resetStatus()
+            if catDocumentsReady, !pendingCatDocuments.isEmpty {
+                DispatchQueue.main.async { [weak self] in self?.processPendingCatDocuments() }
+            }
         case .starting:
             statusMenu.updateIcon(.processing, description: "準備錄音")
         case .recording:
@@ -847,18 +888,163 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             return
         }
         do {
-            try CatCoatSelection.save(preset)
-            catConfiguration = catConfiguration.replacingAppearance(appearance)
-            // Keep existing controllers, focus and the pet's position. Hide
-            // transient previews so the selected desktop cat is visible now.
-            nekoHUD.hide()
-            catOverlay.hide()
-            nekoHUD.setImage(catConfiguration.imageData.flatMap(NSImage.init(data:)) ?? recordingCatImage)
-            catOverlay.setAppearance(appearance)
-            desktopPet.show(appearance: appearance)
-            statusMenu.updateCatCoat(preset)
+            // Imported/editor cats remain in the library while a built-in
+            // coat is selected. Preserve manually authored unknown configs.
+            if selectedCatPack() != nil {
+                try CatCoatSelection.saveAppearance(appearance)
+            } else {
+                try CatCoatSelection.save(preset)
+            }
+            settings.saveSelectedCatPackID(nil)
+            displayCatAppearance(appearance)
         } catch {
             showError(error.localizedDescription)
+        }
+    }
+
+    private func displayCatAppearance(_ appearance: CatAppearance) {
+        catConfiguration = catConfiguration.replacingAppearance(appearance)
+        // The same controllers retain position, current pose and agent state.
+        nekoHUD.hide()
+        catOverlay.hide()
+        nekoHUD.setImage(catConfiguration.imageData.flatMap(NSImage.init(data:)) ?? recordingCatImage)
+        catOverlay.setAppearance(appearance)
+        desktopPet.show(appearance: appearance)
+        statusMenu.updateCatCoat(appearance.preset)
+        refreshCatPackMenu()
+    }
+
+    private func selectedCatPack() -> CatPack? {
+        guard let id = settings.loadSelectedCatPackID(),
+              let pack = try? catPackStore.load(id: id),
+              pack.appearance == catConfiguration.appearance else { return nil }
+        return pack
+    }
+
+    private func refreshCatPackMenu() {
+        let packs = (try? catPackStore.list()) ?? []
+        statusMenu.updateCatPacks(packs, selectedID: selectedCatPack()?.manifest.id,
+                                 target: self, action: #selector(selectInstalledCat(_:)))
+    }
+
+    private func requireCatEditingIdle() throws {
+        guard dictation.state == .idle else {
+            throw NSError(domain: "CatCustomization", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "請先完成目前的錄音或辨識，再套用貓咪外觀。"])
+        }
+    }
+
+    private func activateCatPack(_ pack: CatPack) throws {
+        try requireCatEditingIdle()
+        try CatCoatSelection.saveAppearance(pack.appearance)
+        displayActiveCatPack(pack)
+    }
+
+    private func displayActiveCatPack(_ pack: CatPack) {
+        settings.saveSelectedCatPackID(pack.manifest.id)
+        displayCatAppearance(pack.appearance)
+    }
+
+    @objc private func selectInstalledCat(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        do { try activateCatPack(catPackStore.load(id: id)) }
+        catch { showError(error.localizedDescription) }
+    }
+
+    @objc private func customizeCat() {
+        if let existing = catCustomizationWindow, existing.window?.isVisible == true {
+            existing.showWindow(nil)
+            return
+        }
+        let pack = selectedCatPack()
+        let draftID = pack?.manifest.id ?? "custom-" + UUID().uuidString.lowercased()
+        let editor = CatCustomizationWindowController(appearance: catConfiguration.appearance,
+                                                      name: pack?.manifest.name ?? "我的貓咪")
+        editor.onSave = { [weak self] appearance, name in
+            guard let self else { return }
+            try self.requireCatEditingIdle()
+            let updated = CatPack(manifest: CatPackManifest(id: draftID, name: name), appearance: appearance)
+            try self.catPackImporter.saveAndActivate(updated)
+            self.displayActiveCatPack(updated)
+        }
+        editor.onExport = { [weak self] appearance, name, preview in
+            guard let self else { return false }
+            return try self.exportCat(CatPack(manifest: CatPackManifest(id: draftID, name: name),
+                                             appearance: appearance, previewPNG: preview))
+        }
+        catCustomizationWindow = editor
+        editor.showWindow(nil)
+    }
+
+    @objc private func importCatPack() {
+        let panel = NSOpenPanel()
+        panel.title = "匯入貓咪"
+        panel.prompt = "匯入並套用"
+        panel.allowedContentTypes = [UTType(exportedAs: "tw.panh.FreeVoiceType.cat-pack")]
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try requireCatEditingIdle()
+            let result = try catPackImporter.importDocument(from: url, initial: false)
+            displayActiveCatPack(result.pack)
+        } catch { showError(error.localizedDescription) }
+    }
+
+    @objc private func exportCurrentCat() {
+        let pack = selectedCatPack() ?? CatPack(
+            manifest: CatPackManifest(id: "custom-" + UUID().uuidString.lowercased(), name: catConfiguration.appearance.title),
+            appearance: catConfiguration.appearance)
+        do { _ = try exportCat(pack) }
+        catch { showError(error.localizedDescription) }
+    }
+
+    private func exportCat(_ pack: CatPack) throws -> Bool {
+        let panel = NSSavePanel()
+        panel.title = "匯出貓咪包"
+        panel.prompt = "匯出"
+        panel.allowedContentTypes = [UTType(exportedAs: "tw.panh.FreeVoiceType.cat-pack")]
+        panel.canCreateDirectories = true
+        let safeName = pack.manifest.name.replacingOccurrences(of: "/", with: "・").replacingOccurrences(of: ":", with: "・")
+        panel.nameFieldStringValue = safeName + ".nekocat"
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return false }
+        try CatPackArchive.write(pack, to: url)
+        return true
+    }
+
+    private func enqueuePendingInitialCats() {
+        let directory = CatConfiguration.directoryURL.appendingPathComponent("IncomingCats", isDirectory: true)
+        guard let values = try? directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]),
+              values.isDirectory == true, values.isSymbolicLink != true,
+              let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
+        for url in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+            where url.pathExtension.lowercased() == "nekocatsetup" && pendingCatDocuments.count < 16 {
+            if !pendingCatDocuments.contains(url.standardizedFileURL) { pendingCatDocuments.append(url.standardizedFileURL) }
+        }
+    }
+
+    private func processPendingCatDocuments() {
+        guard catDocumentsReady, dictation.state == .idle, !pendingCatDocuments.isEmpty else { return }
+        let documents = pendingCatDocuments
+        pendingCatDocuments.removeAll()
+        for url in documents {
+            let inbox = CatConfiguration.directoryURL.appendingPathComponent("IncomingCats").standardizedFileURL
+            let isInboxCopy = url.deletingLastPathComponent().standardizedFileURL == inbox
+            // Startup scanning may finish before the installer's open event.
+            if isInboxCopy, !FileManager.default.fileExists(atPath: url.path) { continue }
+            do {
+                let isInitial = url.pathExtension.lowercased() == "nekocatsetup"
+                let result = try catPackImporter.importDocument(from: url, initial: isInitial)
+                if result.applied { displayActiveCatPack(result.pack) }
+                else { refreshCatPackMenu() }
+                // Only remove our own installer inbox copy, never a user's
+                // downloaded/shared source document.
+                if isInitial, isInboxCopy {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            } catch { showError("貓咪包未套用：\(error.localizedDescription)") }
         }
     }
 
