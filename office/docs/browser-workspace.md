@@ -2,6 +2,8 @@
 
 日期：2026-10-24（Asia/Taipei）。本文件記錄 Agent Zero 評估後的第一個實作切片，並非正式 VPS 已完成部署的宣告。
 
+後續的觀看／私人接管、Office 整合與獨立服務配置見 [第二切片：工作瀏覽器](browser-viewer.md)。本頁下面的「尚未」描述保留第一切片的驗收範圍。
+
 ## 決定
 
 採用「VPS 上的真實 Chrome、專用持久 profile、使用者與 Agent 操作同一 session」的方向。第一步只完成可獨立驗證的瀏覽器生命週期與 profile 管理，下一步才串接已認證的觀看／接管入口。現有 Office 任務、SQLite 事件、HTTP/WebSocket、Codex/Gemma 執行者不依賴 Agent Zero 的內部類別。

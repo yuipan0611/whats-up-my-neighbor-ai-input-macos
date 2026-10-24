@@ -7,6 +7,7 @@ import contextlib
 import fcntl
 import hashlib
 import hmac
+import importlib.util
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -1064,7 +1065,7 @@ class Server(ThreadingHTTPServer):
     PER_DEVICE = 2
     LOCAL_SOCKETS = 8
 
-    def __init__(self, port, office, public_origin=None):
+    def __init__(self, port, office, public_origin=None, browser_socket=None):
         self.office = office
         self.token = secrets.token_urlsafe(32)
         self.key = secrets.token_bytes(32)
@@ -1079,6 +1080,16 @@ class Server(ThreadingHTTPServer):
         self.limiter = PairLimiter()
         self.sockets, self.sockets_lock = [], threading.Lock()
         self.stopping = threading.Event()
+        self.browser = None
+        if browser_socket is not None:
+            # Optional adapter is stdlib-only. Chrome dependencies remain in
+            # their separate process and memory budget. The production service
+            # uses python -I: load only the sibling file, never the working dir.
+            spec = importlib.util.spec_from_file_location('neighbor_browser_proxy', Path(__file__).with_name('browser_proxy.py'))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            self.browser = module.BrowserProxy(browser_socket)
+            self.browser_error = module.BrowserProxyError
         super().__init__(('127.0.0.1', port), Handler)
 
     def device_token(self, device_id):
@@ -1102,9 +1113,13 @@ class Server(ThreadingHTTPServer):
             for sock in self.sockets:
                 if sock.device_id == device_id:
                     sock.kick_code = 4401
+        if self.browser:
+            self.browser.kick_device(device_id)
 
     def shutdown(self):
         self.stopping.set()
+        if self.browser:
+            self.browser.shutdown()
         super().shutdown()
 
 
@@ -1119,16 +1134,20 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
-    def send(self, code, value, content_type='application/json; charset=utf-8', download=False, headers=None):
+    def send(self, code, value, content_type='application/json; charset=utf-8', download=False, headers=None, browser=False):
         data = json.dumps(value, ensure_ascii=False).encode() if content_type.startswith('application/json') else (value.encode() if isinstance(value, str) else value)
         connect = f" connect-src 'self' wss://{self.server.public_host};" if self.mode == 'public' else ''
+        images = "'self' data: blob:" if browser else "'self'"
         self.send_response(code)
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(data)))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('X-Frame-Options', 'DENY')
-        self.send_header('Content-Security-Policy', f"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self';{connect} frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        self.send_header('Content-Security-Policy', f"default-src 'self'; script-src 'self'; style-src 'self'; img-src {images};{connect} frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        if browser:
+            self.send_header('Referrer-Policy', 'no-referrer')
+            self.send_header('Permissions-Policy', 'camera=(), microphone=(), clipboard-read=(), clipboard-write=()')
         if self.mode == 'public':
             self.send_header('Strict-Transport-Security', 'max-age=31536000')
         for key, value in (headers or {}).items():
@@ -1214,8 +1233,18 @@ class Handler(BaseHTTPRequestHandler):
         try:
             parts = urlsplit(self.path)
             path = parts.path
-            self.boundary(upgrade=path == '/api/ws')
+            self.boundary(upgrade=path in ('/api/ws', '/api/browser/ws'))
             office = self.server.office
+            if path.startswith('/browser/') or path.startswith('/api/browser/'):
+                try:
+                    self.authenticate()
+                except OfficeError as error:
+                    if path == '/browser/' and error.code == 401:
+                        self.send(401, '<!doctype html><html lang="zh-Hant"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>先配對裝置</title><h1>先配對這台裝置</h1><p><a href="/">返回辦公室完成配對</a>，再開啟工作瀏覽器。</p></html>', 'text/html; charset=utf-8')
+                        return
+                    raise
+                self.browser_request(path)
+                return
             if not path.startswith('/api/'):
                 file, mime = self.static_file(path)
                 if file is None:
@@ -1257,6 +1286,7 @@ class Handler(BaseHTTPRequestHandler):
                 provider['last_success'] = success[0] if success else None
                 self.send(200, {'service': 'neighbor-office', 'version': VERSION, 'model': office.model.health(),
                                'provider': provider, 'paused': office.store.paused(),
+                               'browser_enabled': self.server.browser is not None,
                                'external_connected': provider['authenticated'] and bool(success),
                                'worker_running': bool(office.thread and office.thread.is_alive())})
             elif path == '/api/tasks':
@@ -1299,7 +1329,8 @@ class Handler(BaseHTTPRequestHandler):
                 size = int(self.headers.get('Content-Length', '0'))
             except ValueError:
                 raise OfficeError('請求長度不正確。')
-            if not 0 < size <= (24 * 1024 * 1024 if path == '/api/attachments' else 200000):
+            limit = 4096 if path.startswith('/api/browser/') else (24 * 1024 * 1024 if path == '/api/attachments' else 200000)
+            if not 0 < size <= limit:
                 raise OfficeError('請求大小超過上限。', 413)
             body = json.loads(self.rfile.read(size))
             if not isinstance(body, dict):
@@ -1310,7 +1341,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.authenticate()
             self.check_token()
-            if path == '/api/command':
+            if path.startswith('/api/browser/'):
+                self.browser_request(path, body)
+            elif path == '/api/command':
                 self.send(202, office.command(body))
             elif path == '/api/files':
                 self.send(201, office.store.upload(body.get('name'), body.get('text')))
@@ -1338,6 +1371,21 @@ class Handler(BaseHTTPRequestHandler):
             self.send(400, {'error': '請求格式不正確。'})
         except Exception:
             self.send(500, {'error': '操作失敗，請重新整理後檢查任務紀錄。'})
+
+    def browser_request(self, path, body=None):
+        if self.server.browser is None:
+            self.send(503, {'error': 'browser_disabled'})
+            return
+        device = self.device['id'] if self.mode == 'public' else 'local-owner'
+        try:
+            if path == '/api/browser/ws' and body is None:
+                self.server.browser.websocket(self, device)
+                return
+            status, value, mime = self.server.browser.request(
+                'GET' if body is None else 'POST', path, device, body)
+            self.send(status, value, mime, browser=True)
+        except self.server.browser_error as error:
+            self.send(error.status, {'error': error.code})
 
     def pair(self, body):
         if self.mode != 'public':
@@ -1542,6 +1590,7 @@ def main():
     parser.add_argument('--model', default='gemma3:4b')
     parser.add_argument('--port', type=int, default=8421)
     parser.add_argument('--public-origin', help='e.g. https://office.nekonode.cloud; enables paired phone access through a TLS proxy')
+    parser.add_argument('--browser-socket', type=Path, help='Optional private Unix socket of the separate browser service')
     args = parser.parse_args()
     os.umask(0o077)
     store = Store(args.data)
@@ -1551,7 +1600,7 @@ def main():
     except BlockingIOError:
         raise SystemExit('Office is already running for this data directory')
     office = Office(store, Ollama(args.model, managed=True), CodexAgent(args.data.parent / 'runtime'))
-    server = Server(args.port, office, args.public_origin)
+    server = Server(args.port, office, args.public_origin, args.browser_socket)
     # Exclusive server bind happens before worker start, so an accidental second
     # process cannot consume queued tasks. Deployment is one user service.
     office.start()

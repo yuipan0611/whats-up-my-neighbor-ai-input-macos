@@ -1,0 +1,5 @@
+# Optional user-systemd drop-in: neighbor-office.service.d/browser.conf
+# Preserve the actual deployment's origin/model/data options when installing.
+[Service]
+ExecStart=
+ExecStart=/usr/bin/python3 -I %h/neighbor-office/current/office.py --data %h/neighbor-office/data --model gemma3:4b --port 8421 --public-origin https://office.nekonode.cloud --browser-socket %t/neighbor-browser/gateway.sock
