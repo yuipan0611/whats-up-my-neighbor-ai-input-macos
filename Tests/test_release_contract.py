@@ -29,12 +29,15 @@ signing = load_module("signing_validator", ROOT / "scripts/validate-signing.py")
 temporary_keychain = load_module("temporary_keychain", ROOT / "scripts/temporary-keychain.py")
 
 
-def make_test_app(app, marker):
+def make_test_app(app, marker, version=None):
     """Tiny ad-hoc signed app carrying the release designated requirement."""
     (app / "Contents/MacOS").mkdir(parents=True)
     (app / "Contents/Resources").mkdir()
     shutil.copy("/usr/bin/true", app / "Contents/MacOS/FreeVoiceType")
-    (app / "Contents/Info.plist").write_bytes((ROOT / "Resources/Info.plist").read_bytes())
+    info = plistlib.loads((ROOT / "Resources/Info.plist").read_bytes())
+    if version:
+        info["CFBundleShortVersionString"], info["CFBundleVersion"] = version
+    (app / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
     (app / "Contents/Resources/version-marker").write_bytes(marker)
     subprocess.run(["codesign", "--force", "--sign", "-", "--requirements", '=designated => identifier "tw.panh.FreeVoiceType"', str(app)], check=True, capture_output=True)
 
@@ -165,8 +168,8 @@ else: sys.exit(99)
             shutil.copy(ROOT / "Packaging/安裝.command", installer)
             old_app = profile / "Library/Application Support/AI語音輸入/AI語音輸入.app"
             source_app = package / "AI語音輸入.app"
-            for app, marker in [(old_app, b"old"), (source_app, b"new")]:
-                make_test_app(app, marker)
+            make_test_app(old_app, b"old", ("1.0.0", "1000"))
+            make_test_app(source_app, b"new")
             preserved = {
                 "Library/Application Support/tw.panh.FreeVoiceType/cat.config.json": '{"version":1,"reply":"保留我的貓🐈"}'.encode(),
                 "Library/Application Support/tw.panh.FreeVoiceType/custom-cat.png": b"test-image-snapshot",
@@ -182,6 +185,11 @@ else: sys.exit(99)
             environment = dict(os.environ, NEKO_INSTALL_TEST_PROFILE=str(profile))
             result = subprocess.run(["zsh", str(installer)], env=environment, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
+            info = plistlib.loads((ROOT / "Resources/Info.plist").read_bytes())
+            current = f'{info["CFBundleShortVersionString"]}（build {info["CFBundleVersion"]}）'
+            # Agents and people need to tell an update from a fresh install.
+            self.assertIn(f"安裝類型：更新 1.0.0（build 1000） → {current}", result.stdout)
+            self.assertIn("可以把舊版備份資料夾丟到垃圾桶", result.stdout)
             self.assertEqual((old_app / "Contents/Resources/version-marker").read_bytes(), b"new")
             self.assertFalse((profile / "Applications/AI語音輸入.app").exists())
             backups = list(old_app.parent.glob(".neighbor-update.*/Previous.app/Contents/Resources/version-marker"))
@@ -196,6 +204,18 @@ else: sys.exit(99)
             self.assertEqual((old_app / "Contents/Resources/version-marker").read_bytes(), b"new")
             for relative, data in preserved.items():
                 self.assertEqual((profile / relative).read_bytes(), data, relative)
+
+    def test_installer_dialogs_never_block_unattended_installs(self):
+        script = (ROOT / "Packaging/安裝.command").read_text()
+        self.assertIn('"${NEKO_INSTALL_NO_DIALOG:-}" == 1', script)
+        dialogs = [line for line in script.splitlines() if "osascript" in line]
+        self.assertEqual(len(dialogs), 2)
+        for line in dialogs:
+            with self.subTest(line=line):
+                self.assertIn("giving up after", line)
+                # A dialog that fails after the app is installed must not turn
+                # a finished install into a reported failure.
+                self.assertTrue(line.rstrip().endswith("|| true"))
 
     def test_one_line_installer_pins_archive_and_reuses_bundled_installer(self):
         template = (ROOT / "Packaging/install.sh.template").read_text()
@@ -227,6 +247,8 @@ else: sys.exit(99)
             self.assertFalse(profile.exists())
             result = install(hashlib.sha256(archive.read_bytes()).hexdigest())
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("安裝類型：全新安裝", result.stdout)
+            self.assertNotIn("備份資料夾", result.stdout)
             installed = profile / "Applications/AI語音輸入.app"
             self.assertEqual((installed / "Contents/Resources/version-marker").read_bytes(), b"new")
             self.assertTrue((profile / "Library/LaunchAgents/tw.panh.FreeVoiceType.plist").is_file())

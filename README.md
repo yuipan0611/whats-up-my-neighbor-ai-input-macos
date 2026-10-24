@@ -81,14 +81,16 @@ What's up my neighbor 是輕量的原生 macOS 選單列語音輸入 App。在�
 
 ### 下載 ZIP
 
-1. 到 [Releases](https://github.com/yuipan0611/whats-up-my-neighbor-ai-input-macos/releases/latest) 下載最新 ZIP 並解壓縮。
+1. 到 [Releases](https://github.com/yuipan0611/whats-up-my-neighbor-ai-input-macos/releases/latest) 下載 `Groq-AI-Voice-Input-macOS-v<版本>.zip` 並解壓縮。同一頁的 `Neighbor-macOS-<版本>.zip` 是 App 內更新用的，不用下載。
 2. 第一次請對 `安裝.command` 按右鍵選「打開」（免費版沒有 Apple 公證）。仍被阻擋時，到「系統設定 → 隱私權與安全性」按「仍要打開」。
 3. 依首次啟動畫面貼上自己的 Groq API Key，並允許「麥克風」與「輔助使用」權限。
 4. 在任何文字欄位按 `⌥↑` 開始錄音，再按一次停止。
 
 目前最新正式版尚未附帶一行安裝腳本；請使用上述 ZIP 安裝方式。未來版本若附帶腳本，再依[完整指南](docs/GUIDE.md#一行指令安裝熟悉終端機)操作。
 
-也可以把 repo 連結交給 Claude Code、Codex 這類 AI 代為安裝，提示詞見[直接交給 AI 安裝](docs/GUIDE.md#直接交給-ai-安裝)。
+已經裝過的話，安裝工具會沿用原本的位置與設定。找不到 App，或想確認安裝結果，見[安裝位置、名稱對照與驗證](docs/GUIDE.md#安裝位置名稱對照與驗證)。
+
+也可以交給 Claude Code、Codex 這類 AI 代為安裝：整段貼上[直接交給 AI 安裝](docs/GUIDE.md#直接交給-ai-安裝)裡的提示詞。
 
 ### Groq API Key
 

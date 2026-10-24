@@ -100,6 +100,11 @@ open build/AI語音輸入.app
 
 會在 `dist/` 產生和正式發布相同結構的 ZIP 與 `.sha256`，裡面有 `安裝.command` 與 `移除.command`。這個開發包是 ad-hoc 簽章，只適合自己測試；正式發布由 GitHub Actions 用固定憑證簽署，流程在 [UPDATES.md](UPDATES.md)。
 
+`安裝.command` 有兩個環境變數：
+
+- `NEKO_INSTALL_NO_DIALOG=1`：照常安裝並開啟 App，但不跳「安裝完成」與「安裝未完成」視窗，給 AI 或腳本無人值守安裝用。不設定時，視窗也會在 2 分鐘後自動關閉。
+- `NEKO_INSTALL_TEST_PROFILE=<拋棄式資料夾>`：只給離線測試用。把整個安裝裝進這個資料夾，不停止 App、不動登入啟動、不跳視窗，也不碰真實使用者資料，用法見 `Tests/test_release_contract.py`。
+
 ## 專案結構
 
 ```text

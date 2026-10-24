@@ -84,12 +84,16 @@ What's up my neighbor は、軽量なネイティブ macOS メニューバー音
 
 ### ZIP をダウンロード
 
-1. [Releases](https://github.com/yuipan0611/whats-up-my-neighbor-ai-input-macos/releases/latest) から最新の ZIP をダウンロードして展開します。
+1. [Releases](https://github.com/yuipan0611/whats-up-my-neighbor-ai-input-macos/releases/latest) から `Groq-AI-Voice-Input-macOS-v<バージョン>.zip` をダウンロードして展開します。同じページの `Neighbor-macOS-<バージョン>.zip` はアプリ内アップデート用なので不要です。
 2. 無料版は Apple の公証を受けていないため、初回は `安裝.command` を右クリックして「開く」を選びます。それでもブロックされる場合は「システム設定 → プライバシーとセキュリティ」で「このまま開く」を押します。
 3. 初回起動画面に従ってご自身の Groq API キーを貼り付け、「マイク」と「アクセシビリティ」を許可します。
 4. 任意のテキスト欄で `⌥↑` を押して録音を始め、もう一度押して止めます。
 
 現行の正式リリースには、1 行インストール用のスクリプトはまだ含まれていません。上記の ZIP 手順を使用してください。今後のリリースにスクリプトが含まれた場合は、[詳細ガイド](docs/GUIDE.md#一行指令安裝熟悉終端機)を参照してください。
+
+インストール済みの場合、インストーラーは既存の場所と設定をそのまま使います。アプリが見つからないときやインストール結果を確認したいときは、[インストール場所・名称対照・確認](docs/GUIDE.md#安裝位置名稱對照與驗證)（繁体字中国語）を参照してください。
+
+Claude Code や Codex などの AI にインストールを任せることもできます。[AI に任せる](docs/GUIDE.md#直接交給-ai-安裝)（繁体字中国語）のプロンプトを丸ごと貼り付けてください。
 
 ### Groq API キー
 

@@ -109,26 +109,28 @@ macOS 版加入 Sparkle：每日偵測新版並通知，由使用者自行選擇
 
 ## 直接交給 AI 安裝
 
-只要把這個 Repo 連結交給能操作 Mac 終端機的 AI，例如 Codex 或 Claude Code：
-
-```text
-https://github.com/yuipan0611/whats-up-my-neighbor-ai-input-macos
-```
-
-再貼上以下指令：
+把以下指令整段貼給能操作 Mac 終端機的 AI，例如 Codex 或 Claude Code：
 
 ```text
 請幫我安裝這個 GitHub Repo 的最新版 macOS App：
 https://github.com/yuipan0611/whats-up-my-neighbor-ai-input-macos
 
-請先閱讀 README、PRIVACY.md 與 Release 說明，再下載最新 Release 的 ZIP 和 .sha256，核對 SHA-256 後解壓縮並執行安裝工具。不要從原始碼或不明分支直接執行檔案，也不要移除或繞過 macOS quarantine；若 Gatekeeper 阻擋，請引導我使用右鍵「打開」或「系統設定 → 隱私權與安全性 → 仍要打開」。
+請先閱讀 README、PRIVACY.md、最新 Release 說明，以及 docs/GUIDE.md 的「直接交給 AI 安裝」與「安裝位置、名稱對照與驗證」，再照順序做：
 
-安裝後請確認 What's up my neighbor 正在執行、登入啟動項目存在，並告訴我如何允許麥克風與輔助使用權限。保留預設快捷鍵 Option + ↑，並告訴我可以從選單列的「設定快捷鍵…」自行更改。
+1. 先用「安裝前檢查」的指令看這台 Mac 是否裝過，告訴我這次是全新安裝、更新，還是重新安裝同一版，以及目前的安裝位置。
+2. 從最新 Release 下載首次安裝包 Groq-AI-Voice-Input-macOS-v<版本>.zip 和同名的 .sha256，放進一個新的空資料夾。不要下載 Neighbor-macOS-<版本>.zip（那是 App 內更新用的），也不要用 SHA256SUMS.txt 核對安裝包（它只列更新包）。
+3. 用 shasum -a 256 -c 核對 SHA-256，解壓縮後保留資料夾結構，先讀過 安裝.command 再執行。不要從原始碼或不明分支執行檔案、不要用 sudo，也不要移除或繞過 macOS quarantine。
+4. 用 NEKO_INSTALL_NO_DIALOG=1 zsh 安裝.command 執行。v1.4.5 和更早的安裝器不認得這個設定，最後會跳出「安裝完成！」視窗並一直等人按「好」：請在背景執行，並請我按「好」。
+5. 用「安裝後驗證」的指令確認 App 正在執行、版本正確、登入啟動項目存在，並把實際安裝位置告訴我。
 
-絕對不要要求我把 Groq API Key 貼進聊天、終端機、程式碼或設定檔。請啟動 App，讓我只在 App 自己的安全輸入視窗中建立並儲存 Groq API Key。
+安裝後告訴我如何允許麥克風與輔助使用權限。保留預設快捷鍵 Option + ↑，並告訴我可以從選單列的「設定快捷鍵…」自行更改。
+
+絕對不要要求我把 Groq API Key 貼進聊天、終端機、程式碼或設定檔，也不要讀出鑰匙圈裡的金鑰內容。請啟動 App，讓我只在 App 自己的安全輸入視窗中建立並儲存 Groq API Key。
 ```
 
-AI 應該完成下載、校驗、解壓縮與安裝；使用者只需要親自處理 macOS 安全確認、麥克風／輔助使用權限，以及在 App 內輸入自己的 Groq API Key。熟悉終端機時，也可以直接執行「下載與安裝」裡的一行指令。
+AI 應該完成檢查、下載、校驗、解壓縮、安裝與驗證；使用者只需要親自處理 macOS 安全確認、麥克風／輔助使用權限，以及在 App 內輸入自己的 Groq API Key。
+
+用 `curl` 或 `gh` 下載的檔案不帶 macOS 隔離標記（quarantine），所以 AI 安裝通常不會出現「仍要打開」的安全確認；真的出現時，再照「從 Release 下載 ZIP」的第 4、5 步處理。
 
 ## 特色
 
@@ -158,7 +160,25 @@ AI 應該完成下載、校驗、解壓縮與安裝；使用者只需要親自�
 
 ## 下載與安裝
 
+### 從 Release 下載 ZIP
+
+所有版本都適用這個方式。
+
+1. 到 GitHub 的 **Releases** 下載最新的 `Groq-AI-Voice-Input-macOS-v<版本>.zip`。同一頁的 `Neighbor-macOS-<版本>.zip` 是 App 內更新用的，不用下載。
+2. （選用）核對檔案：把同名的 `.sha256` 下載到同一個資料夾，在終端機進入該資料夾後執行 `shasum -a 256 -c Groq-AI-Voice-Input-macOS-v<版本>.zip.sha256`，看到 `OK` 就代表檔案完整。`SHA256SUMS.txt` 只列更新包，不能拿來核對這個 ZIP。
+3. 解壓縮，保留整個資料夾結構。
+4. 因為免費版沒有 Apple Developer ID 公證，第一次請對 `安裝.command` 按右鍵並選「打開」。
+5. 若 macOS 仍阻擋，前往「系統設定 → 隱私權與安全性」，找到提示並按「仍要打開」。
+6. 安裝完成後，App 會出現在選單列。已經裝過的話，會沿用原本的位置更新，不一定在「應用程式」資料夾，見「安裝位置、名稱對照與驗證」。
+7. 依首次啟動畫面取得並貼上自己的 Groq API Key。
+8. 允許「麥克風」與「輔助使用」權限。
+9. 在任何文字欄位按 `⌥↑` 開始錄音，再按一次停止。
+
+> 請勿使用別人的 Groq API Key。每位使用者應建立自己的 Key，額度與帳務也各自分開。
+
 ### 一行指令安裝（熟悉終端機）
+
+> **先確認能不能用**：只有 Release 附件裡有 `install.sh` 的版本才能用這行指令。v1.4.5 和更早的版本都沒有，執行會出現 `curl: (22) The requested URL returned error: 404`，請改用上方 ZIP 方式。
 
 打開「終端機」，貼上後按 Enter：
 
@@ -182,19 +202,69 @@ less install.sh
 zsh install.sh
 ```
 
-> 這行指令從第一個附帶 `install.sh` 的正式版開始可用；在那之前請用下方 ZIP 方式。
+由 AI 或腳本執行、沒有人能按視窗按鈕時，可以改用 `NEKO_INSTALL_NO_DIALOG=1 zsh install.sh`，略過「安裝完成！」視窗。這個設定從 v1.4.5 之後的安裝器開始支援；不設定時，新版的視窗也會在 2 分鐘後自動關閉。
 
-### 從瀏覽器下載 ZIP
+## 安裝位置、名稱對照與驗證
 
-1. 到 GitHub 的 **Releases** 下載最新 ZIP，解壓縮。
-2. 因為免費版沒有 Apple Developer ID 公證，第一次請對 `安裝.command` 按右鍵並選「打開」。
-3. 若 macOS 仍阻擋，前往「系統設定 → 隱私權與安全性」，找到提示並按「仍要打開」。
-4. 安裝完成後，App 會出現在選單列。
-5. 依首次啟動畫面取得並貼上自己的 Groq API Key。
-6. 允許「麥克風」與「輔助使用」權限。
-7. 在任何文字欄位按 `⌥↑` 開始錄音，再按一次停止。
+這個 App 改過名字，檔名、進程名稱與設定位置還沿用舊名稱。自己排查或交給 AI 操作時，以這張表為準：
 
-> 請勿使用別人的 Groq API Key。每位使用者應建立自己的 Key，額度與帳務也各自分開。
+| 項目 | 值 |
+|---|---|
+| 顯示名稱 | What's up my neighbor |
+| App 檔名 | `AI語音輸入.app` |
+| 進程名稱 | `FreeVoiceType` |
+| Bundle ID | `tw.panh.FreeVoiceType` |
+| 登入啟動設定 | `~/Library/LaunchAgents/tw.panh.FreeVoiceType.plist` |
+| 鑰匙圈項目 | 服務 `tw.panh.FreeVoiceType.groq`、帳號 `api-key` |
+| 首次安裝包 | `Groq-AI-Voice-Input-macOS-v<版本>.zip`，用同名 `.sha256` 核對 |
+| App 內更新包 | `Neighbor-macOS-<版本>.zip`，用 `SHA256SUMS.txt` 核對；不要手動安裝 |
+| 解壓縮後的資料夾 | `Groq-AI語音輸入-v<版本>/`，內含 `安裝.command`、`移除.command`、`使用說明.md` 與 `AI語音輸入.app` |
+| 剪貼簿歷史 | `~/Library/Application Support/AI語音輸入/` |
+
+### 安裝位置
+
+安裝工具會沿用已經存在的位置，依序找：
+
+1. 登入啟動設定裡記錄的位置
+2. `~/Applications/AI語音輸入.app`（目前新安裝的預設位置）
+3. `~/Library/Application Support/AI語音輸入/AI語音輸入.app`（早期版本）
+4. `/Applications/AI語音輸入.app`（很早期的版本）
+
+都找不到時才安裝到 `~/Applications`。所以「應用程式」資料夾裡找不到 App，不代表沒有安裝，請用下面的指令確認。
+
+### 安裝前檢查
+
+```bash
+plutil -extract ProgramArguments.2 raw ~/Library/LaunchAgents/tw.panh.FreeVoiceType.plist 2>/dev/null || echo "沒有登入啟動設定"
+ls -d ~/Applications/AI語音輸入.app ~/Library/Application\ Support/AI語音輸入/AI語音輸入.app /Applications/AI語音輸入.app 2>/dev/null
+pgrep -lx FreeVoiceType || echo "目前沒有在執行"
+```
+
+三行都沒有結果，就是全新安裝；任何一行有結果，就是更新或重新安裝，安裝工具會沿用那個位置。較新的安裝工具也會在最後印出「安裝類型」：全新安裝、更新（附新舊版本），或重新安裝同一版。
+
+### 安裝後驗證
+
+```bash
+APP="$(plutil -extract ProgramArguments.2 raw ~/Library/LaunchAgents/tw.panh.FreeVoiceType.plist)"
+echo "安裝位置：$APP"
+/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist"
+codesign --verify --deep --strict "$APP" && echo "簽章正常"
+pgrep -x FreeVoiceType >/dev/null && echo "正在執行"
+launchctl print "gui/$UID/tw.panh.FreeVoiceType" >/dev/null 2>&1 && echo "登入啟動已載入"
+security find-generic-password -s tw.panh.FreeVoiceType.groq -a api-key >/dev/null 2>&1 && echo "已設定 API Key" || echo "尚未設定 API Key"
+```
+
+- 第三行印出的版本號要和 Release 一致。
+- 直接看 `launchctl print` 的完整輸出時，`state = not running` 是正常的：登入啟動只負責在登入時開啟 App 一次。
+- 最後一行只確認鑰匙圈裡有沒有這個項目，不會讀出金鑰。不要加 `-w` 或 `-g`，那會印出金鑰內容。
+
+### 舊版備份
+
+每次安裝或更新，舊版 App 會移到安裝位置旁的隱藏資料夾 `.neighbor-update.<隨機字元>/Previous.app`，安裝工具不會自動刪除，次數多了會占用不少空間。確認新版正常後，可以把這些資料夾丟到垃圾桶。用上一段的 `APP` 列出它們：
+
+```bash
+ls -d "$(dirname "$APP")"/.neighbor-update.*
+```
 
 ## 建立 Groq API Key
 
@@ -381,7 +451,7 @@ Mac 在執行前與貼上後都會重新確認焦點。若 App、視窗或輸入
 - `~/Library/Application Support/AI語音輸入/`（剪貼簿歷史）
 - 貓咪設定資料夾（`cat.config.json` 與自訂圖片）：移除前從小黑貓選單「開啟貓咪設定資料夾…」打開，整個丟到垃圾桶
 
-很早期的版本可能裝在 `/Applications` 等其他位置，之後升級會沿用原位置；移除工具只刪 `~/Applications` 裡的那一份，其他位置請手動移到垃圾桶。
+較早的版本可能裝在 `~/Library/Application Support/AI語音輸入/` 或 `/Applications` 等其他位置，之後升級會沿用原位置；移除工具只刪 `~/Applications` 裡的那一份，其他位置請手動移到垃圾桶。不確定裝在哪裡時，先執行「安裝前檢查」的指令。
 
 ## 開發者文件
 
