@@ -135,6 +135,17 @@ class Broker:
             return self.finish(action_id, task, 'not_dispatched', reason, decision, {})
         return self.dispatch(action_id, task, tool, args, target, request['control_epoch'])
 
+    def state(self, request):
+        """The control epoch a worker must send with its next action; only for its own active task."""
+        if not isinstance(request, dict) or not all(isinstance(request.get(k), str) and request[k] for k in ('task_id', 'lease')):
+            return 400, {'error': 'task_id 與 lease 需為字串。'}
+        with self.store.connect() as c:
+            task = self.task(c, request['task_id'], request['lease'])
+            if isinstance(task, tuple):
+                return task
+            session = c.execute('SELECT state,control_epoch FROM browser_sessions WHERE id=?', (audit.SESSION,)).fetchone()
+        return 200, {'control_epoch': session['control_epoch'], 'control_state': session['state']}
+
     # -- checks ------------------------------------------------------------------------------
 
     @staticmethod
@@ -234,7 +245,7 @@ class Broker:
 
     def save_snapshot(self, task_id, epoch, snap):
         snapshot_id = str(uuid.uuid4())
-        targets = {ref: {k: v for k, v in t.items() if k in ('role', 'href')} for ref, t in snap['targets'].items()}
+        targets = {ref: {k: v for k, v in t.items() if k in ('role', 'href', 'index')} for ref, t in snap['targets'].items()}
         for t in targets.values():
             if t.get('href'):
                 parts = urlsplit(t['href'])

@@ -1612,6 +1612,10 @@ class Handler(BaseHTTPRequestHandler):
             if not self.server.office.broker:
                 raise OfficeError('瀏覽器 broker 模式沒有開。', 404)
             return self.server.office.broker.act(body)
+        if path == '/api/worker/browser/state':
+            if not self.server.office.broker:
+                raise OfficeError('瀏覽器 broker 模式沒有開。', 404)
+            return self.server.office.broker.state(body)
         if path == '/api/worker/claim':
             return {'task': store.claim_hands(), 'paused': store.paused(), 'locked': store.hands_locked()}
         task_id, lease = body.get('task_id'), body.get('lease')
@@ -1834,7 +1838,10 @@ def main():
     parser.add_argument('--local-socket', type=Path, help='private local entry for the Mac SSH tunnel (default: <data>/../run/office.sock)')
     parser.add_argument('--dev-tcp-local', action='store_true', help='development only: also serve local mode on the TCP port, which any local process can reach')
     parser.add_argument('--worker-socket', type=Path, help='hands worker entry (mode 660 for its group; off unless given)')
+    parser.add_argument('--browser-cdp', help='broker mode for new hands tasks: the cat Chrome DevTools endpoint on loopback, e.g. http://127.0.0.1:9222 (legacy unless given)')
     args = parser.parse_args()
+    if args.browser_cdp and urlsplit(args.browser_cdp).hostname not in ('127.0.0.1', 'localhost', '::1'):
+        raise SystemExit('--browser-cdp must be a loopback address')
     os.umask(0o077)
     store = Store(args.data)
     process_lock = (store.root / '.service.lock').open('a')
@@ -1842,7 +1849,11 @@ def main():
         fcntl.flock(process_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         raise SystemExit('Office is already running for this data directory')
-    office = Office(store, Ollama(args.model, managed=True), CodexAgent(args.data.parent / 'runtime'))
+    broker = None
+    if args.browser_cdp:
+        import browser_actions, browser_cdp
+        broker = browser_actions.Broker(store, browser_cdp.ChromeBrowser(args.browser_cdp, str(args.data.parent / 'browser-shots')))
+    office = Office(store, Ollama(args.model, managed=True), CodexAgent(args.data.parent / 'runtime'), broker)
     local_socket = args.local_socket or args.data.parent / 'run' / 'office.sock'
     try:
         server = Server(args.port, office, args.public_origin, local_socket, args.dev_tcp_local, args.worker_socket)
@@ -1858,7 +1869,7 @@ def main():
     signal.signal(signal.SIGINT, stop)
     print(f'Neighbor Office {VERSION} listening on loopback:{server.server_port}' + (f' for {server.public_origin}' if server.public_origin else '')
           + f'; local entry {local_socket}' + (f'; worker entry {args.worker_socket}' if args.worker_socket else '')
-          + ('; dev TCP local mode ON' if args.dev_tcp_local else ''), flush=True)
+          + ('; dev TCP local mode ON' if args.dev_tcp_local else '') + ('; browser broker ON' if broker else ''), flush=True)
     try:
         server.serve_forever(poll_interval=0.25)
     finally:

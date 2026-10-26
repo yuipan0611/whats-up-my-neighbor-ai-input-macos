@@ -1,12 +1,12 @@
 ---
 title: 貓咪的手：交接板
 date: 2026-10-23
-status: D1–D14 已拍板；H3 有第一件真任務證據、仍待完整驗收；G0–G5 規劃已整合、尚未實作
+status: D1–D14 已拍板；H3 有第一件真任務證據、仍待完整驗收；G0 完成、G1／G2 本機模擬完成、G3 Mac 本機真 Chrome 完成（皆未部署）；G4／G5 未開始
 ---
 
 # 交接板
 
-**2026-10-26 最新施工入口：** [給 Claude 的交接](CLAUDE-HANDOFF-2026-10-26.md)；瀏覽器控管、操作紀錄與接手詳細契約見 [ADR-002](ADR-002-browser-actions-audit-handover.md)。本次只整合規劃，G0–G5 尚未開始，未改程式、commit、push 或部署。下表 H2／H3 已依既有進度紀錄修正摘要，未重驗 VPS 現況。
+**2026-10-26 最新施工入口：** [給 Claude 的交接](CLAUDE-HANDOFF-2026-10-26.md)；瀏覽器控管、操作紀錄與接手詳細契約見 [ADR-002](ADR-002-browser-actions-audit-handover.md)。G0–G3 的進度見下方「增補施工」表與進度紀錄；全部只在本機分支 commit，沒有 push、合併或部署。下表 H2／H3 摘要未重驗 VPS 現況。
 
 需求、決策、權限與體驗規則以 [PRD.md](PRD.md) 為準。本檔只記錄分工與進度。nekonode-site 分支 `docs/vps-agent-mvp-20261023` 的那份 VPS-first PRD 只當需求參考，**不拿來派工**；它的 A01–A20 對到哪個 H 任務，見 [ADR-001](ADR-001-office-sqlite-vs-vps-mvp-prd.md)。各 H 任務開工前，先看 ADR-001 第 7 節有沒有新增給它的項目。
 
@@ -35,7 +35,7 @@ status: D1–D14 已拍板；H3 有第一件真任務證據、仍待完整驗收
 | G0 | 能力路徑表、現況版本、同 UID／CDP／shell 旁路 | H3 | **完成**（2026-10-26，VPS 唯讀實測）：`reports/agent-hands/BROWSER-CAPABILITY-BASELINE.md`。沙箱內可直連 CDP、讀 profile 與 Codex 登入檔、連 X 桌面，broker 只能保證自己這條路 |
 | G1 | 固定規則與 broker 核心、action_id／lease／epoch／目標版本 | H2／H3 | **完成（本機模擬）**：`office/browser_actions.py`；未接真 Chrome、未部署 |
 | G2 | 決策／結果紀錄、遮蔽、owner 查詢與遷移 | H2／H4／H5 | **完成（本機模擬）**：`office/browser_audit.py`＋owner 分頁 API；22 項測試、14 組 mutation |
-| G3 | 受限瀏覽器 adapter、needs_human 卡片、真 Chrome 驗證 | H3／H5 | 未開始 |
+| G3 | 受限瀏覽器 adapter、needs_human 卡片、真 Chrome 驗證 | H3／H5 | **完成（Mac 本機真 Chrome＋模擬）**：`office/browser_cdp.py`、`office/hands/browser_adapter.py`、worker proxy、`--browser-cdp`；合成網站與暫存 profile。needs_human 只做到 agent 停止訊息＋紀錄，App／網頁卡片未做；真 Codex、VPS 未跑 |
 | G4 | 接手停止確認、控制世代、斷線／重啟 hold、重新觀察與計時 | H6 | 未開始 |
 | G5 | 撤銷、故障、回退與跨裝置驗收 | H9 | 未開始 |
 
@@ -58,6 +58,14 @@ status: D1–D14 已拍板；H3 有第一件真任務證據、仍待完整驗收
 - 2026-10-26｜Claude｜接手 G0–G5
   - 規劃文件原樣 commit（`345a1ce`）。
   - Claude 負責 `office/browser_actions.py`、`office/browser_audit.py`、`office/tests/test_browser_actions.py`，以及 `office.py` 的 broker 路由與遷移。
+- 2026-10-26｜Claude｜G3｜完成（Mac 本機真 Chrome 155 headless＋自動測試模擬；沒有 VPS、真 Codex、Mac App、iPhone）
+  - broker 的手（CDP，固定 script、隔離 world、點擊前核對元素）、agent 唯一的 6 個瀏覽器工具（adapter）、worker 的每任務 proxy（lease 與控制世代只在 proxy 加）、office `--browser-cdp`。
+  - broker 模式沒設定 adapter 就讓任務失敗，不退回 raw MCP。
+  - 測試：完整測試組 146 項全過；真 Chrome 5 項，含整條路串起來（只有 Codex 是假的），合成網站從沒收到 `/logout`、`/delete`。
+  - mutation 12 組抓到 10 組，另 2 組是等價突變（另一道牆仍在）。
+  - 仍是只保證經過 broker 的路；同 UID 下 agent 可直連 proxy socket（限制與 adapter 相同），G0 旁路仍在。
+  - 紀錄見 `reports/agent-hands/G3-VERIFICATION-2026-10-26.md`。
+  - 部署時 release 要多包 `office/browser_cdp.py`、`office/hands/browser_adapter.py`；worker 加 `--adapter`、office 加 `--browser-cdp`。本則不授權部署。
 - 2026-10-26｜Claude｜G1／G2｜完成（本機自動測試＋模擬；沒有真 Chrome、VPS、Mac App、iPhone）
   - broker（固定規則 browser-policy-1、先寫決策再派送、閘門內再檢查、重送不重派、結果不明不重送、封鎖與重啟核對）。
   - 只新增的操作紀錄與擁有者分頁 API。

@@ -13,7 +13,10 @@ import selectors
 import shutil
 import signal
 import socket
+import socketserver
 import subprocess
+import tempfile
+import threading
 import sys
 import time
 
@@ -101,6 +104,38 @@ def step(event):
     return None
 
 
+class BrokerProxy(socketserver.ThreadingUnixStreamServer):
+    """Per-task socket for the browser adapter (broker mode): it adds what the agent must not hold.
+
+    The adapter sends {tool, args, snapshot_id, target_ref, action_id}; the proxy adds the task id,
+    the lease and the current control epoch, and forwards it to the office broker."""
+    daemon_threads = True
+    KEYS = {'tool', 'args', 'snapshot_id', 'target_ref', 'action_id'}
+
+    def __init__(self, path, office, task_id, lease):
+        self.office, self.task_id, self.lease = office, task_id, lease
+        super().__init__(path, ProxyHandler)
+
+    def forward(self, request):
+        if not isinstance(request, dict) or not set(request) <= self.KEYS:
+            return {'status': 400, 'body': {'error': '有不認得的欄位。'}}
+        identity = {'task_id': self.task_id, 'lease': self.lease}
+        status, state = self.office.post('/api/worker/browser/state', identity)
+        if status != 200:
+            return {'status': status, 'body': state}
+        status, body = self.office.post('/api/worker/browser/action', {**request, **identity, 'control_epoch': state['control_epoch']})
+        return {'status': status, 'body': body}
+
+
+class ProxyHandler(socketserver.StreamRequestHandler):
+    def handle(self):
+        try:
+            reply = self.server.forward(json.loads(self.rfile.readline(65536)))
+        except (OSError, ValueError):
+            reply = {'status': 503, 'body': {'error': '辦公室連不上，這一步沒有執行。'}}
+        self.wfile.write(json.dumps(reply, ensure_ascii=False).encode() + b'\n')
+
+
 def workspace_bytes(path):
     total = 0
     for root, dirs, files in os.walk(path, onerror=lambda e: None):
@@ -123,10 +158,11 @@ class Worker:
     STEP_CHARS = 1000          # keeps an events batch far below the office's 200 KB request limit
     BATCH = 20
 
-    def __init__(self, office, codex, codex_home, workspace_root, handoff_dir=None, browser=None, sandbox='workspace-write'):
+    def __init__(self, office, codex, codex_home, workspace_root, handoff_dir=None, browser=None, sandbox='workspace-write', adapter=None):
         self.office, self.codex, self.codex_home = office, str(codex), Path(codex_home)
         self.workspace_root, self.handoff_dir = Path(workspace_root), (Path(handoff_dir) if handoff_dir else None)
-        self.browser, self.sandbox = browser, sandbox  # browser: (command, [args]) of the browser tool server
+        self.browser, self.sandbox = browser, sandbox  # browser: (command, [args]) of the raw browser tool server (legacy)
+        self.adapter = adapter  # path of browser_adapter.py: the only browser tools in broker mode
         self.stopping = False
 
     # -- the loop --------------------------------------------------------------------------
@@ -161,7 +197,26 @@ class Worker:
         schema_path, output_path = run_dir / 'schema.json', run_dir / 'final.json'
         schema_path.write_text(json.dumps(SCHEMA), encoding='utf-8')
         output_path.unlink(missing_ok=True)
-        process = subprocess.Popen(self.arguments(workspace, schema_path, output_path), stdin=subprocess.PIPE,
+        proxy = proxy_dir = None
+        if task.get('browser_mode') == 'broker':
+            if not self.adapter:  # never fall back to the raw browser tools
+                status, _ = self.office.post('/api/worker/complete', {'task_id': task_id, 'lease': lease, 'outcome': 'failed', 'text': '',
+                                                                      'reason': '瀏覽器的受限工具沒有設定，這件沒有執行。'})
+                return 'failed: broker mode without adapter'
+            proxy_dir = tempfile.mkdtemp(prefix='neko-b-')
+            proxy = BrokerProxy(os.path.join(proxy_dir, 'b.sock'), self.office, task_id, lease)
+            threading.Thread(target=proxy.serve_forever, daemon=True).start()
+        try:
+            return self.run(task, workspace, run_dir, schema_path, output_path, proxy)
+        finally:
+            if proxy:
+                proxy.shutdown(); proxy.server_close()
+                shutil.rmtree(proxy_dir, ignore_errors=True)
+
+    def run(self, task, workspace, run_dir, schema_path, output_path, proxy):
+        lease, task_id = task['lease'], task['id']
+        broker_socket = proxy.server_address if proxy else None
+        process = subprocess.Popen(self.arguments(workspace, schema_path, output_path, broker_socket), stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=self.environment(),
                                    cwd=workspace, start_new_session=True)
         pending, last_text, seen = [], '', 0
@@ -293,7 +348,7 @@ class Worker:
         env.update(CODEX_HOME=str(self.codex_home), TERM='dumb')
         return env
 
-    def arguments(self, workspace, schema_path, output_path):
+    def arguments(self, workspace, schema_path, output_path, broker_socket=None):
         args = [self.codex, '-a', 'never', 'exec', '--ignore-user-config', '--ignore-rules', '--ephemeral', '--skip-git-repo-check',
                 '--sandbox', self.sandbox, '--json', '--color', 'never',
                 '--disable', 'multi_agent', '--disable', 'apps', '--disable', 'plugins', '--disable', 'skill_search',
@@ -305,8 +360,9 @@ class Worker:
             args += ['-c', 'sandbox_workspace_write.network_access=true']
         if self.handoff_dir:
             args += ['--add-dir', str(self.handoff_dir)]
-        if self.browser:
-            command, extra = self.browser
+        browser = (sys.executable, ['-I', str(self.adapter), '--socket', broker_socket]) if broker_socket else self.browser
+        if browser:
+            command, extra = browser
             args += ['-c', f'mcp_servers.browser.command={json.dumps(command)}', '-c', f'mcp_servers.browser.args={json.dumps(extra)}',
                      '-c', 'mcp_servers.browser.startup_timeout_sec=30', '-c', 'mcp_servers.browser.tool_timeout_sec=120',
                      # Nobody is there to answer a prompt; what the browser may reach is limited by which accounts its
@@ -348,10 +404,11 @@ def main(argv=None):
     parser.add_argument('--browser-command', help='browser tool server executable')
     parser.add_argument('--browser-arg', action='append', default=[], help='argument for the browser tool server (repeatable)')
     parser.add_argument('--sandbox', choices=('workspace-write', 'danger-full-access'), default='workspace-write')
+    parser.add_argument('--adapter', type=Path, help='browser_adapter.py: the only browser tools for broker-mode tasks')
     args = parser.parse_args(argv)
     os.umask(0o027)  # deliverables in the handoff folder must be readable by its group (the office); home stays 750
     browser = (args.browser_command, args.browser_arg) if args.browser_command else None
-    worker = Worker(Office(args.socket), args.codex, args.codex_home, args.workspace, args.handoff, browser, args.sandbox)
+    worker = Worker(Office(args.socket), args.codex, args.codex_home, args.workspace, args.handoff, browser, args.sandbox, args.adapter)
     signal.signal(signal.SIGTERM, lambda *_: setattr(worker, 'stopping', True))  # finish the current task, then exit
     log(f'neko hands worker started; office at {args.socket}')
     worker.serve()
