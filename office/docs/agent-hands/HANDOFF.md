@@ -1,10 +1,12 @@
 ---
 title: 貓咪的手：交接板
 date: 2026-10-23
-status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H2 loopback 修補先做
+status: D1–D14 已拍板；H3 有第一件真任務證據、仍待完整驗收；G0–G5 規劃已整合、尚未實作
 ---
 
 # 交接板
+
+**2026-10-26 最新施工入口：** [給 Claude 的交接](CLAUDE-HANDOFF-2026-10-26.md)；瀏覽器控管、操作紀錄與接手詳細契約見 [ADR-002](ADR-002-browser-actions-audit-handover.md)。本次只整合規劃，G0–G5 尚未開始，未改程式、commit、push 或部署。下表 H2／H3 已依既有進度紀錄修正摘要，未重驗 VPS 現況。
 
 需求、決策、權限與體驗規則以 [PRD.md](PRD.md) 為準。本檔只記錄分工與進度。nekonode-site 分支 `docs/vps-agent-mvp-20261023` 的那份 VPS-first PRD 只當需求參考，**不拿來派工**；它的 A01–A20 對到哪個 H 任務，見 [ADR-001](ADR-001-office-sqlite-vs-vps-mvp-prd.md)。各 H 任務開工前，先看 ADR-001 第 7 節有沒有新增給它的項目。
 
@@ -14,8 +16,8 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
 |---|---|---|---|---|---|
 | H0 | PRD 與交接板 | Claude | `office/docs/agent-hands/*` | — | 完成（D1–D11 已拍板） |
 | H1 | VPS 基礎：swap、`neko-hands`、Chrome、VNC 改歸 neko-hands、`/srv/neko-handoff`；worker 群組與 worker socket 的資料夾（neighbor 與 neko-hands 同屬一個群組，資料夾 2750） | Claude（依 YUI 指示以 root 執行）；腳本 `office/hands/setup-h1.sh` | VPS 系統設定 | D1、D2、D8 | **完成**（2026-10-23，VPS 實機）。見 `reports/agent-hands/H1-VERIFICATION-2026-10-23.md` |
-| H2 | 辦公室安全底座：loopback 修補、worker API、「手」執行者、先停一下與收回開關 | Claude | `office/office.py`、`office/tests/test_local_entry.py`、`office/tests/test_hands.py` | D1 | **完成**。loopback 修補已部署（0.4.0）；worker API／hands 執行者／收回開關在本機完成（0.5.0，未部署，等 H1 建好群組後一起開） |
-| H3 | worker＋Codex 登入＋瀏覽器 MCP；合成任務 | Claude＋YUI（登入） | `office/hands/*`（新增） | H1、H2、D9、D13 | **進行中**：worker 寫好並測過（`1af9d21`）；VPS 上 Chrome、worker、Codex、瀏覽器工具已裝好並在跑（`setup-h3.sh`）；等 YUI 替貓咪的 Codex 登入，再跑第一件真任務 |
+| H2 | 辦公室安全底座：loopback 修補、worker API、「手」執行者、先停一下與收回開關 | Claude | `office/office.py`、`office/tests/test_local_entry.py`、`office/tests/test_hands.py` | D1 | **完成（歷史證據）**。2026-10-23 已部署至 0.5.1；114 項測試與公網 27 項紀錄見下方。新 broker／audit 由 G1／G2 補，不視為已實作 |
+| H3 | worker＋Codex 登入＋瀏覽器 MCP；合成任務 | Claude＋YUI（登入） | `office/hands/*`（新增） | H1、H2、D9、D13 | **進行中**：2026-10-24 登入與第一件真 Chrome 任務已完成；惡意內容、連續 100 件、磁碟上限、重啟等仍待驗。G0／G3 補能力盤點與受限 adapter |
 | H4 | GitHub App（營運者建立）、辦公室代為 clone／push／開 Draft PR、鑰匙收回、越權測試 | Claude＋YUI | `office/github_app.py`（新增）、`office/tests/test_github_push.py`、驗證紀錄 `reports/agent-hands/` | H2、H3、D4 | 未開始 |
 | H5 | 體驗層：自動轉交、三種卡片、鑰匙清單、文案清理、禁用詞掃描 | Claude | `office/static/*`（先在下方留言，與手機版協調）、`office/tests/test_copy.py` | H3、D10 | 未開始 |
 | — | **v1a 完成點** | — | — | H1–H5 | — |
@@ -23,6 +25,21 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
 | H7 | 貓咪資料夾：Mac LaunchAgent＋rsync | Claude | `office/handoff-sync/*`（新增） | H1、D5 | 未開始 |
 | H8 | 通知 | Claude＋YUI | `office/notify*`（新增） | H5、D11 | 未開始 |
 | H9 | REVOKE.md、撤銷演練 | Claude＋YUI | `office/docs/agent-hands/REVOKE.md` | H4–H8 | 未開始 |
+
+## 2026-10-26 增補施工：G0–G5
+
+這是 H 任務的增補，不另建服務。G1／G2 接到 H2／H3／H4／H5，G4 接到 H6；v1a 原有能力與新增 broker 能力分開標示，不能以舊 H 完成推定 G 已完成。
+
+| ID | 交付 | 接到 H | 狀態 |
+|---|---|---|---|
+| G0 | 能力路徑表、現況版本、同 UID／CDP／shell 旁路 | H3 | 未開始 |
+| G1 | 固定規則與 broker 核心、action_id／lease／epoch／目標版本 | H2／H3 | 未開始 |
+| G2 | 決策／結果紀錄、遮蔽、owner 查詢與遷移 | H2／H4／H5 | 未開始 |
+| G3 | 受限瀏覽器 adapter、needs_human 卡片、真 Chrome 驗證 | H3／H5 | 未開始 |
+| G4 | 接手停止確認、控制世代、斷線／重啟 hold、重新觀察與計時 | H6 | 未開始 |
+| G5 | 撤銷、故障、回退與跨裝置驗收 | H9 | 未開始 |
+
+施工順序、檔案分工及驗收見 [Claude 交接](CLAUDE-HANDOFF-2026-10-26.md)。目前文件由 Codex 整合；產品檔案仍交 Claude，開工先在此記接手。新增 ADR-002 未修改 D13／D14；強制隔離需要另案設計，不能用 broker 內測試冒充。
 
 ## 規則
 
@@ -37,6 +54,13 @@ status: D1–D11 已拍板（2026-10-23，全部照推薦）；v1a 進行中，H
 - 驗收紀錄把自動測試、模擬、實機（VPS／Mac／iPhone 分開）和 `NOT RUN` 分開標示；Chromium 的結果不寫成 Chrome 的結果（ADR-001 第 8 節）。
 
 ## 進度紀錄
+
+- 2026-10-26｜Codex｜規劃整合（YUI 要求）
+  - 新增 ADR-002 與 CLAUDE-HANDOFF-2026-10-26，將瀏覽器控管、操作紀錄、接手屏障對應 H 任務與 G0–G5。
+  - PRD 更新為 v0.4；D7 人親手做、D12 斷線維持暫停、D13 同 UID、D14 無網站白名單保留；對同 UID 旁路與第一階段保障明確限縮。
+  - 修正 H2／H3 表頭摘要與已有 10 月 23–24 日紀錄的落差；不是重新驗證部署。
+  - 僅改規劃文件；未執行產品測試、未部署、未傳送到其他 Claude 聊天。G 任務均未開始。
+  - 文件檢查：新文件的 6 個相對連結、必要決策／任務標記、程式區塊成對與 `git diff --check` 通過；worktree 的 6 個變更均為 Markdown，另更新工作區根 README 的入口。
 
 - 2026-10-23｜Claude｜H0｜v0.1 草案
   - 新增 PRD.md、HANDOFF.md。
