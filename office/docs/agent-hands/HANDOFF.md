@@ -32,7 +32,7 @@ status: D1–D14 已拍板；H3 有第一件真任務證據、仍待完整驗收
 
 | ID | 交付 | 接到 H | 狀態 |
 |---|---|---|---|
-| G0 | 能力路徑表、現況版本、同 UID／CDP／shell 旁路 | H3 | 未開始 |
+| G0 | 能力路徑表、現況版本、同 UID／CDP／shell 旁路 | H3 | **完成**（2026-10-26，VPS 唯讀實測）：`reports/agent-hands/BROWSER-CAPABILITY-BASELINE.md`。沙箱內可直連 CDP、讀 profile 與 Codex 登入檔、連 X 桌面，broker 只能保證自己這條路 |
 | G1 | 固定規則與 broker 核心、action_id／lease／epoch／目標版本 | H2／H3 | 未開始 |
 | G2 | 決策／結果紀錄、遮蔽、owner 查詢與遷移 | H2／H4／H5 | 未開始 |
 | G3 | 受限瀏覽器 adapter、needs_human 卡片、真 Chrome 驗證 | H3／H5 | 未開始 |
@@ -55,6 +55,15 @@ status: D1–D14 已拍板；H3 有第一件真任務證據、仍待完整驗收
 
 ## 進度紀錄
 
+- 2026-10-26｜Claude｜接手 G0–G5
+  - 規劃文件原樣 commit（`345a1ce`）。
+  - Claude 負責 `office/browser_actions.py`、`office/browser_audit.py`、`office/tests/test_browser_actions.py`，以及 `office.py` 的 broker 路由與遷移。
+- 2026-10-26｜Claude｜G0｜完成（VPS 唯讀實測）
+  - 能力路徑表見 `reports/agent-hands/BROWSER-CAPABILITY-BASELINE.md`。
+  - 第一輪有 3 項是引號造成的假結果，已重測更正。
+  - 主要旁路：沙箱內的 shell 可以直連 CDP 9222、讀 Chrome profile 與 Codex 登入檔、連 X 桌面。
+  - raw MCP 開放 32 個工具，含 evaluate_script、upload_file、take_heapsnapshot。
+  - 封住這些旁路需要修改 D13，本次不做。
 - 2026-10-26｜Codex｜規劃整合（YUI 要求）
   - 新增 ADR-002 與 CLAUDE-HANDOFF-2026-10-26，將瀏覽器控管、操作紀錄、接手屏障對應 H 任務與 G0–G5。
   - PRD 更新為 v0.4；D7 人親手做、D12 斷線維持暫停、D13 同 UID、D14 無網站白名單保留；對同 UID 旁路與第一階段保障明確限縮。
