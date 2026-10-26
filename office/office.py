@@ -32,6 +32,9 @@ from urllib.parse import parse_qs, urlsplit
 import uuid
 from datetime import datetime, timezone
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # python3 -I leaves the script's own folder off the path
+import browser_audit  # noqa: E402
+
 VERSION = '0.5.1'
 ACTIVE = ('planning', 'running', 'saving')
 ACTIONS = ['summarize', 'write', 'list_files', 'status', 'clarify', 'external']
@@ -150,7 +153,8 @@ class Store:
             for name, definition in [('executor', "TEXT NOT NULL DEFAULT 'gemma'"), ('parent_id', "TEXT NOT NULL DEFAULT ''"),
                                      ('journal_ids', "TEXT NOT NULL DEFAULT '[]'"), ('context_snapshot', "TEXT NOT NULL DEFAULT ''"),
                                      ('attempts', 'INTEGER NOT NULL DEFAULT 0'), ('heartbeat', 'REAL NOT NULL DEFAULT 0'),
-                                     ('lease', "TEXT NOT NULL DEFAULT ''")]:
+                                     ('lease', "TEXT NOT NULL DEFAULT ''"), ('initiator_kind', "TEXT NOT NULL DEFAULT 'person'"),
+                                     ('browser_mode', "TEXT NOT NULL DEFAULT 'legacy'")]:
                 if name not in columns:
                     c.execute(f'ALTER TABLE tasks ADD COLUMN {name} {definition}')
             c.executescript('''
@@ -164,6 +168,7 @@ class Store:
             CREATE TABLE IF NOT EXISTS pairing_codes (code_hash TEXT PRIMARY KEY, created REAL NOT NULL,
                 expires REAL NOT NULL, failures INTEGER NOT NULL DEFAULT 0, used INTEGER NOT NULL DEFAULT 0);
             ''')
+            browser_audit.ensure_schema(c)
         self.db.chmod(0o600)
 
     @contextlib.contextmanager
@@ -336,7 +341,7 @@ class Store:
                 raise Cancelled()
             self._change(c, id_, status, message, **fields)
 
-    def submit(self, id_, prompt, source, model, executor='gemma', parent_id='', journal_ids=None):
+    def submit(self, id_, prompt, source, model, executor='gemma', parent_id='', journal_ids=None, browser_mode='legacy'):
         if not isinstance(id_, str) or str(uuid.UUID(id_)) != id_:
             raise OfficeError('任務編號格式不正確。')
         if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= 5000:
@@ -374,8 +379,9 @@ class Store:
             if media:
                 self.snapshot_media(id_, source)
             t = now()
-            c.execute('INSERT INTO tasks(id,prompt,source,status,stage,title,created,updated,model,source_snapshot,executor,parent_id,journal_ids,context_snapshot) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                      (id_, prompt.strip(), source, 'queued', '已收到，等待處理。', '新交辦', t, t, model, snapshot, executor, parent_id, encoded_ids, context_text))
+            c.execute('INSERT INTO tasks(id,prompt,source,status,stage,title,created,updated,model,source_snapshot,executor,parent_id,journal_ids,context_snapshot,browser_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                      (id_, prompt.strip(), source, 'queued', '已收到，等待處理。', '新交辦', t, t, model, snapshot, executor, parent_id, encoded_ids, context_text,
+                       browser_mode if executor == 'hands' else 'legacy'))
             c.execute('INSERT INTO events(task_id,at,status,message) VALUES(?,?,?,?)', (id_, t, 'queued', '交辦已保存到 VPS。'))
         return self.get(id_)
 
@@ -425,7 +431,7 @@ class Store:
 
     HANDS_LEASE = 120
     HANDS_ATTEMPTS = 3
-    HANDS_FIELDS = ('id', 'prompt', 'source', 'source_snapshot', 'context_snapshot', 'parent_id', 'attempts', 'lease', 'created')
+    HANDS_FIELDS = ('id', 'prompt', 'source', 'source_snapshot', 'context_snapshot', 'parent_id', 'attempts', 'lease', 'browser_mode', 'created')
     HANDS_TEXT_LIMIT = 150000
 
     def hands_locked(self):
@@ -988,8 +994,11 @@ class CodexAgent:
 
 
 class Office:
-    def __init__(self, store, model, agent=None):
+    def __init__(self, store, model, agent=None, broker=None):
         self.store, self.model, self.agent = store, model, agent
+        self.broker = broker  # a browser_actions.Broker only where broker mode is switched on; legacy otherwise
+        if broker:
+            broker.recover()
         self.stopping = threading.Event()
         self.store.recover()
         self.thread = None
@@ -1019,7 +1028,8 @@ class Office:
         try:
             executor = body.get('executor', 'codex' if self.agent else 'gemma')
             model = 'hands' if executor == 'hands' else (self.agent.model if executor == 'codex' and self.agent else self.model.model)
-            task = self.store.submit(id_, prompt, source, model, executor, body.get('parent_id', ''), body.get('journal_ids', []))
+            task = self.store.submit(id_, prompt, source, model, executor, body.get('parent_id', ''), body.get('journal_ids', []),
+                                     'broker' if self.broker else 'legacy')  # fixed per task; switching needs a new task
         except (ValueError, TypeError, AttributeError):
             raise OfficeError('任務編號格式不正確。')
         return {'task': task, 'message': '交辦已保存，貓咪會依序處理。'}
@@ -1513,6 +1523,17 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/journal/download':
                 text = '# 生活紀錄\n\n' + '\n\n---\n\n'.join(f"{e['day']} · {e['id']}\n\n{e['text']}" for e in reversed(office.store.journal()))
                 self.send(200, text, 'text/markdown; charset=utf-8', True)
+            elif re.fullmatch(r'/api/tasks/[0-9a-f-]{36}/actions', path):
+                query = parse_qs(parts.query)
+                try:
+                    after, limit = int(query.get('after', ['0'])[0]), int(query.get('limit', ['100'])[0])
+                except ValueError:
+                    raise OfficeError('after 與 limit 必須是整數。')
+                if after < 0 or not 1 <= limit <= 500:
+                    raise OfficeError('after 不可為負數，limit 需介於 1 至 500。')
+                office.store.get(path.split('/')[3])  # 404 for an unknown task
+                with office.store.connect() as c:
+                    self.send(200, browser_audit.task_events(c, path.split('/')[3], after, limit))
             elif re.fullmatch(r'/api/tasks/[0-9a-f-]{36}(/download)?', path):
                 task = office.store.get(path.split('/')[3])
                 if path.endswith('/download'):
@@ -1547,7 +1568,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise OfficeError('請求格式不正確。')
             office = self.server.office
             if self.mode == 'worker':
-                self.send(200, self.worker_call(path, body))
+                result = self.worker_call(path, body)
+                self.send(*result) if isinstance(result, tuple) else self.send(200, result)
                 return
             if path == '/api/pair':
                 self.pair(body)
@@ -1586,6 +1608,10 @@ class Handler(BaseHTTPRequestHandler):
     def worker_call(self, path, body):
         """The only routes on the worker socket (agent-hands PRD 9)."""
         store = self.server.office.store
+        if path == '/api/worker/browser/action':
+            if not self.server.office.broker:
+                raise OfficeError('瀏覽器 broker 模式沒有開。', 404)
+            return self.server.office.broker.act(body)
         if path == '/api/worker/claim':
             return {'task': store.claim_hands(), 'paused': store.paused(), 'locked': store.hands_locked()}
         task_id, lease = body.get('task_id'), body.get('lease')

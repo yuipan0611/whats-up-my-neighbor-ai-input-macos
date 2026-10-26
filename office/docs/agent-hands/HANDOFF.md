@@ -33,8 +33,8 @@ status: D1–D14 已拍板；H3 有第一件真任務證據、仍待完整驗收
 | ID | 交付 | 接到 H | 狀態 |
 |---|---|---|---|
 | G0 | 能力路徑表、現況版本、同 UID／CDP／shell 旁路 | H3 | **完成**（2026-10-26，VPS 唯讀實測）：`reports/agent-hands/BROWSER-CAPABILITY-BASELINE.md`。沙箱內可直連 CDP、讀 profile 與 Codex 登入檔、連 X 桌面，broker 只能保證自己這條路 |
-| G1 | 固定規則與 broker 核心、action_id／lease／epoch／目標版本 | H2／H3 | 未開始 |
-| G2 | 決策／結果紀錄、遮蔽、owner 查詢與遷移 | H2／H4／H5 | 未開始 |
+| G1 | 固定規則與 broker 核心、action_id／lease／epoch／目標版本 | H2／H3 | **完成（本機模擬）**：`office/browser_actions.py`；未接真 Chrome、未部署 |
+| G2 | 決策／結果紀錄、遮蔽、owner 查詢與遷移 | H2／H4／H5 | **完成（本機模擬）**：`office/browser_audit.py`＋owner 分頁 API；22 項測試、14 組 mutation |
 | G3 | 受限瀏覽器 adapter、needs_human 卡片、真 Chrome 驗證 | H3／H5 | 未開始 |
 | G4 | 接手停止確認、控制世代、斷線／重啟 hold、重新觀察與計時 | H6 | 未開始 |
 | G5 | 撤銷、故障、回退與跨裝置驗收 | H9 | 未開始 |
@@ -58,6 +58,13 @@ status: D1–D14 已拍板；H3 有第一件真任務證據、仍待完整驗收
 - 2026-10-26｜Claude｜接手 G0–G5
   - 規劃文件原樣 commit（`345a1ce`）。
   - Claude 負責 `office/browser_actions.py`、`office/browser_audit.py`、`office/tests/test_browser_actions.py`，以及 `office.py` 的 broker 路由與遷移。
+- 2026-10-26｜Claude｜G1／G2｜完成（本機自動測試＋模擬；沒有真 Chrome、VPS、Mac App、iPhone）
+  - broker（固定規則 browser-policy-1、先寫決策再派送、閘門內再檢查、重送不重派、結果不明不重送、封鎖與重啟核對）。
+  - 只新增的操作紀錄與擁有者分頁 API。
+  - `tasks.browser_mode` 在交辦時固定，預設 legacy。
+  - 測試：22 項，完整測試組全過；14 組 mutation 全部被抓到。
+  - 紀錄見 `reports/agent-hands/G1-G2-VERIFICATION-2026-10-26.md`。
+  - 部署時 release 要多包 `office/browser_actions.py`、`office/browser_audit.py`。
 - 2026-10-26｜Claude｜G0｜完成（VPS 唯讀實測）
   - 能力路徑表見 `reports/agent-hands/BROWSER-CAPABILITY-BASELINE.md`。
   - 第一輪有 3 項是引號造成的假結果，已重測更正。
