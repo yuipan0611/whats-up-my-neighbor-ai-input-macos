@@ -110,7 +110,7 @@ class Broker:
                     if request['control_epoch'] != session['control_epoch']:
                         return 409, {'error': '控制世代已經變了，請重新觀察。', 'reason_code': 'stale_epoch',
                                      'control_epoch': session['control_epoch']}
-                    if session['state'] != 'agent_running':
+                    if session['state'] != 'agent_running' and not (session['state'] == 'resuming' and tool == 'take_snapshot'):
                         return 409, {'error': '現在由人接手或暫停中。', 'reason_code': 'held', 'control_state': session['state']}
                     target = None
                     if TOOLS.get(tool, {}).get('target'):
@@ -227,7 +227,8 @@ class Broker:
             with self.store.connect() as c:  # control may have changed while we waited for the gate
                 session = c.execute('SELECT state,control_epoch FROM browser_sessions WHERE id=?', (audit.SESSION,)).fetchone()
                 stopped = c.execute("SELECT 1 FROM settings WHERE key IN ('paused','hands_locked') AND value='1'").fetchone()
-            if session['state'] != 'agent_running' or session['control_epoch'] != epoch or stopped:
+            observing = session['state'] == 'resuming' and tool == 'take_snapshot'  # the re-observation before handing back (G4)
+            if (session['state'] != 'agent_running' and not observing) or session['control_epoch'] != epoch or stopped:
                 return self.finish(action_id, task, 'not_dispatched', 'held_before_dispatch', 'allow', {}, 409)
             # The page is checked here, outside any database transaction and right before acting on it.
             if target and self.browser.generation(target['tab_id']) != target['generation']:

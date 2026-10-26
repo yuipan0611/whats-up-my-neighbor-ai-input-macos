@@ -19,9 +19,12 @@ SNAPSHOT_JS = r'''(() => {
   const nodes = [...document.querySelectorAll('a[href], button, input, textarea, select, [role=button], [role=link]')];
   return nodes.slice(0, 200).map((el, i) => {
     const tag = el.tagName.toLowerCase();
-    const role = el.getAttribute('role') || (tag === 'a' ? 'link' : tag === 'button' ? 'button'
+    const secret = tag === 'input' && (el.type === 'password' || el.autocomplete === 'one-time-code');
+    const role = secret ? 'secret' : el.getAttribute('role') || (tag === 'a' ? 'link' : tag === 'button' ? 'button'
       : (tag === 'input' && ['submit', 'button', 'reset'].includes(el.type)) ? 'button' : 'textbox');
-    const name = (el.getAttribute('aria-label') || el.innerText || el.value || el.placeholder || el.name || '').trim().slice(0, 120);
+    // What a person typed never becomes a name: fields are named by their label, placeholder or name only.
+    const typed = role === 'textbox' || role === 'secret';
+    const name = (el.getAttribute('aria-label') || (typed ? '' : el.innerText || el.value) || el.placeholder || el.name || '').trim().slice(0, 120);
     return {index: i, role, name, href: tag === 'a' ? el.href : ''};
   });
 })()'''

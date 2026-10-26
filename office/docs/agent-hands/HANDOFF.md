@@ -1,7 +1,7 @@
 ---
 title: 貓咪的手：交接板
 date: 2026-10-23
-status: D1–D14 已拍板；H3 有第一件真任務證據、仍待完整驗收；G0 完成、G1／G2 本機模擬完成、G3 Mac 本機真 Chrome 完成（皆未部署）；G4／G5 未開始
+status: D1–D14 已拍板；H3 有第一件真任務證據、仍待完整驗收；G0 完成、G1／G2 本機模擬完成、G3、G4 Mac 本機真 Chrome＋模擬完成（皆未部署）；G5 未開始
 ---
 
 # 交接板
@@ -36,7 +36,7 @@ status: D1–D14 已拍板；H3 有第一件真任務證據、仍待完整驗收
 | G1 | 固定規則與 broker 核心、action_id／lease／epoch／目標版本 | H2／H3 | **完成（本機模擬）**：`office/browser_actions.py`；未接真 Chrome、未部署 |
 | G2 | 決策／結果紀錄、遮蔽、owner 查詢與遷移 | H2／H4／H5 | **完成（本機模擬）**：`office/browser_audit.py`＋owner 分頁 API；22 項測試、14 組 mutation |
 | G3 | 受限瀏覽器 adapter、needs_human 卡片、真 Chrome 驗證 | H3／H5 | **完成（Mac 本機真 Chrome＋模擬）**：`office/browser_cdp.py`、`office/hands/browser_adapter.py`、worker proxy、`--browser-cdp`；合成網站與暫存 profile。needs_human 只做到 agent 停止訊息＋紀錄，App／網頁卡片未做；真 Codex、VPS 未跑 |
-| G4 | 接手停止確認、控制世代、斷線／重啟 hold、重新觀察與計時 | H6 | 未開始 |
+| G4 | 接手停止確認、控制世代、斷線／重啟 hold、重新觀察與計時 | H6 | **完成（Mac 本機真 Chrome＋模擬）**：`office/browser_control.py`＋owner／worker 控制路由＋worker 多輪與停整個程序群組。viewer（noVNC、按鈕、人工輸入通道）、D11 通知、真 Codex、VPS 未做或未跑 |
 | G5 | 撤銷、故障、回退與跨裝置驗收 | H9 | 未開始 |
 
 施工順序、檔案分工及驗收見 [Claude 交接](CLAUDE-HANDOFF-2026-10-26.md)。目前文件由 Codex 整合；產品檔案仍交 Claude，開工先在此記接手。新增 ADR-002 未修改 D13／D14；強制隔離需要另案設計，不能用 broker 內測試冒充。
@@ -58,6 +58,16 @@ status: D1–D14 已拍板；H3 有第一件真任務證據、仍待完整驗收
 - 2026-10-26｜Claude｜接手 G0–G5
   - 規劃文件原樣 commit（`345a1ce`）。
   - Claude 負責 `office/browser_actions.py`、`office/browser_audit.py`、`office/tests/test_browser_actions.py`，以及 `office.py` 的 broker 路由與遷移。
+- 2026-10-26｜Claude｜G4｜完成（Mac 本機真 Chrome 155 headless＋自動測試模擬；沒有 VPS、真 Codex、viewer、Mac App、iPhone）
+  - 接手狀態機與 API（`/api/viewer/control`、`/api/viewer/state`、`/api/worker/browser/control-ack`、heartbeat 的 hold 欄位）。
+  - worker 每 1 秒問控制狀態，停整個程序群組才回報停手，暫停不算時間，交還後由 broker 重新觀察。
+  - 斷線、重啟不會自動交還；撤銷操作者即轉 held；舊模式任務不能接手（409）。
+  - 修 G3 漏洞：快照名稱不再拿輸入框的值；密碼／驗證碼欄位在交還時讓 session 維持暫停。
+  - 實測（本機）：停手確認 0.12–0.19 秒；接手等在途導航 1.73 秒。
+  - 測試：完整測試組 170 項全過；mutation 21 組抓到 20 組，另 1 組是等價突變。
+  - 紀錄見 `reports/agent-hands/G4-VERIFICATION-2026-10-26.md`。
+  - ADR-002 要求 G3／G4 前先補 H3 缺項，這次依指示先做 G4，H3 缺項仍待補。
+  - 部署時 release 要多包 `office/browser_control.py`。本則不授權部署。
 - 2026-10-26｜Claude｜G3｜完成（Mac 本機真 Chrome 155 headless＋自動測試模擬；沒有 VPS、真 Codex、Mac App、iPhone）
   - broker 的手（CDP，固定 script、隔離 world、點擊前核對元素）、agent 唯一的 6 個瀏覽器工具（adapter）、worker 的每任務 proxy（lease 與控制世代只在 proxy 加）、office `--browser-cdp`。
   - broker 模式沒設定 adapter 就讓任務失敗，不退回 raw MCP。

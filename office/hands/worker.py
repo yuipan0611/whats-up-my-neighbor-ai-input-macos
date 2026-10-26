@@ -19,6 +19,7 @@ import tempfile
 import threading
 import sys
 import time
+import uuid
 
 PREAMBLE = '''你是「貓咪的手」：在自己的 Linux 帳號裡，用 shell、網路和一個已經開著的 Chrome（瀏覽器工具）替使用者做事。用繁體中文回報。
 規則：
@@ -151,6 +152,7 @@ class Worker:
     POLL_SECONDS = 3
     FLUSH_SECONDS = 2
     HEARTBEAT_SECONDS = 30
+    CONTROL_SECONDS = 1        # ADR-002 6.1: broker mode asks about take/return this often; a budget, not a measured latency
     TASK_SECONDS = 1800        # PRD 7: 30 minutes per task
     OUTPUT_BYTES = 4000000     # PRD 7: 4 MB of events
     WORKSPACE_BYTES = 2 << 30  # ADR-001 A19: disk ceiling per task
@@ -164,6 +166,7 @@ class Worker:
         self.browser, self.sandbox = browser, sandbox  # browser: (command, [args]) of the raw browser tool server (legacy)
         self.adapter = adapter  # path of browser_adapter.py: the only browser tools in broker mode
         self.stopping = False
+        self.leftover = None  # a process group that outlived its stop
 
     # -- the loop --------------------------------------------------------------------------
 
@@ -214,36 +217,65 @@ class Worker:
                 shutil.rmtree(proxy_dir, ignore_errors=True)
 
     def run(self, task, workspace, run_dir, schema_path, output_path, proxy):
+        """One or more agent turns. In broker mode a person can take the Chrome between turns (ADR-002 6):
+        the turn's whole process tree is stopped, and the next turn starts only after the broker observed
+        the page again. Time spent held does not count toward the 30 minutes."""
         lease, task_id = task['lease'], task['id']
+        active, note = 0.0, ''
+        try:
+            while True:
+                if proxy:
+                    note = self.until_released(task_id, lease, proxy, note)
+                    if note is None:
+                        return 'stopped by the office'
+                kind, value = self.turn(task, workspace, schema_path, output_path, proxy, note, active)
+                if kind == 'done':
+                    return value
+                active += value
+        finally:
+            shutil.rmtree(run_dir, ignore_errors=True)
+
+    def turn(self, task, workspace, schema_path, output_path, proxy, note, active):
+        lease, task_id = task['lease'], task['id']
+        output_path.unlink(missing_ok=True)
         broker_socket = proxy.server_address if proxy else None
         process = subprocess.Popen(self.arguments(workspace, schema_path, output_path, broker_socket), stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=self.environment(),
                                    cwd=workspace, start_new_session=True)
         pending, last_text, seen = [], '', 0
-        started = last_flush = last_beat = time.monotonic()
+        started = last_flush = last_beat = last_disk = time.monotonic()
         stop_reason, selector = None, None
+        beat_every = self.CONTROL_SECONDS if proxy else self.HEARTBEAT_SECONDS
         try:
-            process.stdin.write(self.prompt(task, workspace).encode('utf-8'))
+            process.stdin.write((self.prompt(task, workspace) + note).encode('utf-8'))
             process.stdin.close()
             selector = selectors.DefaultSelector()
             selector.register(process.stdout, selectors.EVENT_READ)
             buffer = b''
             while True:
                 now = time.monotonic()
-                if now - started > self.TASK_SECONDS:
+                if active + now - started > self.TASK_SECONDS:
                     stop_reason = 'time'
                     break
-                if now - last_beat >= self.HEARTBEAT_SECONDS:
+                if now - last_beat >= beat_every:
                     last_beat = now
-                    if not self.beat(task_id, lease):
-                        return self.abandon(process, 'stopped by the office')
+                    go, control = self.beat_state(task_id, lease)
+                    if not go:
+                        return 'done', self.abandon(process, 'stopped by the office')
+                    if control and control.get('hold'):
+                        self.stop_tree(process)
+                        if pending:
+                            self.flush(task_id, lease, pending)
+                        return 'hold', time.monotonic() - started
+                if now - last_disk >= self.HEARTBEAT_SECONDS:
+                    last_disk = now
                     if workspace_bytes(workspace) > self.WORKSPACE_BYTES:
                         stop_reason = 'disk'
                         break
                 if pending and (now - last_flush >= self.FLUSH_SECONDS or len(pending) >= self.BATCH):
                     last_flush = now
                     if not self.flush(task_id, lease, pending):
-                        return self.abandon(process, 'stopped by the office')
+                        return 'done', self.abandon(process, 'stopped by the office')
                 if not selector.select(timeout=0.25):
                     if process.poll() is not None:
                         break
@@ -275,8 +307,8 @@ class Worker:
             self.kill(process)
             for _ in range(len(pending) // self.BATCH + 1):
                 if pending and not self.flush(task_id, lease, pending):
-                    return 'stopped by the office'
-            return self.finish(task_id, lease, process.returncode, output_path, stop_reason, last_text)
+                    return 'done', 'stopped by the office'
+            return 'done', self.finish(task_id, lease, process.returncode, output_path, stop_reason, last_text)
         finally:
             self.kill(process)
             if selector:
@@ -284,7 +316,91 @@ class Worker:
             process.stdout.close()
             if not process.stdin.closed:
                 process.stdin.close()
-            shutil.rmtree(run_dir, ignore_errors=True)
+
+    # -- control: take and return (broker mode) ---------------------------------------------
+
+    def until_released(self, task_id, lease, proxy, note):
+        """Hold until the office says the agent may run: confirm the stop, re-observe after a return.
+
+        Returns the note for the next turn ('' when nothing happened), or None once the task is over;
+        a cancelled task stays cancelled after a return."""
+        acked = None
+        while not self.stopping:
+            go, control = self.beat_state(task_id, lease)
+            if not go:
+                return None
+            if control is None:  # the office is unreachable: stay stopped until it answers
+                time.sleep(self.CONTROL_SECONDS)
+                continue
+            state = control.get('control_state')
+            if state is None or not control.get('hold'):
+                return note
+            epoch = control['control_epoch']
+            if self.leftover and self.group_gone(self.leftover, 0.5):
+                self.leftover = None
+            if state == 'taking_control' and acked != epoch and not self.leftover:
+                # Every turn ends with its process group gone, so nothing of the agent runs here.
+                if self.ack(task_id, lease, epoch, 'stopped') == 200:
+                    acked = epoch
+            elif state == 'resuming':
+                note = self.observe(task_id, lease, proxy, epoch) or note
+            time.sleep(self.CONTROL_SECONDS)
+        return None
+
+    def observe(self, task_id, lease, proxy, epoch):
+        """The broker takes the new snapshot itself; the agent gets only its role/name list, never typed text."""
+        reply = proxy.forward({'tool': 'take_snapshot', 'action_id': str(uuid.uuid4()), 'args': {}})
+        body = reply.get('body') or {}
+        if reply.get('status') != 200 or body.get('outcome') != 'succeeded':
+            self.ack(task_id, lease, epoch, 'failed')
+            return None
+        snap = body['result']
+        if self.ack(task_id, lease, epoch, 'observed', snap['snapshot_id']) != 200:
+            return None
+        items = [f"- {t.get('role')}：{t.get('name')}" for t in list(snap['targets'].values())[:60]]
+        return ('\n\n使用者剛剛接手過 Chrome，現在交還給你。之前的畫面快照和目標都已失效，之前做過的步驟不要重做；'
+                '先用 observe_page 看目前畫面，再決定下一步。交還後重新觀察到的可操作項目：\n' + '\n'.join(items))
+
+    def ack(self, task_id, lease, epoch, checkpoint, snapshot_id=None):
+        body = {'task_id': task_id, 'lease': lease, 'control_epoch': epoch, 'checkpoint': checkpoint}
+        if snapshot_id:
+            body['snapshot_id'] = snapshot_id
+        try:
+            return self.office.post('/api/worker/browser/control-ack', body)[0]
+        except OSError:
+            return None
+
+    def beat_state(self, task_id, lease):
+        """(keep going, control fields or None when the office did not answer).
+
+        The office restarting is not a reason to stop: the lease outlives it."""
+        try:
+            status, body = self.office.post('/api/worker/heartbeat', {'task_id': task_id, 'lease': lease})
+        except OSError:
+            return True, None
+        if status != 200 or body.get('continue') is not True:
+            return False, {}
+        return True, body
+
+    def stop_tree(self, process):
+        """Stop the agent and every tool it started in its process group; only the main PID is not enough."""
+        self.kill(process)
+        if not self.group_gone(process.pid, 3):
+            self.leftover = process.pid  # no stop confirmation until it is gone; the office turns this into held
+
+    @staticmethod
+    def group_gone(pgid, wait):
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                return True
+            except PermissionError:
+                return False
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.05)
 
     def finish(self, task_id, lease, code, output_path, stop_reason, last_text):
         reasons = {'time': '超過 30 分鐘，先停在這裡。', 'output': '工作過程的紀錄超過 4 MB，先停在這裡。',
@@ -305,13 +421,6 @@ class Worker:
             body = {'outcome': 'failed', 'text': last_text[:140000], 'reason': f'這件沒有做完（程式結束碼 {code}）；做到一半的步驟都保留著。'}
         status, _ = self.office.post('/api/worker/complete', {'task_id': task_id, 'lease': lease, **body})
         return body['outcome'] if status == 200 else f'complete refused ({status})'
-
-    def beat(self, task_id, lease):
-        try:
-            status, body = self.office.post('/api/worker/heartbeat', {'task_id': task_id, 'lease': lease})
-        except OSError:
-            return True  # the office restarting is not a reason to stop; the lease outlives a restart
-        return status == 200 and body.get('continue') is True
 
     def flush(self, task_id, lease, pending):
         batch = pending[:self.BATCH]

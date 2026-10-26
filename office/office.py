@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # python3 -I leaves the script's own folder off the path
 import browser_audit  # noqa: E402
+import browser_control  # noqa: E402
 
 VERSION = '0.5.1'
 ACTIVE = ('planning', 'running', 'saving')
@@ -997,8 +998,10 @@ class Office:
     def __init__(self, store, model, agent=None, broker=None):
         self.store, self.model, self.agent = store, model, agent
         self.broker = broker  # a browser_actions.Broker only where broker mode is switched on; legacy otherwise
+        self.control = browser_control.Control(store, broker) if broker else None  # take / return of the cat's Chrome
         if broker:
             broker.recover()
+            self.control.recover()
         self.stopping = threading.Event()
         self.store.recover()
         self.thread = None
@@ -1523,6 +1526,8 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/journal/download':
                 text = '# 生活紀錄\n\n' + '\n\n---\n\n'.join(f"{e['day']} · {e['id']}\n\n{e['text']}" for e in reversed(office.store.journal()))
                 self.send(200, text, 'text/markdown; charset=utf-8', True)
+            elif path == '/api/viewer/state' and office.control:
+                self.send(200, office.control.state(self.viewer_id()))
             elif re.fullmatch(r'/api/tasks/[0-9a-f-]{36}/actions', path):
                 query = parse_qs(parts.query)
                 try:
@@ -1587,15 +1592,21 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/session/forget' and self.mode == 'public':
                 office.store.revoke_device(self.device['id'])
                 self.server.kick_device(self.device['id'])
+                if office.control:
+                    office.control.revoked(self.device['id'])
                 self.send(200, {'ok': True}, headers={'Set-Cookie': f'{COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0'})
             elif re.fullmatch(r'/api/devices/[0-9a-f-]{36}/revoke', path) and self.mode == 'local':
                 device = office.store.revoke_device(path.split('/')[3])
                 self.server.kick_device(device['id'])
+                if office.control:
+                    office.control.revoked(device['id'])
                 self.send(200, {'device': device})
             elif re.fullmatch(r'/api/tasks/[0-9a-f-]{36}/handoff', path):
                 self.send(201, office.store.add_handoff(path.split('/')[3], body))
             elif re.fullmatch(r'/api/tasks/[0-9a-f-]{36}/cancel', path):
                 self.send(200, office.store.cancel(path.split('/')[3]))
+            elif path == '/api/viewer/control' and office.control:
+                self.send(*office.control.operate(self.viewer_id(), body))
             else:
                 raise OfficeError('找不到這個操作。', 404)
         except OfficeError as e:
@@ -1605,9 +1616,13 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self.send(500, {'error': '操作失敗，請重新整理後檢查任務紀錄。'})
 
+    def viewer_id(self):
+        """Who is at the controls: a paired device in public mode, the Mac owner on the local entry."""
+        return self.device['id'] if self.mode == 'public' else 'local-owner'
+
     def worker_call(self, path, body):
         """The only routes on the worker socket (agent-hands PRD 9)."""
-        store = self.server.office.store
+        store, control = self.server.office.store, self.server.office.control
         if path == '/api/worker/browser/action':
             if not self.server.office.broker:
                 raise OfficeError('瀏覽器 broker 模式沒有開。', 404)
@@ -1616,11 +1631,23 @@ class Handler(BaseHTTPRequestHandler):
             if not self.server.office.broker:
                 raise OfficeError('瀏覽器 broker 模式沒有開。', 404)
             return self.server.office.broker.state(body)
+        if path == '/api/worker/browser/control-ack':
+            if not control:
+                raise OfficeError('瀏覽器 broker 模式沒有開。', 404)
+            return control.ack(body)
         if path == '/api/worker/claim':
-            return {'task': store.claim_hands(), 'paused': store.paused(), 'locked': store.hands_locked()}
+            if control and not control.claimable():  # a person holds the Chrome: not even the next task starts
+                return {'task': None, 'paused': store.paused(), 'locked': store.hands_locked(), 'held': True}
+            task = store.claim_hands()
+            if task and control:
+                control.attach(task)
+            return {'task': task, 'paused': store.paused(), 'locked': store.hands_locked()}
         task_id, lease = body.get('task_id'), body.get('lease')
         if path == '/api/worker/heartbeat':
-            return store.hands_heartbeat(task_id, lease)
+            beat = store.hands_heartbeat(task_id, lease)
+            if control and beat['continue'] and store.get(task_id)['browser_mode'] == 'broker':
+                beat.update(control.worker_view(task_id))
+            return beat
         if path == '/api/worker/events':
             return store.hands_notes(task_id, lease, body.get('events'))
         if path == '/api/worker/complete':
@@ -1824,6 +1851,7 @@ def cli(argv):
             device = store.revoke_device(args.device_id)
         except OfficeError as e:
             raise SystemExit(str(e))
+        browser_control.Control(store, None).revoked(device['id'])  # the running office reads the same session row
         print(f"已撤銷 {device['name']}（{device['id']}）；它的連線會在 2 秒內中斷。")
 
 

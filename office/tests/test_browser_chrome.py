@@ -22,6 +22,9 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 import browser_actions as ba  # noqa: E402
 import browser_cdp  # noqa: E402
 from test_browser_adapter import HANDS, worker_mod  # noqa: E402
+import test_browser_control as g4  # noqa: E402
+
+FICTIONAL_PASSWORD = 'zz-fictional-pass-4821'
 
 FAKE_CODEX = r'''#!{python}
 import json, os, re, subprocess, sys
@@ -57,7 +60,10 @@ PAGES = {
 <a href="/docs.html?ref=home">說明</a> <a href="/logout">登出</a>
 <form method="post" action="/delete"><button>刪除帳號</button></form>
 <input name="q" placeholder="搜尋">''',
-    '/docs.html': '<!doctype html><meta charset="utf-8"><title>說明</title><p>說明頁內容</p>',
+    '/docs.html': '<!doctype html><meta charset="utf-8"><title>說明</title><p>說明頁內容</p><a href="/index.html">回首頁</a>',
+    '/slow.html': '<!doctype html><meta charset="utf-8"><title>很慢的頁面</title><p>慢慢來</p>',
+    '/login.html': '''<!doctype html><meta charset="utf-8"><title>虛構登入</title>
+<label>帳號 <input name="user" value="demo-user"></label> <label>密碼 <input type="password" name="pw"></label> <button>登入</button>''',
     '/swap.html': '''<!doctype html><meta charset="utf-8"><title>會變的頁面</title>
 <a href="/docs.html">說明</a>
 <script>setTimeout(() => document.body.insertAdjacentHTML('afterbegin', '<a href="/logout">登出</a>'), 1500);</script>''',
@@ -69,6 +75,8 @@ class Site(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         Site.seen.append(('GET', self.path.split('?')[0]))
+        if self.path == '/slow.html':
+            time.sleep(2)  # an action still in flight when the person takes over
         body = PAGES.get(self.path.split('?')[0])
         self.send_response(200 if body else 404)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
@@ -114,7 +122,7 @@ class RealChromeTests(unittest.TestCase):
         self.shots = Path(self.data.name) / 'shots'
         self.broker = ba.Broker(self.store, browser_cdp.ChromeBrowser(self.endpoint, str(self.shots)))
         self.office = app.Office(self.store, FakeModel(), broker=self.broker)
-        self.task = self.office.command({'id': str(uuid.uuid4()), 'prompt': f'合成任務：看 {self.base}/index.html', 'executor': 'hands'})['task']
+        self.task = self.office.command({'id': str(uuid.uuid4()), 'prompt': f'合成任務：URL={self.base}/index.html', 'executor': 'hands'})['task']
         self.claimed = self.store.claim_hands()
         Site.seen.clear()
 
@@ -212,6 +220,111 @@ class RealChromeTests(unittest.TestCase):
         with self.store.connect() as c:
             rows = c.execute("SELECT decision FROM browser_audit_events WHERE task_id=? AND event_type='decision' ORDER BY seq", (task['id'],)).fetchall()
         self.assertEqual([r[0] for r in rows], ['allow', 'allow', 'needs_human', 'allow', 'allow'])
+
+
+    # -- G4: take and return on a real Chrome ---------------------------------------------------
+
+    def control_op(self, action, device='dev-a'):
+        with self.store.connect() as c:
+            epoch = c.execute("SELECT control_epoch FROM browser_sessions WHERE id='cat-chrome'").fetchone()[0]
+        return self.office.control.operate(device, {'operation_id': str(uuid.uuid4()), 'action': action, 'expected_epoch': epoch})
+
+    def control_ack(self, checkpoint, **extra):
+        with self.store.connect() as c:
+            epoch = c.execute("SELECT control_epoch FROM browser_sessions WHERE id='cat-chrome'").fetchone()[0]
+        return self.office.control.ack({'task_id': self.task['id'], 'lease': self.claimed['lease'], 'control_epoch': epoch,
+                                        'checkpoint': checkpoint, **extra})
+
+    def person(self, url, password=None):
+        """The person's own input, as the viewer would send it: straight to Chrome, outside the broker."""
+        hand = browser_cdp.ChromeBrowser(self.endpoint, str(self.shots))
+        hand.execute('navigate', {'url': url}, None)
+        if password:
+            page, ws = hand.session()
+            try:
+                hand.evaluate(ws, "document.querySelector('input[type=password]').focus()")
+                hand.call(ws, 'Input.insertText', {'text': password})
+            finally:
+                ws.close()
+
+    def test_takeover_waits_for_the_action_in_flight_and_return_re_observes(self):
+        self.office.control.attach(self.claimed)
+        self.act('navigate', {'url': self.base + '/index.html'})
+        old = self.snapshot()
+        result = {}
+        runner = threading.Thread(target=lambda: result.setdefault('r', self.act('navigate', {'url': self.base + '/slow.html'})))
+        runner.start()
+        time.sleep(0.5)
+        started = time.monotonic()
+        status, body = self.control_op('take')
+        waited = time.monotonic() - started
+        runner.join()
+        self.assertEqual((status, body['control_state']), (202, 'taking_control'))
+        self.assertEqual(result['r'][1]['outcome'], 'succeeded')  # it had already passed every check
+        self.assertGreater(waited, 1)  # take waited for it instead of opening input mid-action
+        self.assertEqual(self.control_ack('stopped')[0], 200)
+        Site.seen.clear()
+        self.person(self.base + '/login.html', FICTIONAL_PASSWORD)
+        self.assertEqual(self.act('read_text')[1]['reason_code'], 'held')
+        self.assertEqual(self.control_op('return')[1]['control_state'], 'resuming')
+        snap = self.act('take_snapshot')[1]['result']
+        status, body = self.control_ack('observed', snapshot_id=snap['snapshot_id'])
+        self.assertEqual((status, body['reason_code']), (409, 'sensitive_page'))  # still a sign-in screen: the person finishes
+        self.assertNotIn(FICTIONAL_PASSWORD, json.dumps(snap, ensure_ascii=False))
+        self.person(self.base + '/docs.html')
+        self.assertEqual(self.control_op('return')[1]['control_state'], 'resuming')
+        snap = self.act('take_snapshot')[1]['result']
+        self.assertIn('回首頁', [t['name'] for t in snap['targets'].values()])
+        self.assertEqual(self.control_ack('observed', snapshot_id=snap['snapshot_id'])[0], 200)
+        status, body = self.act('click', snapshot_id=old['snapshot_id'], target_ref=self.ref(old, '說明'))
+        self.assertEqual((status, body['reason_code']), (409, 'stale_snapshot'))
+        seen = [s for s in Site.seen if s[1] != '/favicon.ico']
+        self.assertEqual(seen, [('GET', '/login.html'), ('GET', '/docs.html')])  # only the person's own pages while held
+        stored = b''.join(p.read_bytes() for p in (Path(self.data.name) / 'data').glob('office.sqlite3*'))
+        self.assertNotIn(FICTIONAL_PASSWORD.encode(), stored)
+        with self.store.connect() as c:
+            events = [r[0] for r in c.execute("SELECT event_type FROM browser_audit_events WHERE event_type LIKE 'control_%' ORDER BY seq")]
+        self.assertEqual(events, ['control_requested', 'control_taken', 'control_return_requested', 'control_held',
+                                  'control_return_requested', 'control_released'])
+        print(f'\nG4 take waited for the in-flight action (real Chrome): {waited:.2f}s', file=sys.stderr)
+
+    def test_worker_takeover_and_return_end_to_end(self):
+        root = Path(self.data.name)
+        worker_socket = root / 'w' / 'worker.sock'
+        server = app.Server(0, self.office, worker_socket=worker_socket)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            fake = root / 'fake-codex'
+            fake.write_text(g4.FAKE_CODEX.format(python=sys.executable)); fake.chmod(0o755)
+            worker = worker_mod.Worker(worker_mod.Office(worker_socket), fake, root / 'codex-home', root / 'ws',
+                                       browser=('/usr/bin/false', []), adapter=HANDS / 'browser_adapter.py')
+            worker.HEARTBEAT_SECONDS, worker.FLUSH_SECONDS, worker.CONTROL_SECONDS = 0.5, 0.1, 0.2
+            self.office.control.attach(self.claimed)
+            result = {}
+            runner = threading.Thread(target=lambda: result.setdefault('outcome', worker.handle(self.claimed)))
+            runner.start()
+            turn1_path = root / 'ws' / self.task['id'] / 'attempt-1' / 'turn1.json'
+            g4.wait_for(turn1_path.exists, 30)
+            turn1 = json.loads(turn1_path.read_text())
+            started = time.monotonic()
+            self.control_op('take')
+            g4.wait_for(lambda: self.office.control.state('dev-a')['control_state'] == 'human_control', 10)
+            stopped = time.monotonic() - started
+            self.assertFalse(any(g4.alive(p) for p in turn1['pids']))
+            Site.seen.clear()
+            self.person(self.base + '/docs.html')
+            self.control_op('return')
+            runner.join(60)
+        finally:
+            server.shutdown(); server.server_close(); thread.join()
+        self.assertEqual(result.get('outcome'), 'completed')
+        turn2 = json.loads((root / 'ws' / self.task['id'] / 'attempt-1' / 'turn2.json').read_text())
+        self.assertIn('回首頁', turn2['note'])  # the broker's observation after return, not the old page
+        self.assertIn('stale', turn2['stale']['content'][0]['text'])
+        self.assertIn('回首頁', [t['name'] for t in turn2['fresh']['targets'].values()])
+        self.assertEqual([s for s in Site.seen if s[1] != '/favicon.ico'], [('GET', '/docs.html')])  # the old click never ran
+        print(f'\nG4 stop confirmation (real Chrome, fake Codex): {stopped:.2f}s', file=sys.stderr)
 
 
 if __name__ == '__main__':
