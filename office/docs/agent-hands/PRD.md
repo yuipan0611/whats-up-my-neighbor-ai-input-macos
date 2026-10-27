@@ -1,8 +1,8 @@
 ---
 title: 貓咪的手：VPS 工作區與權限（v1）
 date: 2026-10-23
-revision: v0.4（瀏覽器動作入口、可信任紀錄、接手屏障；ADR-002）
-status: D1–D14 已拍板；2026-10-26 增補架構規劃，待實作；歷史 H3 真任務證據見交接板
+revision: v0.5（Claude 與 Gemini 執行者；ADR-003）
+status: D1–D17 已拍板；2026-10-26、2026-10-28 增補架構規劃，待實作；歷史 H3 真任務證據見交接板
 branch: claude/agent-hands-prd（基於 main 5705004）
 related:
   - office/README.md（貓咪辦公室現況）
@@ -10,6 +10,7 @@ related:
   - worktrees/neighbor-remote-agent/docs/remote-desktop/PRD.md（VNC 接手控制，2026-10-21 真 VPS 驗證）
   - office/docs/agent-hands/ADR-001-office-sqlite-vs-vps-mvp-prd.md（與 nekonode-site 的 VPS-first PRD 對照）
   - office/docs/agent-hands/ADR-002-browser-actions-audit-handover.md（瀏覽器控管、紀錄與接手契約）
+  - office/docs/agent-hands/ADR-003-claude-gemini-executors.md（Claude 與 Gemini 的腦和手）
   - office/docs/agent-hands/CLAUDE-HANDOFF-2026-10-26.md（Claude 施工入口）
 ---
 
@@ -223,7 +224,7 @@ v1 要做到：VPS 上的貓可以用自己的 Chrome 操作網頁、在 GitHub 
 - 不做「單站鑰匙轉交」（在你的瀏覽器登入後，只把那一個網站的登入狀態交給貓咪），這是 v2 選項，見第 6 節。
 - 不整合進 Mac 正式 App 的選單，這是 v1.1 候選。
 - 不做第二個 Mac 帳號、Mac 上的 VM、Docker Desktop。
-- 不讓 Gemma 和瀏覽器任務同時跑；不接 Claude 或 Gemini 執行者。
+- 不讓 Gemma 和瀏覽器任務同時跑。（v0.5 刪除「不接 Claude 或 Gemini 執行者」，見 D15–D17 與 ADR-003。）
 
 ### 4.4 為了「無感」多出來的工程
 
@@ -440,6 +441,7 @@ v1b 驗收要**實際演練一次**完整撤銷，然後再恢復。
   - 一次只跑一件「手」的任務；Gemma 和「手」互斥。
   - 每件任務最長 30 分鐘（你接手的時間不算，D12）、事件最多 4 MB，超過就停下來並保留部分成果。
 - 原本的 `codex`（唯讀）和 `gemma` 執行者不變。
+- **v0.5：** 腦多了 `claude`、`gemini` 執行者；手的任務多一個 `agent` 欄位，可以選 Codex、Claude、Gemini，預設 Codex。新的手只接 broker 模式的受限瀏覽器 adapter，沙箱至少要跟 Codex 的 `workspace-write` 一樣（ADR-003）。
 
 **broker 模式增補：** 瀏覽器改接受限 adapter，再由辦公室 dispatch；原始瀏覽器 MCP 不作錯誤時的 fallback。這是待實作能力，既有 legacy 仍依 D13 限制描述。執行輪次、控制世代與工具目標版本一起驗證；接手不重領任務，交還可在原 task 下重啟 Agent turn（ADR-002）。
 
@@ -539,12 +541,15 @@ v1b 驗收要**實際演練一次**完整撤銷，然後再恢復。
 | D6 | 怎麼看貓咪 | **辦公室網頁裡看，Mac 和手機共用**（v1b）；v1a 先用 Mac 螢幕共享 | 只用 Mac 螢幕共享，手機只看截圖 | **改了**：v0.1 是「手機只看截圖」 |
 | D7 | 收不回的事 | **v1 由你本人做**，卡片一鍵開到要按的頁面 | v1 就做「你核准、貓咪代按」：工作量大約多一倍 | 補上一鍵直達 |
 | D8 | VPS swap | **加 4 GB**（你用 root 執行，指令由我提供） | 不加：記憶體用完時程序會被直接砍掉 | — |
-| D9 | 手的執行者 | **v1 只用 Codex** | 同時接 Claude Code：要另外登入、另外付費 | — |
+| D9 | 手的執行者 | **v1 只用 Codex** | 同時接 Claude Code：要另外登入、另外付費 | **v0.5 由 D16 取代**：手可以用 Codex、Claude、Gemini |
 | D10 | 誰決定要不要動手 | **貓咪自己決定**（腦先想，需要時自動轉給手）；模型選單移到「進階」 | 你每次自己選 | **新增** |
 | D11 | 通知 | **Telegram bot，只送「有 1 件等你」，不送內容** | Web Push（iPhone Chrome 是否支援還沒確認）；不做，打開頁面才看得到 | **新增**：改變手機 PRD 的 D4「暫不通知」，因為現在工作會停下來等你 |
 | D12 | 接手中斷線 | **維持暫停，你按「交還」才繼續**；只在看的時候關掉畫面，不影響工作（第 6 節） | 關掉畫面就算交還（v0.2 的做法）：少按一下，但斷線時貓咪會接著點 | **v0.3 新增**（ADR-001 5.1） |
 | D13 | 跑程式和 Chrome 要不要分開使用者 | **v1 不分開**；Chrome 需要登入有價值的帳號時，再加 `neko-runner`（5.2） | 現在就加 `neko-runner`：多一個使用者和一層交接 | **v0.3 新增**（ADR-001 5.2） |
 | D14 | 網站白名單 | **v1 不做**；v2 先擋 SMTP 這類出站連線（5.9） | 做 origin 白名單：維護成本高，也擋不住同一個網站裡的外傳 | **v0.3 新增**（ADR-001 5.3） |
+| D15 | Claude、Gemini 怎麼登入、怎麼付費 | **用現有訂閱登入官方 CLI**（Claude 訂閱、Google 帳號），YUI 在 VPS 本人登入一次 | API 金鑰按量計費；混合 | **v0.5 新增**（2026-10-28，ADR-003） |
+| D16 | 第一階段做到哪裡 | **腦和手都做** | 只做腦 | **v0.5 新增**；取代 D9 |
+| D17 | 先接哪一家 | **Claude 先**，Gemini 照同一套模式 | Gemini 先；兩家一起 | **v0.5 新增** |
 
 ## 11. 什麼時候才需要第二個 Mac 帳號
 
@@ -636,6 +641,8 @@ H／G 狀態與證據分開；下列清單是驗收要求，不代表已通過�
 - 辦公室資料表遷移前，先備份 SQLite（沿用 DEPLOY.md 的 release 流程）。
 
 ## 版本紀錄
+
+- **v0.5（2026-10-28）：** YUI 指示主力是 Claude、OpenAI、Gemini，Gemma 不是重點；拍板 D15–D17（訂閱登入、腦和手都做、Claude 先）。D9 由 D16 取代，4.3 刪除「不接 Claude 或 Gemini 執行者」，第 7 節補新執行者。設計與施工順序 P0–P6 見 ADR-003。只更新規劃，未改產品程式或部署。
 
 - **v0.4（2026-10-26）：** 依 YUI 要求整合 OpenBot 研究；新增 5.11、9.2、13.3 與 ADR-002／Claude 交接；修正第 6 節的接手停止確認、伺服器輸入檢查與舊工具作廢。沿用 SQLite，D7／D12–D14 不變。只更新規劃，未改產品程式或部署。
 

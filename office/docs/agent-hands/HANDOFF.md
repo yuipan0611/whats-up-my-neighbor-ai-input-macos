@@ -1,7 +1,7 @@
 ---
 title: 貓咪的手：交接板
 date: 2026-10-23
-status: D1–D14 已拍板；H3 有第一件真任務證據、仍待完整驗收；G0 完成、G1／G2 本機模擬完成、G3、G4 Mac 本機真 Chrome＋模擬完成（皆未部署）；G5 未開始
+status: D1–D17 已拍板；H3 有第一件真任務證據、仍待完整驗收；G0 完成、G1／G2 本機模擬完成、G3、G4 Mac 本機真 Chrome＋模擬完成（皆未部署）；G5 未開始；P0 完成、P1–P6 未開始（ADR-003）
 ---
 
 # 交接板
@@ -41,6 +41,20 @@ status: D1–D14 已拍板；H3 有第一件真任務證據、仍待完整驗收
 
 施工順序、檔案分工及驗收見 [Claude 交接](CLAUDE-HANDOFF-2026-10-26.md)。目前文件由 Codex 整合；產品檔案仍交 Claude，開工先在此記接手。新增 ADR-002 未修改 D13／D14；強制隔離需要另案設計，不能用 broker 內測試冒充。
 
+## 2026-10-28 增補施工：P0–P6（Claude 與 Gemini）
+
+設計、帳號與風險見 [ADR-003](ADR-003-claude-gemini-executors.md)。D15–D17 已拍板，D9 由 D16 取代。
+
+| ID | 交付 | 負責 | 擁有的檔案／範圍 | 依賴 | 狀態 |
+|---|---|---|---|---|---|
+| P0 | ADR-003、PRD v0.5、本表 | Claude | `office/docs/agent-hands/*` | — | **完成**（只改文件） |
+| P1 | Claude 腦：共用子程序執行器、`ClaudeAgent`、`claude` 執行者、網頁模型選單 | Claude | `office/office.py`、`office/static/*`、`office/tests/test_providers.py`（新增） | P0 | 未開始 |
+| P2 | Claude 腦上 VPS：釘版安裝、YUI 登入、部署、條款查證 | Claude＋YUI（登入、同意部署） | `office/install_claude.py`（新增）、`reports/agent-hands/` | P1 | 未開始 |
+| P3 | Claude 手：worker `agent` 欄位、Claude 指令、沙箱、受限 adapter；neko-hands 安裝與登入 | Claude＋YUI（登入） | `office/hands/worker.py`、`office/tests/test_hands_worker.py` | P2、G0–G4 部署 | 未開始 |
+| P4 | Gemini 腦 | Claude＋YUI（登入） | 同 P1／P2 | P1 | 未開始 |
+| P5 | Gemini 手 | Claude＋YUI（登入） | 同 P3 | P3、P4 | 未開始 |
+| P6 | Mac 原生 Preview 模型選單 | 與 `worktrees/native-vps-desktop-preview` 協調 | 那個 worktree | P2 | 未開始 |
+
 ## 規則
 
 - **H2 的 loopback 修補完成並部署之前，不建立 neko-hands。**
@@ -55,6 +69,11 @@ status: D1–D14 已拍板；H3 有第一件真任務證據、仍待完整驗收
 
 ## 進度紀錄
 
+- 2026-10-28｜Claude｜P0｜完成（只改文件）
+  - YUI：主力是 Claude、OpenAI、Gemini，Gemma 不是重點；拍板 D15–D17。
+  - VPS 唯讀實測：沒有 Claude Code、Gemini CLI；有 Node 22.22.1、系統 bwrap；Ubuntu 26.04 限制非特權 user namespace。
+  - Mac 上確認 Claude Code 2.1.183、Gemini CLI 0.47.0 的無人值守參數、隔離設定資料夾與沙箱選項。VPS 上的行為待 P2／P3 實測。
+  - 同日 Gemma 冷載入修正 `82f70d5`（未部署），紀錄 `reports/agent-hands/GEMMA-COLD-LOAD-2026-10-28.md`。
 - 2026-10-26｜Claude｜接手 G0–G5
   - 規劃文件原樣 commit（`345a1ce`）。
   - Claude 負責 `office/browser_actions.py`、`office/browser_audit.py`、`office/tests/test_browser_actions.py`，以及 `office.py` 的 broker 路由與遷移。
