@@ -6,7 +6,7 @@
   const allowedExtensions = new Set(['txt', 'md', ...mediaExtensions]);
   let listing = false, newChat = false, attachment = null, uploadedName = '', pending = null;
   let recognition = null;
-  let codexState = '可交辦';
+  let codexState = '可交辦', claudeState = '等待登入，交辦會保留', claudeInstalled = false;
   const previousTasks = new Map();
 
   function icon(name, className = '') {
@@ -24,10 +24,13 @@
   }
   function avatar(executor) {
     const image = document.createElement('img');
-    image.src = executor === 'gemma' ? '/neko-gemma.png' : '/neko-openai.png';
+    image.src = executor === 'gemma' ? '/neko-gemma.png' : executor === 'claude' ? '/neko-claude.png' : '/neko-openai.png';
     image.alt = '';
     image.className = 'mobile-cat-avatar';
     return image;
+  }
+  function agentName(executor) {
+    return executor === 'gemma' ? 'Gemma' : executor === 'claude' ? 'Claude' : 'Codex';
   }
   function status(text, error = false) {
     byId('mobile-message').textContent = text;
@@ -48,7 +51,7 @@
   function setExecutor(executor) {
     byId('executor').value = executor;
     privacy();
-    byId('mobile-model-label').textContent = executor === 'gemma' ? 'Gemma · 本機' : 'Codex · 預設';
+    byId('mobile-model-label').textContent = executor === 'gemma' ? 'Gemma · 本機' : executor === 'claude' ? 'Claude' : 'Codex · 預設';
     renderModelOptions();
     if (newChat) renderEmpty();
   }
@@ -77,7 +80,7 @@
         ['Codex · 帳號預設', codexState, 'codex', true],
         ['Luna', '', '', false], ['Sol', '', '', false], ['Astra', '', '', false]
       ]],
-      ['Anthropic', [['Claude', '', '', false]]],
+      ['Anthropic', [['Claude', mediaAttached ? '圖片與 PDF 請改用 Codex' : claudeState, 'claude', claudeInstalled && !mediaAttached]]],
       ['Google', [['Gemini', '', '', false], ['Gemma 3 4B', mediaAttached ? '圖片與 PDF 請改用 Codex' : 'VPS 本機文字模型', 'gemma', !mediaAttached]]]
     ];
     for (const [heading, options] of groups) {
@@ -88,7 +91,7 @@
           : name === 'Claude' ? '/neko-claude.png'
           : name === 'Gemma 3 4B' ? '/neko-gemma.png' : '';
         const option = modelOption(name, detail, executor, available, avatarSrc);
-        if (name === 'Gemma 3 4B' && mediaAttached) option.querySelector('small').textContent = detail;
+        if ((name === 'Gemma 3 4B' || (name === 'Claude' && claudeInstalled)) && mediaAttached) option.querySelector('small').textContent = detail;
         group.append(option);
       }
       box.append(group);
@@ -109,7 +112,7 @@
     if (file.size > limit) { status(mediaExtensions.has(extension) ? '圖片與 PDF 每份上限 8MB。' : '文字檔上限 48KB。', true); return; }
     if (!file.size) { status('檔案是空的，請選擇其他檔案。', true); return; }
     attachment = file; uploadedName = ''; pending = null;
-    if (mediaExtensions.has(extension) && byId('executor').value === 'gemma') {
+    if (mediaExtensions.has(extension) && byId('executor').value !== 'codex') {
       setExecutor('codex');
       status('圖片與 PDF 將交給 Codex 讀取。');
     } else status('已選擇附件，送出時才會上傳。');
@@ -201,11 +204,11 @@
       file.append(icon('paperclip'), el('span', task.source));
       group.append(file);
     }
-    const handoff = el('div', `貓咪辦公室已交給 ${task.executor === 'gemma' ? 'Gemma' : 'Codex'}`, 'mobile-handoff');
+    const handoff = el('div', `貓咪辦公室已交給 ${agentName(task.executor)}`, 'mobile-handoff');
     group.append(handoff);
     const answer = el('div', undefined, 'mobile-answer');
     const byline = el('div', undefined, 'mobile-agent-byline');
-    byline.append(avatar(task.executor), el('strong', task.executor === 'gemma' ? 'Gemma' : 'Codex'));
+    byline.append(avatar(task.executor), el('strong', agentName(task.executor)));
     answer.append(byline);
     let download = null;
     if (task.result) {
@@ -227,7 +230,7 @@
     summary.append(icon('code-xml'), el('span', `工作過程 · ${notes.length} 步`), icon('chevron-down'));
     process.append(summary);
     const history = el('ol', undefined, 'mobile-process-list');
-    for (const note of notes) history.append(el('li', note.status === 'thinking' ? 'Codex 正在整理內容。' : note.message));
+    for (const note of notes) history.append(el('li', note.status === 'thinking' ? agentName(task.executor) + ' 正在整理內容。' : note.message));
     if (!notes.length) history.append(el('li', '還沒有工作步驟。'));
     process.append(history);
     if (download) process.append(download);
@@ -345,6 +348,10 @@
   }
   function updateHealth(health) {
     codexState = health.provider?.authenticated ? '已登入' : '等待登入，交辦會保留';
+    const claude = health.providers?.claude;
+    claudeInstalled = Boolean(claude?.installed);
+    claudeState = claude?.authenticated ? '已登入' : '等待登入，交辦會保留';
+    if (!claudeInstalled && byId('executor').value === 'claude') setExecutor('codex');
     renderModelOptions();
   }
 

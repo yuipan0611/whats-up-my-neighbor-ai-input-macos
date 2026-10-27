@@ -1,7 +1,7 @@
 ---
 title: 貓咪的手：交接板
 date: 2026-10-23
-status: D1–D17 已拍板；H3 有第一件真任務證據、仍待完整驗收；G0 完成、G1／G2 本機模擬完成、G3、G4 Mac 本機真 Chrome＋模擬完成（皆未部署）；G5 未開始；P0 完成、P1–P6 未開始（ADR-003）
+status: D1–D17 已拍板；H3 有第一件真任務證據、仍待完整驗收；G0 完成、G1／G2 本機模擬完成、G3、G4 Mac 本機真 Chrome＋模擬完成（皆未部署）；G5 未開始；P0 完成、P1 本機完成（未部署）、P2–P6 未開始（ADR-003）
 ---
 
 # 交接板
@@ -48,7 +48,7 @@ status: D1–D17 已拍板；H3 有第一件真任務證據、仍待完整驗收
 | ID | 交付 | 負責 | 擁有的檔案／範圍 | 依賴 | 狀態 |
 |---|---|---|---|---|---|
 | P0 | ADR-003、PRD v0.5、本表 | Claude | `office/docs/agent-hands/*` | — | **完成**（只改文件） |
-| P1 | Claude 腦：共用子程序執行器、`ClaudeAgent`、`claude` 執行者、網頁模型選單 | Claude | `office/office.py`、`office/static/*`、`office/tests/test_providers.py`（新增） | P0 | 未開始 |
+| P1 | Claude 腦：共用子程序執行器、`ClaudeAgent`、`claude` 執行者、網頁模型選單 | Claude | `office/office.py`、`office/static/*`、`office/tests/test_providers.py`（新增） | P0 | **完成（本機）**：188 項測試；真 Claude CLI 只驗了未登入的路徑；未部署 |
 | P2 | Claude 腦上 VPS：釘版安裝、YUI 登入、部署、條款查證 | Claude＋YUI（登入、同意部署） | `office/install_claude.py`（新增）、`reports/agent-hands/` | P1 | 未開始 |
 | P3 | Claude 手：worker `agent` 欄位、Claude 指令、沙箱、受限 adapter；neko-hands 安裝與登入 | Claude＋YUI（登入） | `office/hands/worker.py`、`office/tests/test_hands_worker.py` | P2、G0–G4 部署 | 未開始 |
 | P4 | Gemini 腦 | Claude＋YUI（登入） | 同 P1／P2 | P1 | 未開始 |
@@ -69,6 +69,32 @@ status: D1–D17 已拍板；H3 有第一件真任務證據、仍待完整驗收
 
 ## 進度紀錄
 
+- 2026-10-28｜Claude｜P1｜完成（本機自動測試＋本機網頁；沒有 VPS、真的已登入 Claude、iPhone、Mac App）
+  - **程式：**
+    - Codex 腦的子程序執行（串流、心跳、卡住提示、15 分鐘、4 MB、取消、清理）抽成 `CliAgent`，`CodexAgent` 改用它，行為不變。唯一差異：stdout 上不是 JSON 物件的行一律略過，原本會變成一般失敗。
+    - 新增 `ClaudeAgent`：
+      - 工具只有 `WebSearch`、`WebFetch`，`--permission-mode dontAsk`，不載入 MCP、不讀設定、不留對話紀錄。
+      - 設定在 `runtime/claude-home`，`--json-schema` 取得結構化成果。
+      - 開場事件的工具清單只要超出 `WebSearch`、`WebFetch`、`StructuredOutput`，或帶了 MCP，就直接中止。
+      - `authentication_failed` 轉成「需要登入」，`rate_limit`／`billing_error` 轉成「用量暫時用完」，都走 `needs_provider`。
+    - `claude` 執行者：
+      - `Store.submit` 接受；圖片與 PDF 仍只給 Codex。
+      - 執行、保存與 `claude_last_success` 跟 Codex 同一條路。
+      - `/api/health` 多 `providers`，`provider` 仍是 Codex，舊版 App 不受影響。
+      - `main()` 會建 `ClaudeAgent`；VPS 還沒裝 Claude，所以顯示「尚未接通」。
+    - 網頁：手機選單的 Claude 依健康狀態可選，桌面多 `Claude · Anthropic` 選項，隱私提示改說 Anthropic。顯示名稱、頭像、「正在整理內容」也跟著執行者換。
+  - **自動測試：**
+    - 新增 `test_providers.py` 14 項，用照劇本吐事件的假 Claude CLI。
+    - 突變檢查：拿掉工具檢查、`is_error` 判斷、`subtype` 判斷、環境變數白名單、CLI 英文通知過濾、開場事件必要性、`_last_success` 鍵名，每一種都會讓測試失敗。
+    - 全部 188 項在 Mac 上通過。
+  - **真 CLI（Mac，Claude Code 2.1.183，空的設定資料夾，未登入）：**
+    - 開場事件的工具正好是 `StructuredOutput`、`WebFetch`、`WebSearch`，`mcp_servers` 為空。
+    - `ClaudeAgent.health()` 判定未登入；繞過預檢執行時，得到「Claude 尚未登入」；沒有記下 CLI 的英文訊息，工作資料夾仍是空的。
+  - **本機網頁（Chrome 預覽、假 CLI、已登入）：**
+    - 手機寬度：選單的 Claude 顯示「已登入」並可選；交辦後顯示「已交給 Claude」、Claude 頭像、成果與建議下一步，工作過程是「Claude 正在整理內容。」「搜尋：…」。
+    - 桌面寬度：狀態列有 Claude，任務顯示「執行者：Claude · Anthropic」。
+    - console 沒有錯誤。
+  - **NOT RUN：** 已登入的真 Claude 任務（要等 P2 登入）、VPS、iPhone 實機、Mac 原生 App、條款查證。
 - 2026-10-28｜Claude｜P0｜完成（只改文件）
   - YUI：主力是 Claude、OpenAI、Gemini，Gemma 不是重點；拍板 D15–D17。
   - VPS 唯讀實測：沒有 Claude Code、Gemini CLI；有 Node 22.22.1、系統 bwrap；Ubuntu 26.04 限制非特權 user namespace。
