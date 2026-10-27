@@ -758,6 +758,13 @@ class Store:
 
 
 class Ollama:
+    # A cold load on the VPS CPU (load_tensors + CPU_REPACK) can outlast the stream's read timeout, and
+    # Ollama aborts a load as soon as its client hangs up, so the load gets its own, longer wait.
+    LOAD_SECONDS = 300
+    READ_SECONDS = 60
+    # Ollama reloads the model when these differ between requests, so the load sends the same ones.
+    RUNNER = {'num_ctx': 8192, 'num_thread': 2}
+
     def __init__(self, model='gemma3:4b', url='http://127.0.0.1:11434', managed=False):
         self.model, self.url = model, url
         self.managed = managed
@@ -782,18 +789,43 @@ class Ollama:
         except (OSError, ValueError, KeyError):
             return {'ready': False, 'name': self.model, 'digest': None}
 
+    def load(self, check):
+        """Wait until the model is in memory, still honouring check(); a chat with no messages only loads it."""
+        payload = {'model': self.model, 'messages': [], 'stream': False, 'keep_alive': '10m', 'options': self.RUNNER}
+        req = urllib.request.Request(self.url + '/api/chat', json.dumps(payload).encode(), {'Content-Type': 'application/json'})
+        outcome = {}
+        def wait():
+            try:
+                with urllib.request.urlopen(req, timeout=self.LOAD_SECONDS) as r:
+                    outcome['data'] = json.load(r)
+            except (OSError, ValueError):
+                pass
+        # A cancelled task leaves this thread loading, so the next task finds the model warm.
+        loader = threading.Thread(target=wait, name='ollama-load', daemon=True)
+        started = time.monotonic()
+        loader.start()
+        while loader.is_alive():
+            check()
+            loader.join(0.5)
+        data = outcome.get('data')
+        if not isinstance(data, dict) or data.get('error') or not data.get('done'):
+            raise OfficeError(f'Gemma 模型載入失敗或超過 {self.LOAD_SECONDS // 60} 分鐘，請稍後重試。')
+        return round(time.monotonic() - started, 3)
+
     def generate(self, system, prompt, check, progress, schema=None, limit=512):
         if len(system.encode('utf-8')) + len(prompt.encode('utf-8')) > 7000:
             raise OfficeError('內容超過第一版的處理容量，請分成約千字以內的短段落再交辦。', 413)
         payload = {'model': self.model, 'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': prompt}],
-                   'stream': True, 'keep_alive': '10m', 'options': {'temperature': 0, 'num_ctx': 8192, 'num_predict': limit, 'num_thread': 2}}
+                   'stream': True, 'keep_alive': '10m', 'options': {'temperature': 0, 'num_predict': limit, **self.RUNNER}}
         if schema:
             payload['format'] = schema
         req = urllib.request.Request(self.url + '/api/chat', json.dumps(payload).encode(), {'Content-Type': 'application/json'})
+        check()
+        load_seconds = self.load(check)
         result, final = [], None
         started, last_progress = time.monotonic(), 0
         check()
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with urllib.request.urlopen(req, timeout=self.READ_SECONDS) as r:
             for line in r:
                 check()
                 if time.monotonic() - started > 240:
@@ -813,6 +845,7 @@ class Ollama:
             raise OfficeError('模型沒有傳回完整內容，任務未標記完成。')
         metrics = {k: final[k] for k in ('total_duration', 'load_duration', 'prompt_eval_count', 'prompt_eval_duration', 'eval_count', 'eval_duration', 'done_reason') if k in final}
         metrics['elapsed_seconds'] = round(time.monotonic() - started, 3)
+        metrics['load_seconds'] = load_seconds
         return ''.join(result).strip(), metrics
 
 
