@@ -105,6 +105,10 @@ D1–D8、D10–D14 不變。特別是 D13（程式和 Chrome 同一個使用者
 
 ## 4. 風險與尚未確認
 
+- **2026-10-28 發現：Gemini CLI 不再服務個人帳號。** 依 [Gemini CLI 條款頁](https://geminicli.com/docs/resources/tos-privacy)，免費層與 Google One（含 AI Pro／Ultra）使用者從 2026-06-18 起改用 Antigravity CLI。D15 對 Gemini 的做法（用 Google 帳號登入 Gemini CLI）多半已經不通，P4 的 `GeminiAgent` 只對 Code Assist Standard／Enterprise 或 API 金鑰有用。
+  - Antigravity CLI（`agy` 1.4.7）有 `--print`、`stream-json`、`--json-schema`，開場事件列出工具。但它預設給模型 60 個工具，包括執行指令、寫檔、瀏覽器、傳訊息、排程，Claude 沒找到縮小工具的官方參數。
+  - **Gemini 的接法要 YUI 重新決定：** 研究 Antigravity 的工具限制，或改用付費 API 金鑰，或先不接。詳見 `reports/agent-hands/TERMS-CLAUDE-GEMINI-2026-10-28.md` 的「Claude 覆核」。
+
 - **額度共用：** 用訂閱登入，表示辦公室和 YUI 自己在 Mac 上用的 Claude Code／Gemini CLI 吃同一份額度。手的長任務可能先把額度用完。
 - **條款：** 訂閱帳號給自己的伺服器無人值守使用，要在 P2 前查官方條款確認。Gemini 用個人 Google 帳號時，提示內容可能被拿去改善產品，要查清楚，必要時改用付費方案或關閉。查到的結果寫進 P2 的驗證紀錄。
 - **沙箱：** Ubuntu 26.04 限制非特權 user namespace。Claude／Gemini 的 bwrap 能不能開，要在 VPS 實測，不能用 Mac 的結果代替。

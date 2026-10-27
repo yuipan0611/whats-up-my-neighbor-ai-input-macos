@@ -1,7 +1,7 @@
 ---
 title: 貓咪的手：交接板
 date: 2026-10-23
-status: D1–D17 已拍板；H3 有第一件真任務證據、仍待完整驗收；G0 完成、G1／G2 本機模擬完成、G3、G4 Mac 本機真 Chrome＋模擬完成（皆未部署）；G5 未開始；P0 完成、P1／P4 本機完成（未部署）、P2、P3、P5、P6 未開始（ADR-003）
+status: D1–D17 已拍板；H3 有第一件真任務證據、仍待完整驗收；G0 完成、G1／G2 本機模擬完成、G3、G4 Mac 本機真 Chrome＋模擬完成（皆未部署）；G5 未開始；P0 完成、P1 本機完成、P2 安裝腳本完成（未在 VPS 執行）、P4 本機完成但個人帳號路徑失效（待 YUI 決定）、P3、P5、P6 未開始（ADR-003）
 ---
 
 # 交接板
@@ -49,9 +49,9 @@ status: D1–D17 已拍板；H3 有第一件真任務證據、仍待完整驗收
 |---|---|---|---|---|---|
 | P0 | ADR-003、PRD v0.5、本表 | Claude | `office/docs/agent-hands/*` | — | **完成**（只改文件） |
 | P1 | Claude 腦：共用子程序執行器、`ClaudeAgent`、`claude` 執行者、網頁模型選單 | Claude | `office/office.py`、`office/static/*`、`office/tests/test_providers.py`（新增） | P0 | **完成（本機）**：188 項測試；真 Claude CLI 只驗了未登入的路徑；未部署 |
-| P2 | Claude 腦上 VPS：釘版安裝、YUI 登入、部署、條款查證 | Claude＋YUI（登入、同意部署） | `office/install_claude.py`（新增）、`reports/agent-hands/` | P1 | 未開始 |
+| P2 | Claude 腦上 VPS：釘版安裝、YUI 登入、部署、條款查證 | Claude＋YUI（登入、同意部署） | `office/install_agent_clis.py`（新增）、`reports/agent-hands/` | P1 | **準備完成**：釘版安裝腳本＋4 項測試；條款查證見 TERMS 報告的「Claude 覆核」。VPS 安裝、登入、部署都未做 |
 | P3 | Claude 手：worker `agent` 欄位、Claude 指令、沙箱、受限 adapter；neko-hands 安裝與登入 | Claude＋YUI（登入） | `office/hands/worker.py`、`office/tests/test_hands_worker.py` | P2、G0–G4 部署 | 未開始 |
-| P4 | Gemini 腦 | Claude＋YUI（登入） | 同 P1／P2 | P1 | **本機程式完成**：22 項 provider 測試；真 Gemini CLI 只驗了沒登入的路徑；VPS 安裝、YUI 登入、部署未做 |
+| P4 | Gemini 腦 | Claude＋YUI（登入） | 同 P1／P2 | P1 | **待 YUI 決定**：Gemini CLI 版本完成（22 項 provider 測試）。但 2026-06-18 起個人帳號改用 Antigravity CLI，見 ADR-003 第 4 節 |
 | P5 | Gemini 手 | Claude＋YUI（登入） | 同 P3 | P3、P4 | 未開始 |
 | P6 | Mac 原生 Preview 模型選單 | 與 `worktrees/native-vps-desktop-preview` 協調 | 那個 worktree | P2 | 未開始 |
 
@@ -69,6 +69,18 @@ status: D1–D17 已拍板；H3 有第一件真任務證據、仍待完整驗收
 
 ## 進度紀錄
 
+- 2026-10-28｜Claude｜P2 準備＋條款查證
+  - **`office/install_agent_clis.py`：** 從 npm registry 下載 Claude Code `2.1.183`（linux-x64 原生執行檔）與 Gemini CLI `0.47.0`。先比對寫死的 SHA-512 才解開；拒絕不安全或不對的封包內容；整包換上，不碰登入資料夾；不用 sudo。
+  - **自動測試：** 4 項。
+  - **實際下載（Mac，暫存資料夾）：** 兩個套件的 SHA-512 都相符。Gemini 的啟動檔能執行並回報 0.47.0。Claude 的 Linux 執行檔沒有在 Mac 執行。暫存資料夾已刪除。
+  - **條款：** Gemini（Antigravity CLI）先寫報告，Claude 覆核並更正（見 TERMS 報告最後一節）。
+    - Claude 額度與 Mac 共用，官方確認。
+    - 「無人值守」沒有找到明確官方說法。
+    - Gemini CLI 個人帳號 2026-06-18 起改為 Antigravity CLI。
+  - **Antigravity 實測（YUI 的登入，一句提示，空資料夾）：**
+    - 串流事件有 `init`（含工具清單）、`step_update`、`result`（含 `structured_output`）。
+    - 預設 60 個工具；`--mode plan` 在關掉 slash command 時沒有效果。
+  - **NOT RUN：** VPS 安裝、YUI 登入、部署。
 - 2026-10-28｜Claude｜P4｜本機程式完成（自動測試＋真 CLI 未登入路徑；沒有 VPS、已登入的 Gemini、網頁實測）
   - **`GeminiAgent`：**
     - 用 Gemini CLI 0.47.0 的 `-p '' -o stream-json --approval-mode plan`，prompt 從 stdin 送入。
