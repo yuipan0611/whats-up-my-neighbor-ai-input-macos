@@ -40,3 +40,32 @@ jobs:
           "$RUNNER_TEMP/office-python/bin/python" -I -c 'import opentelemetry.sdk.trace, opentelemetry.exporter.otlp.proto.http.trace_exporter, openinference.semconv.trace'
       - name: Test office and tracing integration
         run: '"$RUNNER_TEMP/office-python/bin/python" -I -m unittest discover -s office/tests -v'
+
+  backend-portability:
+    needs: office
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install the application tracing adapter
+        run: |
+          python3 -m venv "$RUNNER_TEMP/office-python"
+          "$RUNNER_TEMP/office-python/bin/python" -m pip install --require-hashes -r office/requirements-observability.txt
+      - name: Start isolated observation backends
+        run: docker compose -f office/lab/compose.yaml --profile phoenix --profile jaeger up -d --wait --wait-timeout 180
+      - name: Verify ingest and readback through both real backends
+        run: '"$RUNNER_TEMP/office-python/bin/python" -I office/lab/verify_backends.py --output "$RUNNER_TEMP/portability.json"'
+      - name: Upload synthetic verification evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: office-backend-portability
+          path: ${{ runner.temp }}/portability.json
+          if-no-files-found: error
+      - name: Show backend logs on failure
+        if: failure()
+        run: docker compose -f office/lab/compose.yaml --profile phoenix --profile jaeger logs --tail 100
+      - name: Stop isolated test services
+        if: always()
+        run: docker compose -f office/lab/compose.yaml --profile phoenix --profile jaeger down --volumes

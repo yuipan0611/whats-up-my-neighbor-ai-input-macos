@@ -29,6 +29,10 @@ import urllib.request
 from urllib.parse import parse_qs, urlsplit
 import uuid
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tracing_contract import TracePort
 
 VERSION = '0.3.0'
 ACTIVE = ('planning', 'running', 'saving')
@@ -225,6 +229,15 @@ class Store:
     def latest_seq(self):
         with self.connect() as c:
             return c.execute('SELECT COALESCE(MAX(seq),0) FROM events').fetchone()[0]
+
+    def executor_last_success(self, executor):
+        with self.connect() as c:
+            row = c.execute('SELECT value FROM settings WHERE key=?', (executor + '_last_success',)).fetchone()
+            return row[0] if row else None
+
+    def record_executor_success(self, executor):
+        with self.connect() as c:
+            c.execute('INSERT OR REPLACE INTO settings VALUES(?,?)', (executor + '_last_success', now()))
 
     def snapshot(self):
         """Tasks, pause flag and latest seq from one read transaction, so a client resumes from a matching cursor."""
@@ -715,7 +728,7 @@ class CodexAgent:
         'content': {'type': 'string'}, 'next_step': {'type': 'string'}},
         'required': ['kind', 'content', 'next_step'], 'additionalProperties': False}
 
-    def __init__(self, runtime, telemetry=None):
+    def __init__(self, runtime, telemetry: TracePort = None):
         self.runtime = Path(runtime).resolve()
         self.telemetry = telemetry
         self.binary = self.runtime / 'codex/codex-x86_64-unknown-linux-musl'
@@ -761,8 +774,45 @@ class CodexAgent:
     def run(self, task, check, progress, note=None):
         if self.telemetry is None:
             return self._run(task, check, progress, note)
-        with self.telemetry.agent(task) as observer:
-            return self._run(task, check, progress, note, observe=observer.event)
+        with self.telemetry.agent(task['id'], 'codex') as observer:
+            def observe(raw):
+                event = self.normalise_trace_event(raw)
+                if event is not None:
+                    observer.event(event)
+            return self._run(task, check, progress, note, observe=observe)
+
+    @staticmethod
+    def normalise_trace_event(raw):
+        """Codex JSONL -> our metadata contract. Never forward provider payloads."""
+        if not isinstance(raw, dict) or not isinstance(raw.get('type'), str):
+            return None
+        phase = {'thread.started': 'session.started', 'turn.started': 'run.started',
+                 'turn.completed': 'run.completed', 'turn.failed': 'run.failed',
+                 'error': 'run.error', 'item.started': 'item.started',
+                 'item.completed': 'item.completed'}.get(raw['type'])
+        if phase is None:
+            return None
+        event = {'schema_version': 1, 'phase': phase}
+        item = raw.get('item')
+        if phase.startswith('item.') and isinstance(item, dict):
+            kind = item.get('type')
+            kinds = {'reasoning': 'reasoning_summary', 'agent_message': 'message',
+                     'web_search': 'tool', 'error': 'error'}
+            event['item_kind'] = kinds.get(kind, 'other') if isinstance(kind, str) else 'other'
+            item_id = item.get('id')
+            if isinstance(item_id, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', item_id):
+                event['item_id'] = item_id
+            if kind == 'web_search':
+                event['tool_name'] = 'web_search'
+            if phase == 'item.completed':
+                event['outcome'] = 'failed' if item.get('status') == 'failed' else 'completed'
+        usage = raw.get('usage')
+        if phase == 'run.completed' and isinstance(usage, dict):
+            for key in ('input_tokens', 'output_tokens'):
+                value = usage.get(key)
+                if type(value) is int and 0 <= value < 2 ** 63:
+                    event[key] = value
+        return event
 
     def _run(self, task, check, progress, note=None, observe=None):
         note = note or (lambda kind, text: None)
@@ -890,7 +940,7 @@ class CodexAgent:
 
 
 class Office:
-    def __init__(self, store, model, agent=None, telemetry=None):
+    def __init__(self, store, model, agent=None, telemetry: TracePort = None):
         self.store, self.model, self.agent = store, model, agent
         self.telemetry = telemetry
         self.stopping = threading.Event()
@@ -952,9 +1002,9 @@ class Office:
     def execute(self, task):
         if self.telemetry is None:
             return self._execute(task)
-        with self.telemetry.task(task) as span:
+        with self.telemetry.task(task['id'], task.get('executor', 'gemma'), task.get('parent_id', '')) as reporter:
             result = self._execute(task)
-            self.telemetry.outcome(span, self.store.get(task['id'])['status'])
+            reporter.outcome(self.store.get(task['id'])['status'])
             return result
 
     def _execute(self, task):
@@ -983,8 +1033,7 @@ class Office:
                 self.store.change(id_, status, '外部成果已保存。' if status == 'completed' else '需要你補充；說明已保存。',
                                   result=content, artifact=path, metrics=json.dumps(metrics))
                 if status == 'completed':
-                    with self.store.connect() as c:
-                        c.execute("INSERT OR REPLACE INTO settings VALUES('codex_last_success',?)", (now(),))
+                    self.store.record_executor_success('codex')
             return
         if hasattr(self.model, 'ensure_started'):
             self.model.ensure_started()
@@ -1290,9 +1339,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, {'devices': office.store.devices()})
             elif path == '/api/health':
                 provider = office.agent.health() if office.agent else {'name': 'Codex', 'installed': False, 'authenticated': False}
-                with office.store.connect() as c:
-                    success = c.execute("SELECT value FROM settings WHERE key='codex_last_success'").fetchone()
-                provider['last_success'] = success[0] if success else None
+                success = office.store.executor_last_success('codex')
+                provider['last_success'] = success
                 self.send(200, {'service': 'neighbor-office', 'version': VERSION, 'model': office.model.health(),
                                'provider': provider, 'paused': office.store.paused(),
                                'tracing_enabled': office.telemetry is not None,

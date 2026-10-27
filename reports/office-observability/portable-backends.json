@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "passed": true,
+  "checked_at": "2026-10-24T08:36:52.016671+00:00",
+  "project": "nekonode-replacement-lab",
+  "synthetic_only": true,
+  "packages": {
+    "opentelemetry-sdk": "1.45.1",
+    "openinference-semantic-conventions": "0.1.42"
+  },
+  "backends": [
+    {
+      "backend": "phoenix",
+      "task_id": "dce59697-ae5d-441f-badf-8aec8f072439",
+      "trace_id": "6505db3540e6e2326f9fe5adf9595a85",
+      "collector_endpoint": "http://127.0.0.1:40481/v1/traces",
+      "query_base_url": "http://127.0.0.1:40481",
+      "task": {
+        "status": "completed",
+        "result_sha256": "561a7e245b9987c4e5ae52df1b0b28928ba15e316e4d31a4e9dde8abe62ef570",
+        "event_statuses": [
+          "queued",
+          "planning",
+          "running",
+          "running",
+          "thinking",
+          "running",
+          "tool",
+          "running",
+          "saving",
+          "completed"
+        ]
+      },
+      "queried_spans": [
+        {
+          "name": "office.task",
+          "trace_id": "6505db3540e6e2326f9fe5adf9595a85",
+          "span_id": "d5d6cf21827616a3",
+          "parent_span_id": null,
+          "attributes": {
+            "nekonode.executor": "codex",
+            "nekonode.task.id": "dce59697-ae5d-441f-badf-8aec8f072439",
+            "nekonode.status": "completed",
+            "openinference.span.kind": "CHAIN"
+          },
+          "status": "OK",
+          "start": "2026-10-24T08:36:52.165320+00:00",
+          "end": "2026-10-24T08:36:52.301260+00:00"
+        },
+        {
+          "name": "codex.run",
+          "trace_id": "6505db3540e6e2326f9fe5adf9595a85",
+          "span_id": "6e3969f62c7c0a96",
+          "parent_span_id": "d5d6cf21827616a3",
+          "attributes": {
+            "nekonode.executor": "codex",
+            "nekonode.task.id": "dce59697-ae5d-441f-badf-8aec8f072439",
+            "nekonode.status": "completed",
+            "nekonode.trace.dropped_events": 0,
+            "llm.token_count.prompt": 11,
+            "llm.token_count.completion": 5,
+            "openinference.span.kind": "AGENT"
+          },
+          "status": "OK",
+          "start": "2026-10-24T08:36:52.169208+00:00",
+          "end": "2026-10-24T08:36:52.283309+00:00"
+        },
+        {
+          "name": "codex.web_search",
+          "trace_id": "6505db3540e6e2326f9fe5adf9595a85",
+          "span_id": "8586b8095f245f62",
+          "parent_span_id": "6e3969f62c7c0a96",
+          "attributes": {
+            "nekonode.item.id": "search-1",
+            "nekonode.item.type": "tool",
+            "nekonode.status": "completed",
+            "tool.name": "web_search",
+            "openinference.span.kind": "TOOL"
+          },
+          "status": "OK",
+          "start": "2026-10-24T08:36:52.270533+00:00",
+          "end": "2026-10-24T08:36:52.274948+00:00"
+        }
+      ],
+      "passed": true,
+      "server_version": "20.26.0",
+      "ui_http_check": {
+        "http_status": 200,
+        "content_type": "text/html; charset=utf-8",
+        "html_received": true,
+        "visually_verified": false
+      }
+    },
+    {
+      "backend": "jaeger",
+      "task_id": "dce59697-ae5d-441f-badf-8aec8f072439",
+      "trace_id": "53357cb8591e29fab588fa585511c4d8",
+      "collector_endpoint": "http://127.0.0.1:52333/v1/traces",
+      "query_base_url": "http://127.0.0.1:59715",
+      "task": {
+        "status": "completed",
+        "result_sha256": "561a7e245b9987c4e5ae52df1b0b28928ba15e316e4d31a4e9dde8abe62ef570",
+        "event_statuses": [
+          "queued",
+          "planning",
+          "running",
+          "running",
+          "thinking",
+          "running",
+          "tool",
+          "running",
+          "saving",
+          "completed"
+        ]
+      },
+      "queried_spans": [
+        {
+          "name": "office.task",
+          "trace_id": "53357cb8591e29fab588fa585511c4d8",
+          "span_id": "db8e638c2c819507",
+          "parent_span_id": null,
+          "attributes": {
+            "nekonode.executor": "codex",
+            "nekonode.status": "completed",
+            "nekonode.task.id": "dce59697-ae5d-441f-badf-8aec8f072439",
+            "openinference.span.kind": "CHAIN"
+          },
+          "status": "OK",
+          "start": "1792831012763579215",
+          "end": "1792831012906535225"
+        },
+        {
+          "name": "codex.run",
+          "trace_id": "53357cb8591e29fab588fa585511c4d8",
+          "span_id": "149b4250f4a41d1e",
+          "parent_span_id": "db8e638c2c819507",
+          "attributes": {
+            "llm.token_count.completion": 5,
+            "llm.token_count.prompt": 11,
+            "nekonode.executor": "codex",
+            "nekonode.status": "completed",
+            "nekonode.task.id": "dce59697-ae5d-441f-badf-8aec8f072439",
+            "nekonode.trace.dropped_events": 0,
+            "openinference.span.kind": "AGENT"
+          },
+          "status": "OK",
+          "start": "1792831012768025889",
+          "end": "1792831012891885994"
+        },
+        {
+          "name": "codex.web_search",
+          "trace_id": "53357cb8591e29fab588fa585511c4d8",
+          "span_id": "66b863ced963ee6e",
+          "parent_span_id": "149b4250f4a41d1e",
+          "attributes": {
+            "nekonode.item.id": "search-1",
+            "nekonode.item.type": "tool",
+            "nekonode.status": "completed",
+            "openinference.span.kind": "TOOL",
+            "tool.name": "web_search"
+          },
+          "status": "OK",
+          "start": "1792831012876669355",
+          "end": "1792831012881296437"
+        }
+      ],
+      "passed": true,
+      "ui_http_check": {
+        "http_status": 200,
+        "content_type": "text/html; charset=utf-8",
+        "html_received": true,
+        "visually_verified": false
+      }
+    }
+  ]
+}
