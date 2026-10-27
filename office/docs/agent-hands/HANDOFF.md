@@ -1,7 +1,7 @@
 ---
 title: 貓咪的手：交接板
 date: 2026-10-23
-status: D1–D17 已拍板；H3 有第一件真任務證據、仍待完整驗收；G0 完成、G1／G2 本機模擬完成、G3、G4 Mac 本機真 Chrome＋模擬完成（皆未部署）；G5 未開始；P0 完成、P1 本機完成（未部署）、P2–P6 未開始（ADR-003）
+status: D1–D17 已拍板；H3 有第一件真任務證據、仍待完整驗收；G0 完成、G1／G2 本機模擬完成、G3、G4 Mac 本機真 Chrome＋模擬完成（皆未部署）；G5 未開始；P0 完成、P1／P4 本機完成（未部署）、P2、P3、P5、P6 未開始（ADR-003）
 ---
 
 # 交接板
@@ -51,7 +51,7 @@ status: D1–D17 已拍板；H3 有第一件真任務證據、仍待完整驗收
 | P1 | Claude 腦：共用子程序執行器、`ClaudeAgent`、`claude` 執行者、網頁模型選單 | Claude | `office/office.py`、`office/static/*`、`office/tests/test_providers.py`（新增） | P0 | **完成（本機）**：188 項測試；真 Claude CLI 只驗了未登入的路徑；未部署 |
 | P2 | Claude 腦上 VPS：釘版安裝、YUI 登入、部署、條款查證 | Claude＋YUI（登入、同意部署） | `office/install_claude.py`（新增）、`reports/agent-hands/` | P1 | 未開始 |
 | P3 | Claude 手：worker `agent` 欄位、Claude 指令、沙箱、受限 adapter；neko-hands 安裝與登入 | Claude＋YUI（登入） | `office/hands/worker.py`、`office/tests/test_hands_worker.py` | P2、G0–G4 部署 | 未開始 |
-| P4 | Gemini 腦 | Claude＋YUI（登入） | 同 P1／P2 | P1 | 未開始 |
+| P4 | Gemini 腦 | Claude＋YUI（登入） | 同 P1／P2 | P1 | **本機程式完成**：22 項 provider 測試；真 Gemini CLI 只驗了沒登入的路徑；VPS 安裝、YUI 登入、部署未做 |
 | P5 | Gemini 手 | Claude＋YUI（登入） | 同 P3 | P3、P4 | 未開始 |
 | P6 | Mac 原生 Preview 模型選單 | 與 `worktrees/native-vps-desktop-preview` 協調 | 那個 worktree | P2 | 未開始 |
 
@@ -69,6 +69,22 @@ status: D1–D17 已拍板；H3 有第一件真任務證據、仍待完整驗收
 
 ## 進度紀錄
 
+- 2026-10-28｜Claude｜P4｜本機程式完成（自動測試＋真 CLI 未登入路徑；沒有 VPS、已登入的 Gemini、網頁實測）
+  - **`GeminiAgent`：**
+    - 用 Gemini CLI 0.47.0 的 `-p '' -o stream-json --approval-mode plan`，prompt 從 stdin 送入。
+    - `GEMINI_CLI_HOME` 隔離在 `runtime/gemini-home`；每次執行前改寫 settings（Google 登入、兩個工具、沒有 MCP、不送使用統計）。
+    - 每個 `tool_use` 只要不是 `google_web_search`／`web_fetch` 就停掉。
+    - 回覆是串流文字：接起來後當 JSON 解析，也接受 ```json 程式碼框或前面多一句話。
+    - 代碼 41 轉成「需要登入」；`RESOURCE_EXHAUSTED`／quota／429 轉成「用量暫時用完」。
+  - **接線：** `gemini` 執行者、`gemini_last_success`、`/api/health` 的 `providers.gemini`。網頁的 Gemini 選項依健康狀態開關，隱私提示寫 Google。
+  - **自動測試：** 新增 8 項，provider 測試共 22 項。突變檢查 7 種都抓得到：工具檢查、代碼 41、quota 判斷、開場事件、改寫 settings、plan 模式、status 判斷。
+  - **真 CLI（Mac，Gemini CLI 0.47.0）：**
+    - 沒有登入檔時，健康檢查判定未登入。
+    - 放一個無效的登入檔後執行，1.3 秒得到「Gemini 尚未登入」，工作資料夾維持空的。
+    - 從套件原始碼確認串流事件：`init`、`message`（delta）、`tool_use`、`tool_result`、`error`、`result`。
+  - **NOT RUN：**
+    - 已登入的真 Gemini 任務：plan 模式下會不會正常回答、`web_fetch` 會不會被擋，都要等登入後驗證。
+    - VPS、網頁實測、條款查證。
 - 2026-10-28｜Claude｜P1｜完成（本機自動測試＋本機網頁；沒有 VPS、真的已登入 Claude、iPhone、Mac App）
   - **程式：**
     - Codex 腦的子程序執行（串流、心跳、卡住提示、15 分鐘、4 MB、取消、清理）抽成 `CliAgent`，`CodexAgent` 改用它，行為不變。唯一差異：stdout 上不是 JSON 物件的行一律略過，原本會變成一般失敗。

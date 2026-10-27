@@ -7,6 +7,7 @@
   let listing = false, newChat = false, attachment = null, uploadedName = '', pending = null;
   let recognition = null;
   let codexState = '可交辦', claudeState = '等待登入，交辦會保留', claudeInstalled = false;
+  let geminiState = '等待登入，交辦會保留', geminiInstalled = false;
   const previousTasks = new Map();
 
   function icon(name, className = '') {
@@ -24,13 +25,13 @@
   }
   function avatar(executor) {
     const image = document.createElement('img');
-    image.src = executor === 'gemma' ? '/neko-gemma.png' : executor === 'claude' ? '/neko-claude.png' : '/neko-openai.png';
+    image.src = executor === 'gemma' ? '/neko-gemma.png' : executor === 'claude' ? '/neko-claude.png' : executor === 'gemini' ? '/cat.svg' : '/neko-openai.png';
     image.alt = '';
     image.className = 'mobile-cat-avatar';
     return image;
   }
   function agentName(executor) {
-    return executor === 'gemma' ? 'Gemma' : executor === 'claude' ? 'Claude' : 'Codex';
+    return {gemma: 'Gemma', claude: 'Claude', gemini: 'Gemini'}[executor] || 'Codex';
   }
   function status(text, error = false) {
     byId('mobile-message').textContent = text;
@@ -51,7 +52,7 @@
   function setExecutor(executor) {
     byId('executor').value = executor;
     privacy();
-    byId('mobile-model-label').textContent = executor === 'gemma' ? 'Gemma · 本機' : executor === 'claude' ? 'Claude' : 'Codex · 預設';
+    byId('mobile-model-label').textContent = executor === 'gemma' ? 'Gemma · 本機' : executor === 'claude' ? 'Claude' : executor === 'gemini' ? 'Gemini' : 'Codex · 預設';
     renderModelOptions();
     if (newChat) renderEmpty();
   }
@@ -81,7 +82,7 @@
         ['Luna', '', '', false], ['Sol', '', '', false], ['Astra', '', '', false]
       ]],
       ['Anthropic', [['Claude', mediaAttached ? '圖片與 PDF 請改用 Codex' : claudeState, 'claude', claudeInstalled && !mediaAttached]]],
-      ['Google', [['Gemini', '', '', false], ['Gemma 3 4B', mediaAttached ? '圖片與 PDF 請改用 Codex' : 'VPS 本機文字模型', 'gemma', !mediaAttached]]]
+      ['Google', [['Gemini', mediaAttached ? '圖片與 PDF 請改用 Codex' : geminiState, 'gemini', geminiInstalled && !mediaAttached], ['Gemma 3 4B', mediaAttached ? '圖片與 PDF 請改用 Codex' : 'VPS 本機文字模型', 'gemma', !mediaAttached]]]
     ];
     for (const [heading, options] of groups) {
       const group = el('section', undefined, 'mobile-model-group');
@@ -91,7 +92,7 @@
           : name === 'Claude' ? '/neko-claude.png'
           : name === 'Gemma 3 4B' ? '/neko-gemma.png' : '';
         const option = modelOption(name, detail, executor, available, avatarSrc);
-        if ((name === 'Gemma 3 4B' || (name === 'Claude' && claudeInstalled)) && mediaAttached) option.querySelector('small').textContent = detail;
+        if ((name === 'Gemma 3 4B' || (name === 'Claude' && claudeInstalled) || (name === 'Gemini' && geminiInstalled)) && mediaAttached) option.querySelector('small').textContent = detail;
         group.append(option);
       }
       box.append(group);
@@ -351,7 +352,10 @@
     const claude = health.providers?.claude;
     claudeInstalled = Boolean(claude?.installed);
     claudeState = claude?.authenticated ? '已登入' : '等待登入，交辦會保留';
-    if (!claudeInstalled && byId('executor').value === 'claude') setExecutor('codex');
+    const gemini = health.providers?.gemini;
+    geminiInstalled = Boolean(gemini?.installed);
+    geminiState = gemini?.authenticated ? '已登入' : '等待登入，交辦會保留';
+    if ((!claudeInstalled && byId('executor').value === 'claude') || (!geminiInstalled && byId('executor').value === 'gemini')) setExecutor('codex');
     renderModelOptions();
   }
 

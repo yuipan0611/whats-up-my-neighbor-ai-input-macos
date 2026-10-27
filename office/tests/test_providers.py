@@ -248,7 +248,7 @@ class ClaudeInOfficeTests(unittest.TestCase):
             self.store.submit(uid(), '讀這張圖', 'photo.png', 'm', 'claude')
         self.assertIn('只能交給 Codex', str(e.exception))
         with self.assertRaises(app.OfficeError):
-            self.store.submit(uid(), '比較', '', 'm', 'gemini')
+            self.store.submit(uid(), '比較', '', 'm', 'llama')
 
     def test_health_lists_every_provider_and_keeps_codex_where_it_was(self):
         socket_path = Path(self.temp.name) / 'run/office.sock'
@@ -261,7 +261,168 @@ class ClaudeInOfficeTests(unittest.TestCase):
         self.assertEqual(health['providers']['codex'], health['provider'])
         self.assertEqual(health['providers']['claude'], {'name': 'Claude', 'installed': True, 'authenticated': True,
                                                          'last_success': None})
+        self.assertEqual(health['providers']['gemini'], {'name': 'Gemini', 'installed': False, 'authenticated': False,
+                                                         'last_success': None})
         self.assertFalse(health['external_connected'])
+
+
+FAKE_GEMINI = r"""#!/usr/bin/env python3
+import json, os, pathlib, sys, time
+home = pathlib.Path(os.environ['GEMINI_CLI_HOME'])
+script = json.loads((home / 'script.json').read_text())
+(home / 'run.json').write_text(json.dumps({'argv': sys.argv[1:], 'env': dict(os.environ), 'stdin': sys.stdin.read(), 'cwd': os.getcwd(),
+                                           'settings': json.loads((home / '.gemini/settings.json').read_text())}, ensure_ascii=False))
+for step in script['steps']:
+    if isinstance(step, dict) and 'sleep' in step:
+        time.sleep(step['sleep'])
+    else:
+        print(step if isinstance(step, str) else json.dumps(step, ensure_ascii=False), flush=True)
+sys.exit(script['exit'])
+"""
+G_INIT = {'type': 'init', 'session_id': 's', 'model': 'gemini-3-pro'}
+G_DONE = {'type': 'result', 'status': 'success', 'stats': {'total_tokens': 900, 'tool_calls': 2}}
+
+
+def said(text, pieces=3):
+    size = max(1, len(text) // pieces)
+    return [{'type': 'message', 'role': 'assistant', 'content': text[i:i + size], 'delta': True} for i in range(0, len(text), size)]
+
+
+def tool(name, **parameters):
+    return {'type': 'tool_use', 'tool_name': name, 'tool_id': uid(), 'parameters': parameters}
+
+
+G_HAPPY = ([G_INIT, {'type': 'message', 'role': 'user', 'content': '（交辦）'},
+            tool('google_web_search', query='Hostinger KVM 2 price'),
+            {'type': 'tool_result', 'tool_id': 't', 'status': 'success', 'output': '...'},
+            tool('web_fetch', prompt='讀 https://example.com/pricing 的價格')] +
+           said(json.dumps(ANSWER, ensure_ascii=False)) + [G_DONE])
+
+
+class GeminiAgentTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.agent = app.GeminiAgent(Path(self.temp.name) / 'runtime')
+        self.agent.binary.parent.mkdir()
+        self.agent.binary.write_text(FAKE_GEMINI)
+        self.agent.binary.chmod(0o700)
+        (self.agent.home / '.gemini').mkdir()
+        self.creds = self.agent.home / '.gemini/oauth_creds.json'
+        self.creds.write_text('{}')
+
+    def script(self, steps, exit=0):
+        (self.agent.home / 'script.json').write_text(json.dumps({'steps': steps, 'exit': exit}, ensure_ascii=False))
+
+    def run_task(self, check=lambda: None, progress=None, notes=None):
+        task = {'id': uid(), 'prompt': '比較三家 VPS 價格', 'source': '', 'source_snapshot': None, 'context_snapshot': ''}
+        return self.agent.run(task, check, progress or (lambda text: None),
+                              note=(lambda kind, text: notes.append((kind, text))) if notes is not None else None)
+
+    def recorded(self):
+        return json.loads((self.agent.home / 'run.json').read_text())
+
+    def test_completed_answer_from_streamed_text(self):
+        self.script(G_HAPPY)
+        notes = []
+        answer, metrics = self.run_task(notes=notes)
+        self.assertEqual(answer, ANSWER)
+        self.assertEqual(notes, [('tool', '搜尋：Hostinger KVM 2 price'), ('tool', '讀取：讀 https://example.com/pricing 的價格')])
+        self.assertEqual(metrics['provider'], 'gemini')
+        self.assertEqual(metrics['stats'], {'total_tokens': 900, 'tool_calls': 2})
+        self.assertEqual(metrics['event_types'], {'google_web_search': 1, 'web_fetch': 1})
+
+    def test_runs_read_only_with_two_tools_on_the_google_login(self):
+        os.environ['GEMINI_API_KEY'] = 'must-not-reach-the-cli'
+        self.addCleanup(os.environ.pop, 'GEMINI_API_KEY')
+        (self.agent.home / '.gemini/settings.json').write_text(json.dumps({'mcpServers': {'x': {'command': 'evil'}},
+                                                                            'tools': {'core': ['run_shell_command']}}))
+        self.script(G_HAPPY)
+        self.run_task()
+        run = self.recorded()
+        argv, env = run['argv'], run['env']
+        self.assertEqual(argv[argv.index('--approval-mode') + 1], 'plan')
+        self.assertEqual(argv[argv.index('-o') + 1], 'stream-json')
+        self.assertEqual(argv[argv.index('-p') + 1], '')
+        self.assertEqual(run['settings'], {'security': {'auth': {'selectedType': 'oauth-personal'}},
+                                           'tools': {'core': ['google_web_search', 'web_fetch']}, 'mcpServers': {},
+                                           'privacy': {'usageStatisticsEnabled': False}})
+        self.assertEqual(env['GEMINI_CLI_HOME'], str(self.agent.home))
+        self.assertEqual(env['NO_BROWSER'], 'true')
+        self.assertNotIn('GEMINI_API_KEY', env)
+        self.assertEqual(Path(run['cwd']).resolve(), self.agent.workspace.resolve())
+        self.assertTrue(run['stdin'].startswith(app.CliAgent.BRIEF + app.GeminiAgent.ANSWER))
+        self.assertEqual(json.loads(run['stdin'].split('\n\n', 1)[1])['交辦'], '比較三家 VPS 價格')
+        self.assertEqual(list(self.agent.workspace.iterdir()), [])
+
+    def test_fenced_or_wrapped_json_is_accepted(self):
+        for text in ('```json\n' + json.dumps(ANSWER, ensure_ascii=False) + '\n```',
+                     '以下是結果：' + json.dumps(ANSWER, ensure_ascii=False)):
+            with self.subTest(text[:12]):
+                self.script([G_INIT] + said(text) + [G_DONE])
+                self.assertEqual(self.run_task()[0], ANSWER)
+
+    def test_not_installed_or_logged_out_never_starts_a_run(self):
+        self.creds.unlink()
+        self.script(G_HAPPY)
+        with self.assertRaises(app.ProviderError) as e:
+            self.run_task()
+        self.assertEqual(str(e.exception), app.GeminiAgent.LOGIN)
+        self.assertFalse((self.agent.home / 'run.json').exists())
+        self.agent.binary.unlink()
+        with self.assertRaises(app.ProviderError) as e:
+            self.run_task()
+        self.assertIn('還沒裝進辦公室', str(e.exception))
+
+    def test_expired_login_and_used_up_quota_ask_the_owner(self):
+        self.script([], exit=41)
+        with self.assertRaises(app.ProviderError) as e:
+            self.run_task()
+        self.assertEqual(str(e.exception), app.GeminiAgent.LOGIN)
+        for steps in ([G_INIT, {'type': 'error', 'severity': 'error', 'message': 'RESOURCE_EXHAUSTED: quota exceeded'},
+                       {'type': 'result', 'status': 'error', 'error': {'type': 'Error', 'message': 'failed'}}],
+                      [G_INIT, {'type': 'result', 'status': 'error', 'error': {'type': 'Error', 'message': 'HTTP 429 Too Many Requests'}}]):
+            with self.subTest(steps[1]):
+                self.script(steps)
+                with self.assertRaises(app.ProviderError) as e:
+                    self.run_task()
+                self.assertEqual(str(e.exception), app.GeminiAgent.QUOTA)
+
+    def test_any_other_tool_stops_the_run(self):
+        self.script([G_INIT, tool('run_shell_command', command='ls ~'), {'sleep': 5}, G_DONE])
+        started = time.monotonic()
+        with self.assertRaises(app.ProviderError) as e:
+            self.run_task()
+        self.assertIn('超出辦公室的設定', str(e.exception))
+        self.assertLess(time.monotonic() - started, 3)
+
+    def test_runs_that_do_not_finish_cleanly_are_not_completed(self):
+        answer = said(json.dumps(ANSWER, ensure_ascii=False))
+        cases = {'error result': [G_INIT] + answer + [{'type': 'result', 'status': 'error', 'error': {'type': 'Error', 'message': 'x'}}],
+                 'no result': [G_INIT] + answer,
+                 'no init': answer + [G_DONE],
+                 'exit code': [G_INIT] + answer + [G_DONE],
+                 'not json': [G_INIT] + said('三家方案比較表') + [G_DONE],
+                 'broken answer': [G_INIT] + said('{"kind": "completed", "content": "x"}') + [G_DONE]}
+        for name, steps in cases.items():
+            with self.subTest(name):
+                self.script(steps, exit=1 if name == 'exit code' else 0)
+                with self.assertRaises(app.ProviderError):
+                    self.run_task()
+
+    def test_gemini_task_through_the_office(self):
+        store = app.Store(Path(self.temp.name) / 'data')
+        office = app.Office(store, FakeModel(), providers={'gemini': self.agent})
+        self.script(G_HAPPY)
+        task = office.command({'id': uid(), 'prompt': '比較三家 VPS', 'executor': 'gemini'})['task']
+        self.assertEqual(task['model'], app.GeminiAgent.model)
+        office.execute(store.claim())
+        saved = store.get(task['id'])
+        self.assertEqual(saved['status'], 'completed')
+        self.assertIn('三家方案比較表', saved['result'])
+        self.assertTrue(any(e['message'] == '已選取 Gemini，正在準備外部工作。' for e in saved['events']))
+        with store.connect() as c:
+            self.assertIsNotNone(c.execute("SELECT value FROM settings WHERE key='gemini_last_success'").fetchone())
 
 
 if __name__ == '__main__':

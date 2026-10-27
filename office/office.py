@@ -39,7 +39,7 @@ import browser_control  # noqa: E402
 VERSION = '0.5.1'
 ACTIVE = ('planning', 'running', 'saving')
 # Executors run by an outside agent CLI, with the name the progress text uses.
-AGENT_EXECUTORS = {'codex': 'Codex', 'claude': 'Claude'}
+AGENT_EXECUTORS = {'codex': 'Codex', 'claude': 'Claude', 'gemini': 'Gemini'}
 ACTIONS = ['summarize', 'write', 'list_files', 'status', 'clarify', 'external']
 PLAN_SCHEMA = {
     'type': 'object', 'properties': {
@@ -1185,6 +1185,115 @@ class ClaudeAgent(CliAgent):
                 progress('Claude 正在使用工具處理這次交辦。')
 
 
+class GeminiAgent(CliAgent):
+    """Gemini CLI on the owner's Google login, in its own home; Google search and web fetch are its only tools."""
+    name = 'Gemini'
+    model = 'Gemini（帳號預設模型）'
+    TOOLS = ('google_web_search', 'web_fetch')
+    LOGIN = 'Gemini 尚未登入。交辦與來源已保留；請先在 VPS 完成本人登入，再按「接續工作」。'
+    QUOTA = 'Gemini 帳號的用量暫時用完。交辦已保留，請稍後再按「接續工作」。'
+    AUTH_EXIT = 41  # the CLI's FatalAuthenticationError; it exits before any event
+    QUOTA_WORDS = re.compile(r'quota|RESOURCE_EXHAUSTED|rate.?limit|\b429\b', re.I)
+    # The CLI has no schema option, so the answer format is part of the request.
+    ANSWER = ('最後只輸出一個 JSON 物件，不要加其他文字或程式碼框，格式為 '
+              '{"kind": "completed" 或 "needs_input", "content": "成果", "next_step": "建議下一步，沒有就留空字串"}。')
+
+    def __init__(self, runtime):
+        self.runtime = Path(runtime).resolve()
+        self.binary = self.runtime / 'gemini/gemini'
+        self.home = self.runtime / 'gemini-home'
+        self.workspace = self.runtime / 'gemini-workspace'
+        self.home.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    def environment(self):
+        env = self.base_environment()
+        env.update(GEMINI_CLI_HOME=str(self.home), NO_BROWSER='true')
+        return env
+
+    def health(self):
+        installed = self.binary.is_file()
+        # The CLI has no status command that avoids a model call; a saved Google login is the closest sign.
+        authenticated = installed and (self.home / '.gemini/oauth_creds.json').is_file()
+        return {'name': 'Gemini', 'installed': installed, 'authenticated': authenticated}
+
+    def write_settings(self):
+        """The office owns this home, so every run rewrites its settings: Google login only, two tools, no MCP."""
+        path = self.home / '.gemini/settings.json'
+        path.parent.mkdir(mode=0o700, exist_ok=True)
+        path.write_text(json.dumps({'security': {'auth': {'selectedType': 'oauth-personal'}},
+                                    'tools': {'core': list(self.TOOLS)}, 'mcpServers': {},
+                                    'privacy': {'usageStatisticsEnabled': False}}), encoding='utf-8')
+        path.chmod(0o600)
+
+    def arguments(self):
+        # The prompt arrives on stdin; -p '' only switches the CLI to non-interactive mode.
+        return [str(self.binary), '-p', '', '-o', 'stream-json', '--approval-mode', 'plan', '--skip-trust']
+
+    @staticmethod
+    def parse(text):
+        text = text.strip()
+        fenced = re.fullmatch(r'```(?:json)?\s*(.*?)\s*```', text, re.S)
+        for candidate in (text, fenced.group(1) if fenced else None, text[text.find('{'):text.rfind('}') + 1]):
+            if candidate:
+                try:
+                    return json.loads(candidate)
+                except ValueError:
+                    pass
+        return None
+
+    def run(self, task, check, progress, note=None):
+        note = note or (lambda kind, text: None)
+        health = self.health()
+        if not health['installed']:
+            raise ProviderError('Gemini 還沒裝進辦公室。交辦已保留；裝好並登入後，再按「接續工作」。')
+        if not health['authenticated']:
+            raise ProviderError(self.LOGIN)
+        self.write_settings()
+        seen = {'init': False, 'errors': [], 'result': None}
+        reply, event_types = [], {}
+
+        def on_event(event):
+            kind = event.get('type')
+            if kind == 'init':
+                seen['init'] = True
+            elif kind == 'message' and event.get('role') == 'assistant' and isinstance(event.get('content'), str):
+                reply.append(event['content'])
+            elif kind == 'tool_use':
+                name, given = event.get('tool_name'), event.get('parameters')
+                # Fail closed: the stream lists no tools up front, so check each one as it is asked for.
+                if name not in self.TOOLS:
+                    raise ProviderError('Gemini 這次可用的工具超出辦公室的設定，已停止；未標記完成。')
+                self.count(event_types, name)
+                given = given if isinstance(given, dict) else {}
+                text = given.get('query') if name == 'google_web_search' else given.get('prompt') or given.get('url')
+                if isinstance(text, str) and text.strip():
+                    note('tool', ('搜尋：' if name == 'google_web_search' else '讀取：') + text.strip()[:300])
+                progress('Gemini 正在查詢公開來源。')
+            elif kind == 'error' and isinstance(event.get('message'), str):
+                seen['errors'].append(event['message'])
+            elif kind == 'result':
+                seen['result'] = event
+
+        started = time.monotonic()
+        code = self.stream(self.arguments(), self.workspace, self.BRIEF + self.ANSWER + '\n\n' + self.task_json(task),
+                           check, progress, on_event)
+        final = seen['result']
+        if code == self.AUTH_EXIT:
+            raise ProviderError(self.LOGIN)
+        failure = final.get('error') if isinstance(final, dict) and isinstance(final.get('error'), dict) else {}
+        said = ' '.join(seen['errors'] + [str(failure.get('type', '')), str(failure.get('message', ''))])
+        if self.QUOTA_WORDS.search(said):
+            raise ProviderError(self.QUOTA)
+        if 'auth' in str(failure.get('type', '')).lower():
+            raise ProviderError(self.LOGIN)
+        if not seen['init'] or not isinstance(final, dict) or code or final.get('status') != 'success':
+            raise ProviderError('Gemini 沒有完成這次工作。請檢查 VPS 登入與帳號可用額度，再接續；未標記完成。')
+        return self.checked(self.parse(''.join(reply))), {
+            'provider': 'gemini', 'elapsed_seconds': round(time.monotonic() - started, 3),
+            'stats': final.get('stats') if isinstance(final.get('stats'), dict) else {}, 'event_types': event_types}
+
+
 class Office:
     def __init__(self, store, model, agent=None, broker=None, providers=None):
         self.store, self.model, self.agent = store, model, agent
@@ -2080,7 +2189,8 @@ def main():
         import browser_actions, browser_cdp
         broker = browser_actions.Broker(store, browser_cdp.ChromeBrowser(args.browser_cdp, str(args.data.parent / 'browser-shots')))
     runtime = args.data.parent / 'runtime'
-    office = Office(store, Ollama(args.model, managed=True), CodexAgent(runtime), broker, {'claude': ClaudeAgent(runtime)})
+    office = Office(store, Ollama(args.model, managed=True), CodexAgent(runtime), broker,
+                    {'claude': ClaudeAgent(runtime), 'gemini': GeminiAgent(runtime)})
     local_socket = args.local_socket or args.data.parent / 'run' / 'office.sock'
     try:
         server = Server(args.port, office, args.public_origin, local_socket, args.dev_tcp_local, args.worker_socket)

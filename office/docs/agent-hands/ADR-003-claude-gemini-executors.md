@@ -67,10 +67,12 @@ D1–D8、D10–D14 不變。特別是 D13（程式和 Chrome 同一個使用者
   - 工具只留 `WebSearch`、`WebFetch`，其他一律拒絕。
   - 不載入任何 MCP，不讀設定，用 `--json-schema` 拿結構化成果。
   - 設定在 `runtime/claude-home`，工作目錄在 `runtime/agent-workspace`。
-- **Gemini 腦：**
-  - 唯讀（`--approval-mode plan`），policy 只放行 Google 搜尋與讀網頁，不載入擴充與 MCP。
-  - 設定在 `runtime/gemini-home`。
-  - CLI 沒有 schema 參數，所以在 prompt 要求 JSON，再由辦公室驗證。
+- **Gemini 腦（P4 實作後的版本）：**
+  - 唯讀（`--approval-mode plan`）。
+  - 辦公室每次執行前改寫 `runtime/gemini-home/.gemini/settings.json`：只用 Google 登入（`oauth-personal`），`tools.core` 只放 `google_web_search`、`web_fetch`，`mcpServers` 為空，不送使用統計。這樣比另寫 policy 檔簡單。
+  - Gemini 的串流開頭沒有工具清單，所以改在每個 `tool_use` 檢查：不是那兩個工具就立刻停掉。
+  - CLI 沒有 schema 參數，所以在 prompt 要求只回一個 JSON 物件，再由辦公室驗證。
+  - 沒登入時 CLI 不吐任何事件，直接以代碼 41 結束，辦公室把它轉成「需要登入」。
 - **附件（圖片、PDF 頁面）第一階段只給 Codex**，維持 `Store.submit` 現有的限制。Claude／Gemini 讀附件放到之後的版本。
 
 ### 3.3 手（neko-hands 使用者，`office/hands/worker.py`）
