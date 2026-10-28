@@ -8,10 +8,11 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 import uuid
 
-from test_office import app, FakeModel
+from test_office import app, FakeModel, local_request
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import runner as rn  # noqa: E402
@@ -344,6 +345,44 @@ class RecoveryTests(RunnerBase):
         self.store.cancel(self.task['id'])
         rn.RunService(self.store, self.fake).recover()
         self.assertEqual(self.service.run(run['run_id'])['state'], 'cancelled')
+
+
+class OfficeWiringTests(RunnerBase):
+    """The office owns the run service: it recovers runs at start and shows counts in /api/health."""
+
+    def health(self, office):
+        socket_path = self.root / 'run' / 'office.sock'
+        server = app.Server(0, office, local_socket=socket_path)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return json.loads(local_request(socket_path, '/api/health')[1])['sandbox']
+
+    def test_without_a_provider_there_are_no_runs(self):
+        self.assertIsNone(self.office.runs)
+        self.assertEqual(self.health(self.office), {'enabled': False})
+
+    def test_office_start_recovers_a_run_and_never_runs_it_again(self):
+        run = self.start()
+        self.service.set(run['run_id'], 'running')
+        self.fake.boxes[run['sandbox_id']].update(state='exited', log=b'half\n', patch=PATCH)
+        office = app.Office(self.store, FakeModel(), sandbox=self.fake)  # the office restarts
+        run = office.runs.run(run['run_id'])
+        self.assertEqual((run['state'], run['cleanup']), ('interrupted', 'done'))
+        self.assertNotIn('execute', self.methods())
+        self.assertIn(self.store.get(self.task['id'])['status'], app.ACTIVE)  # the hands task keeps going
+        self.assertEqual(self.health(office), {'enabled': True, 'provider': 'fake', 'open': 0, 'needs_person': 0,
+                                               'cleanup_failed': 0})
+
+    def test_health_counts_what_is_left_for_a_person(self):
+        run = self.service.execute(self.start()['run_id'], self.lease, ['make'])
+        self.service.verify(run['run_id'])
+        self.service.set(run['run_id'], 'publishing')  # the office died mid-publish; no target is wired yet
+        office = app.Office(self.store, FakeModel(), sandbox=self.fake)
+        self.assertEqual(office.runs.run(run['run_id'])['detail'], 'publish_unknown')
+        sandbox = self.health(office)
+        self.assertEqual((sandbox['open'], sandbox['needs_person']), (1, 1))
+        self.assertNotIn(run['run_id'], json.dumps(sandbox))  # counts only
 
 
 class TargetTests(RunnerBase):

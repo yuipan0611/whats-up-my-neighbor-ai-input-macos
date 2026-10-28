@@ -69,6 +69,13 @@ status: D1–D17 已拍板；H3 有第一件真任務證據、仍待完整驗收
 
 ## 進度紀錄
 
+- 2026-10-28｜Claude Code｜runner 接進 office.py（第一步：啟動復原＋健康狀態）｜完成（Mac 本機自動測試＋FakeRunner；未 push、未部署、沒有真 provider）
+  - YUI 決定三個模組先接 runner。這一步只接生命週期，**正式環境行為不變**：`main()` 沒有傳 provider，`office.runs` 是 `None`。
+  - `Office(..., sandbox=None)`：給了 `runner.Runner` provider 才建 `RunService`，並在 `store.recover()` 之後呼叫 `RunService.recover()`。順序是刻意的：hands 任務重啟後保留 lease，所以進行中任務的 run 仍算有效，不會被誤取消。還沒接發布目標（`GitTarget`），所以重啟時卡在發布中的 run 維持 `publish_unknown`，留給人處理。
+  - `/api/health` 新增 `sandbox`：沒 provider 時是 `{enabled: false}`；有的話只給計數（`provider`、`open`、`needs_person`、`cleanup_failed`），不含路徑、沙盒 id、log。`RunService.summary()` 在 `runner.py`。
+  - 測試：`test_runner.OfficeWiringTests` 3 項（沒 provider、重啟復原且不重跑、發布中斷計入 needs_person）；突變 2 組（拿掉 recover、拿掉 summary）都抓到。Mac 本機完整回歸 **284 項全部執行、全部通過、0 略過**（含真 Chrome 7 項）。
+  - **部署注意：** `office/deploy.sh` 只複製 `office.py`，但本分支的 `office.py` 已經 import `browser_audit`、`browser_control`，現在再加 `runner`。照現在的腳本部署會啟動失敗，部署前要先改腳本。本次沒有改、也沒有部署。
+  - **還沒接（等 YUI 決定）：** worker 路由（`/api/worker/run/*`）、送進沙盒的檔案從哪裡讀（hands 工作區是 `neko-hands` 的 0700 資料夾，辦公室的使用者讀不到）、發布目標 `GitTarget` 的工作樹放哪裡、任務取消或收回時要不要立刻清掉沙盒（目前要等下一次呼叫或重啟才清）、真 provider。
 - 2026-10-28｜Claude｜沙盒整合施工單：未知結果核對、runner 骨架、上傳擴充、H4 離線流程｜完成（本機自動測試＋模擬；已在本機分支 commit，未 push、未安裝、未部署、未啟用真實 provider）
   - 基準：`claude/agent-hands-prd` HEAD `b8599c6`，開工時工作樹乾淨。基線 200 項通過、7 項略過。
   - **未知結果核對（接 G1／G2／G4、H3／H6）：**

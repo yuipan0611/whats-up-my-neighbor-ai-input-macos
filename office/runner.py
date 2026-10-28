@@ -537,6 +537,16 @@ class RunService:
         self.set(run_id, cleanup=state)
         return state
 
+    def summary(self):
+        """For /api/health: counts only, no paths, sandbox ids or logs."""
+        with self.store.connect() as c:
+            rows = c.execute('SELECT state,detail,cleanup FROM runner_runs').fetchall()
+        return {'enabled': True, 'provider': self.runner.name,
+                'open': sum(r['state'] not in TERMINAL for r in rows),
+                # Left for a person: whether it took effect is not known, and nothing retries it on its own.
+                'needs_person': sum(r['state'] in ('unknown', 'create_unknown') or r['detail'] == 'publish_unknown' for r in rows),
+                'cleanup_failed': sum(r['cleanup'] == 'failed' for r in rows)}
+
     # -- restart ---------------------------------------------------------------------------
 
     def recover(self, target_for=None):

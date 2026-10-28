@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # python3 -I leaves the script's own folder off the path
 import browser_audit  # noqa: E402
 import browser_control  # noqa: E402
+import runner  # noqa: E402
 
 VERSION = '0.5.1'
 ACTIVE = ('planning', 'running', 'saving')
@@ -1295,7 +1296,7 @@ class GeminiAgent(CliAgent):
 
 
 class Office:
-    def __init__(self, store, model, agent=None, broker=None, providers=None):
+    def __init__(self, store, model, agent=None, broker=None, providers=None, sandbox=None):
         self.store, self.model, self.agent = store, model, agent
         self.agents = {'codex': agent, **(providers or {})}  # executor -> agent CLI; agent stays Codex
         self.broker = broker  # a browser_actions.Broker only where broker mode is switched on; legacy otherwise
@@ -1305,6 +1306,12 @@ class Office:
             self.control.recover()
         self.stopping = threading.Event()
         self.store.recover()
+        # Sandbox runs only where a runner.Runner provider is given; none is wired in main() yet.
+        self.runs = runner.RunService(store, sandbox) if sandbox else None
+        if self.runs:
+            # After store.recover(): hands tasks keep their lease across a restart, so a live task's run stays live.
+            # No publish target is wired yet, so a run caught mid-publish stays publish_unknown for a person.
+            self.runs.recover()
         self.thread = None
 
     def start(self):
@@ -1818,7 +1825,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, {'service': 'neighbor-office', 'version': VERSION, 'model': office.model.health(),
                                'provider': provider, 'providers': providers, 'paused': office.store.paused(),
                                'external_connected': provider['authenticated'] and bool(provider['last_success']),
-                               'worker_running': bool(office.thread and office.thread.is_alive())})
+                               'worker_running': bool(office.thread and office.thread.is_alive()),
+                               'sandbox': office.runs.summary() if office.runs else {'enabled': False}})
             elif path == '/api/tasks':
                 tasks, latest, paused = office.store.snapshot()
                 self.send(200, {'tasks': tasks, 'paused': paused, 'latest_seq': latest})
