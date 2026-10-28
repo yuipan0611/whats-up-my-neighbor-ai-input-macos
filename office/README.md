@@ -66,6 +66,12 @@ HTTP 維持 Host／Origin／頁面 token 檢查，以純文字顯示內容，不
 - **收回開關：** `office.py hands-lock on|off|status`。
 - **在 VPS 上直接呼叫本機 API：** `curl --unix-socket ~/neighbor-office/run/office.sock -H 'Host: 127.0.0.1:18421' http://127.0.0.1:18421/api/health`。`verify_live.py` 已改走這個 socket。
 
+## 選配執行追蹤（第一個切片）
+
+可用 OpenTelemetry／OpenInference 將實際執行記錄成「任務 → Codex → 網頁搜尋」的追蹤，供 Phoenix 等相容工具查看時間、狀態與關係。預設關閉，原本的標準庫執行方式不需安裝 SDK；SQLite 事件與 WebSocket 補回仍負責持久進度。
+
+這個切片加入追蹤接線與測試，尚未代表已部署追蹤服務、接通多 Agent 或遷移資料庫。啟用所需的固定依賴、隔離測試、資料範圍、關閉方式與後續順序見 [執行追蹤開發文件](docs/observability.md)。
+
 ## 手機 Chrome 直連
 
 `https://office.nekonode.cloud` 已部署，手機先用 VPS 產生的一次性碼配對，再透過 cookie 存取辦公室。配對碼可從 Mac 執行 `office/pair-iphone.command` 取得，只顯示在本機 Terminal，10 分鐘內有效。WebSocket 只傳即時進度，交辦仍走 HTTP；手機斷線後由 SQLite 的事件序號補回。辦公室的 TCP 維持只監聽 `127.0.0.1:8421`。

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Private, persistent cat office. Python standard library only."""
+"""Private, persistent cat office. Standard-library runtime; optional OTel tracing."""
 from __future__ import annotations
 import argparse
 import base64
@@ -82,6 +82,24 @@ class OfficeError(Exception):
 
 class Cancelled(Exception):
     pass
+
+
+def load_telemetry():
+    if os.environ.get('NEKO_TRACE_ENABLED') != '1':
+        return None
+    # -I intentionally excludes the script directory from sys.path. Load only
+    # this adjacent module; never add the data directory or cwd to the path.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('office_telemetry', Path(__file__).with_name('telemetry.py'))
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except ImportError:
+        raise SystemExit('Tracing requires office/requirements-observability.txt in the service Python environment.') from None
+    try:
+        return module.create_telemetry(VERSION)
+    except ValueError:
+        raise SystemExit('Set OTEL_EXPORTER_OTLP_TRACES_ENDPOINT to the collector HTTP(S) traces URL.') from None
 
 
 def filename(value):
@@ -973,8 +991,9 @@ class CodexAgent(CliAgent):
     name = 'Codex'
     model = 'Codex（帳號預設模型）'
 
-    def __init__(self, runtime):
+    def __init__(self, runtime, telemetry=None):
         self.runtime = Path(runtime).resolve()
+        self.telemetry = telemetry
         self.binary = self.runtime / 'codex/codex-x86_64-unknown-linux-musl'
         self.home = self.runtime / 'codex-home'
         self.workspace = self.runtime / 'agent-workspace'
@@ -1015,6 +1034,12 @@ class CodexAgent(CliAgent):
         return ''
 
     def run(self, task, check, progress, note=None):
+        if self.telemetry is None:
+            return self._run(task, check, progress, note)
+        with self.telemetry.agent(task) as observer:
+            return self._run(task, check, progress, note, observe=observer.event)
+
+    def _run(self, task, check, progress, note=None, observe=None):
         note = note or (lambda kind, text: None)
         if not self.health()['authenticated']:
             raise ProviderError('Codex 尚未登入。交辦與來源已保留；請先在 VPS 完成本人登入，再按「接續工作」。')
@@ -1040,6 +1065,8 @@ class CodexAgent(CliAgent):
 
         def on_event(event):
             nonlocal usage
+            if observe:
+                observe(event)
             if event.get('type') == 'turn.completed':
                 usage = event.get('usage', {})
             if event.get('type') in ('item.started', 'item.completed'):
@@ -1309,7 +1336,7 @@ class GeminiAgent(CliAgent):
 
 
 class Office:
-    def __init__(self, store, model, agent=None, broker=None, providers=None, sandbox=None, checkouts=None, workbench=None):
+    def __init__(self, store, model, agent=None, broker=None, providers=None, sandbox=None, checkouts=None, workbench=None, telemetry=None):
         self.store, self.model, self.agent = store, model, agent
         self.agents = {'codex': agent, **(providers or {})}  # executor -> agent CLI; agent stays Codex
         self.broker = broker  # a browser_actions.Broker only where broker mode is switched on; legacy otherwise
@@ -1317,6 +1344,7 @@ class Office:
         if broker:
             broker.recover()
             self.control.recover()
+        self.telemetry = telemetry
         self.stopping = threading.Event()
         self.store.recover()
         if workbench and sandbox:
@@ -1488,7 +1516,7 @@ class Office:
             if time.monotonic() - last_expire >= 5:
                 last_expire = time.monotonic()
                 self.store.expire_hands()
-                if self.runs:
+                if self.runs and not self.workbench:
                     try:
                         self.runs.sweep()  # cancelled or taken-back tasks lose their sandbox within seconds
                     except Exception:
@@ -1510,6 +1538,14 @@ class Office:
             self.stopping.wait(0.3)
 
     def execute(self, task):
+        if self.telemetry is None:
+            return self._execute(task)
+        with self.telemetry.task(task) as span:
+            result = self._execute(task)
+            self.telemetry.outcome(span, self.store.get(task['id'])['status'])
+            return result
+
+    def _execute(self, task):
         id_ = task['id']
         def check():
             if self.stopping.is_set() or self.store.get(id_)['status'] == 'cancelled':
@@ -1537,8 +1573,7 @@ class Office:
                 self.store.change(id_, status, '外部成果已保存。' if status == 'completed' else '需要你補充；說明已保存。',
                                   result=content, artifact=path, metrics=json.dumps(metrics))
                 if status == 'completed':
-                    with self.store.connect() as c:
-                        c.execute('INSERT OR REPLACE INTO settings VALUES(?,?)', (executor + '_last_success', now()))
+                    self.store.record_provider_success(executor)
             return
         if hasattr(self.model, 'ensure_started'):
             self.model.ensure_started()
@@ -1992,6 +2027,7 @@ class Handler(BaseHTTPRequestHandler):
                                'external_connected': provider['authenticated'] and bool(provider['last_success']),
                                'worker_running': bool(office.thread and office.thread.is_alive()),
                                'browser_enabled': self.server.browser is not None,
+                               'tracing_enabled': office.telemetry is not None,
                                'workbench': {'enabled': bool(office.workbench)},
                                'sandbox': {**office.runs.summary(), 'reachable': office.workbench.reachable if office.workbench else office.sandbox_check['reachable']}
                                           if office.runs else {'enabled': False}})
@@ -2409,6 +2445,7 @@ def main():
         fcntl.flock(process_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         raise SystemExit('Office is already running for this data directory')
+    telemetry = load_telemetry()
     broker = None
     if args.browser_cdp:
         import browser_actions, browser_cdp
@@ -2425,8 +2462,8 @@ def main():
         from workbench_control import Workbench
         workbench = Workbench(store,json.loads(args.workbench_config.read_text()))
     runtime = args.data.parent / 'runtime'
-    office = Office(store, Ollama(args.model, managed=True), CodexAgent(runtime), broker,
-                    {'claude': ClaudeAgent(runtime), 'gemini': GeminiAgent(runtime)}, sandbox, workbench=workbench)
+    office = Office(store, Ollama(args.model, managed=True), CodexAgent(runtime, telemetry), broker,
+                    {'claude': ClaudeAgent(runtime), 'gemini': GeminiAgent(runtime)}, sandbox, workbench=workbench, telemetry=telemetry)
     local_socket = args.local_socket or args.data.parent / 'run' / 'office.sock'
     try:
         server = Server(args.port, office, args.public_origin, local_socket, args.dev_tcp_local, args.worker_socket, browser_socket=args.browser_socket)
@@ -2454,6 +2491,8 @@ def main():
         office.stopping.set()
         if office.thread:
             office.thread.join(timeout=3)
+        if telemetry is not None:
+            telemetry.shutdown()
 
 
 if __name__ == '__main__':

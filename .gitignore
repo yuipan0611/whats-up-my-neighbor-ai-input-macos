@@ -14,3 +14,6 @@ xcuserdata/
 .codex/
 __pycache__/
 *.pyc
+
+# Optional office tracing environment
+office/.venv-observability/
