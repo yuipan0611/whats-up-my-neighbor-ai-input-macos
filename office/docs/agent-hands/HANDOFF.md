@@ -69,6 +69,21 @@ status: D1–D17 已拍板；H3 有第一件真任務證據、仍待完整驗收
 
 ## 進度紀錄
 
+- 2026-10-28｜Claude Code｜Docker runner：Mac 真 Docker 測試＋連線量測｜功能測試通過；**量到紅線二的洞**（Mac 本機 Docker Desktop 29.6.1；未碰 VPS、未部署、未 push）
+  - YUI 同意在 Mac 啟動 Docker Desktop 跑真測試。新增 `office/sandbox/Dockerfile`（`python:3.12-slim-bookworm`＋git、使用者 10001、`/work`；建出來的映像 `sha256:6167ff59…`，約 75MB）與 `office/tests/test_runner_docker_real.py`（**預設略過**，`NEKO_DOCKER_TEST=1` 且 Docker 可用才跑）。
+  - **真 Docker 8 項全部通過，連跑兩次**：完整流程經辦公室發布到 `neko/<短碼>`，原 repo 不動，跑完沒有留下容器；容器沒有掛載、非特權、`CapDrop=ALL`、`no-new-privileges`、使用者 10001、沒有對外埠、看不到 Docker socket；辦公室環境變數裡的金絲雀密鑰不在容器內；`/work` 只有指定的檔案；主機上的金絲雀檔案在容器裡找不到；逾時 3 秒會停止並刪除容器；失敗的指令保留 log、不發布；指令文字不會被當成 shell 執行；可以連外網（pypi.org）；取消後 `sweep()` 會刪掉活著的容器；create 回應遺失時，重啟會依標籤找回並刪除。
+  - **連線量測（同樣旗標、`neko-runner-test` 網路，只做 TCP 連線）：**
+    | 目標 | 結果 |
+    |---|---|
+    | Mac 上只聽 127.0.0.1 的服務，經 `host.docker.internal` | **連得到** |
+    | Docker Desktop 主機位址 `192.168.65.254` | **連得到** |
+    | 家裡路由器 `192.168.54.254:80` | **連得到** |
+    | Docker 網路閘道 `172.18.0.1` | 連不到 |
+    | 雲端 metadata `169.254.169.254` | 連不到（Mac 上本來就沒有，不代表有擋） |
+    | 外網 `pypi.org:443` | 連得到（照 YUI 的放寬） |
+  - **影響：** Mac 本機開著多個只給本機用的服務（Gemini、Antigravity `agy`、VS Code、Raycast、數個 Python 服務），其中有的背後是已登入的 AI 帳號。容器能連到它們，等於可能用到 YUI 的付費帳號，**碰到紅線二**。結論：**Mac 的 Docker Desktop 不能跑真任務**；VPS 要先裝防火牆（DOCKER-USER 規則：擋沙盒網段到主機、內網、metadata）並重跑同一份量測才可以用。VPS 的結果 NOT RUN。
+  - 完整回歸 321 項通過、8 項略過（即真 Docker 測試）；其中一次 `test_attachments` 的上傳拒絕測試偶發 BrokenPipe（伺服器先回 403 關連線、客戶端還在送），單獨重跑 8 次全過、再跑完整回歸通過，與本次改動無關，但屬既有的不穩定測試。
+  - 測試結束後：測試用網路已刪除；映像 `neko-runner:test` 保留以便重跑；Docker Desktop 已關閉（回到開始前的狀態）。原本就有的 `open-webui` 容器沒有動。
 - 2026-10-28｜Claude Code｜Docker runner v1：provider＋辦公室接線（單元測試層）｜完成（Mac 本機自動測試；沒有啟動 Docker、未部署、未 push）
   - 依 [tasks/H3-runner-docker-v1.md](tasks/H3-runner-docker-v1.md)。兩個 commit：`3e90c1b`（DockerRunner＋patch 放寬）與本則所在的接線 commit。
   - **`office/runner_docker.py`：** 只呼叫 `docker` 指令。容器用 `docker cp` 拿複本、使用者 10001、`--cap-drop ALL`、`no-new-privileges`、專用網路（拒絕 host／none／bridge）、環境變數只有 HOME／PATH／LANG／CI；不掛主機資料夾、不掛 Docker socket、不用 `--privileged`、不開對外埠。容器名稱由 run_id 決定，create 回應遺失重送不會多一個；啟動失敗就刪掉，刪不掉留給 `recover()` 依標籤找回。指令以參數傳入、不拼進 shell 字串，外面包 `timeout`。任何 docker 失敗都對應到 RunnerUnknown／Gone／Failed，不退回主機。

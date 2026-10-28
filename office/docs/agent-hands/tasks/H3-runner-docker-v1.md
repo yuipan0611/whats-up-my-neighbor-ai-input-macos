@@ -120,6 +120,8 @@
 
 Mac 的 Docker Desktop 是跑在虛擬機裡，「連回主機」的行為和 VPS 不同；Mac 測過不代表 VPS 也成立，兩邊要分開記。
 
+**2026-10-28 Mac 實測：** 功能 8 項全過；但容器連得到 Mac 上只聽 127.0.0.1 的服務（經 `host.docker.internal`／`192.168.65.254`）與家裡路由器。Mac 不能跑真任務；VPS 要先裝防火牆並重跑量測。細節見 HANDOFF。
+
 ## 7. 不在 v1
 
 E2B、服務容器（資料庫）、outputs 資料夾、私有 repo、VPS 部署、網頁／App 介面。
