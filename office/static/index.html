@@ -4,7 +4,7 @@
 <header><div><p class="eyebrow">NEIGHBOR · VPS</p><h1>貓咪辦公室 <img class="mascot" src="/cat.svg" alt="YUI Neko 黑貓" width="64" height="64"></h1><p>交代一件事，貓咪會把進度和成果留在這裡。</p></div><span id="connection" role="status">正在連線…</span></header>
 <section id="pairing" class="pairing" aria-labelledby="pair-title" hidden><div class="pair-heading"><img src="/cat.svg" alt="" width="56" height="56"><div><p class="eyebrow">安全連線</p><h2 id="pair-title">先配對這台手機</h2></div></div><p>在 Mac 開啟配對工具，把顯示的配對碼輸入下方。完成後，就能用手機 Chrome 查看工作與交辦。</p><form id="pair-form"><label for="pair-code">8 位數配對碼</label><input id="pair-code" type="text" inputmode="numeric" pattern="[0-9]{8}" autocomplete="one-time-code" maxlength="8" placeholder="00000000" required><label for="device-name">這台裝置的名稱</label><input id="device-name" type="text" maxlength="40" value="我的手機 Chrome" required><button id="pair-submit" type="submit">配對手機</button><p id="pairing-message" role="status" aria-live="polite"></p></form><p class="hint">配對碼只用一次，10 分鐘後失效。請勿把配對碼傳給其他人。</p></section>
 <div id="office-app" hidden>
-<nav aria-label="辦公室功能"><button id="show-work" class="secondary" type="button" aria-pressed="true">工作與交接</button><button id="show-life" class="secondary" type="button" aria-pressed="false">生活紀錄</button></nav>
+<nav aria-label="辦公室功能"><button id="show-work" class="secondary" type="button" aria-pressed="true">工作與交接</button><button id="show-life" class="secondary" type="button" aria-pressed="false">生活紀錄</button><a href="/browser/" data-browser-link hidden>工作瀏覽器</a></nav>
 <div id="work-page">
 <section id="mobile-work" class="mobile-work" aria-label="工作對話">
   <div class="mobile-topbar">
@@ -12,7 +12,7 @@
     <h2 id="mobile-thread-title">對話</h2>
     <button id="mobile-new" class="mobile-icon-button" type="button" aria-label="新增對話"><img src="/icon-square-pen.svg" alt=""></button>
     <button id="mobile-menu" class="mobile-icon-button" type="button" aria-label="更多選項" aria-expanded="false"><img src="/icon-menu.svg" alt=""></button>
-    <div id="mobile-menu-panel" class="mobile-menu-panel" hidden><button id="mobile-show-life" type="button">生活紀錄</button><button id="mobile-pause" type="button">暫停辦公室</button></div>
+    <div id="mobile-menu-panel" class="mobile-menu-panel" hidden><button id="mobile-show-life" type="button">生活紀錄</button><button id="mobile-pause" type="button">暫停辦公室</button><a href="/browser/" data-browser-link hidden>工作瀏覽器</a></div>
   </div>
   <div id="mobile-task-list" class="mobile-task-list" hidden></div>
   <div id="mobile-thread" class="mobile-thread" aria-live="polite"></div>

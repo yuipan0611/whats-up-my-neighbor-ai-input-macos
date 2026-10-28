@@ -6,6 +6,8 @@ VPS 常駐的獨立原型：自然語言交辦、進度與成果保存、工作�
 
 **開發規劃更新（2026-10-26）：** 瀏覽器動作控管、操作紀錄與接手流程已納入 [貓咪的手 PRD](docs/agent-hands/PRD.md)；Claude 從 [交接文件](docs/agent-hands/CLAUDE-HANDOFF-2026-10-26.md) 接續。G0–G5 尚未實作，本 README 的既有執行者說明不代表新控管已上線。
 
+選配的 [VPS 持久 Chrome 實驗元件](docs/browser-workspace.md) 已另設生命週期／profile 邊界及測試，尚未接入辦公室執行者或正式 VPS；文件包含 Agent Zero 的工程評估、啟動方式與下一步觀看／接管驗收。
+
 ## 使用
 
 1. 執行 `office/open-office.command`。它使用既有 `neighbor-vps` SSH 別名，確認 HTTP 服務後才在 Mac 瀏覽器顯示辦公室。

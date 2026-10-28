@@ -1,0 +1,10 @@
+{
+  "name": "neko-browser-viewer-vendor",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "node build.mjs" },
+  "devDependencies": {
+    "@novnc/novnc": "1.7.0",
+    "esbuild": "0.25.11"
+  }
+}

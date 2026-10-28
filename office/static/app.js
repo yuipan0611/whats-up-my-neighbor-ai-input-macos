@@ -264,6 +264,7 @@ function showPage(life){$('work-page').hidden=life;$('life-page').hidden=!life;$
 $('show-work').onclick=()=>showPage(false);$('show-life').onclick=()=>showPage(true);
 async function providerHealth(){const h=await api('/api/health'),p=h.provider,c=h.providers?.claude,g=h.providers?.gemini;$('model').textContent='Codex · '+(p.authenticated?(p.last_success?'登入有效 · 曾完成真實工作':'已登入 · 尚待真任務驗證'):'等待 VPS 本人登入')+' ／ Claude · '+(!c?.installed?'尚未接通':c.authenticated?'已登入':'等待本人登入')+' ／ Gemini · '+(!g?.installed?'尚未接通':g.authenticated?'已登入':'等待本人登入')+' ／ Gemma · '+(h.model.ready?'可用':'按需啟動');
   for(const [value,state] of [['claude',c],['gemini',g]]){const option=$('executor').querySelector(`option[value=${value}]`);option.disabled=!state?.installed;if(option.disabled&&option.selected){$('executor').value='codex';privacy();}}
+  document.querySelectorAll('[data-browser-link]').forEach(link=>{link.hidden=!h.browser_enabled;});
   window.mobileOffice?.updateHealth(h);}
 async function loadHandoff(){
   const id=selected;if(!id)return;const h=await api('/api/tasks/'+id+'/handoff');if(id!==selected)return;
