@@ -1914,6 +1914,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, office.store.cancel(path.split('/')[3]))
             elif path == '/api/viewer/control' and office.control:
                 self.send(*office.control.operate(self.viewer_id(), body))
+            elif path == '/api/viewer/reconcile' and office.control:  # owner side only; the worker socket has no such route
+                self.send(*office.control.reconcile(self.viewer_id(), body))
             else:
                 raise OfficeError('找不到這個操作。', 404)
         except OfficeError as e:

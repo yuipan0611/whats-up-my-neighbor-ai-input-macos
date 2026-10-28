@@ -17,11 +17,18 @@ import threading
 import time
 import uuid
 
+import browser_actions
 import browser_audit as audit
 
 STOP_SECONDS = 5          # ADR-002 6.1: engineering budget for the stop confirmation; not a measured latency
 DISCONNECT_SECONDS = 15   # no controller ping for this long: the person's control connection is gone
 COLUMNS = {'controller_seen': 'REAL', 'state_since': 'REAL', 'hold_reason': "TEXT NOT NULL DEFAULT ''"}
+# A person's answer for one unknown outcome, and what it rests on. Nothing an agent says or a page shows counts:
+# this route exists only on the owner side, and the evidence names what the person checked, not what they were told.
+RESOLUTIONS = {'happened': ('checked_on_site', 'external_record'),
+               'not_happened': ('checked_on_site', 'external_record'),
+               'accepted_unknown': ('accept_risk',)}
+RECONCILE_KEYS = {'operation_id', 'action_id', 'resolution', 'evidence', 'expected_epoch'}
 
 
 def ensure_schema(c):
@@ -160,15 +167,109 @@ class Control:
                     return 409, self.stale(s)
                 if s['state'] not in ('human_control', 'human_disconnected', 'held'):
                     return 409, {'error': '現在不是由人接手，沒有可以交還的。', 'reason_code': 'not_held', 'control_state': s['state']}
-                reconcile = bool(s['blocked'])
+                pending = bool(s['blocked']) or bool(audit.pending_reconcile(c))
                 live = self.live_task(c, s)
-                # The person looked and handed it back: a pending reconcile is theirs to have cleared.
-                s = self.move(c, 'resuming' if live else 'agent_running', bump=True, controller_device_id=None, blocked='')
-                self.record(c, 'control_return_requested', 'human_control_event', s,
-                            'reconcile_acknowledged' if reconcile else 'return')
-                if not live:
-                    self.record(c, 'control_released', 'broker_observed', s, 'no_agent_attached')
+                # Handing control back and reconciling an unknown outcome are two separate steps: a return leaves
+                # every unknown pending. With one pending, the agent is not resumed; the person reconciles, then returns again.
+                reason = 'return_with_reconcile_pending' if pending else 'return'
+                if live and pending:
+                    s = self.move(c, 'held', bump=True, reason='reconcile_pending', controller_device_id=None)
+                    self.record(c, 'control_return_requested', 'human_control_event', s, reason)
+                    self.record(c, 'control_held', 'broker_observed', s, 'reconcile_pending')
+                else:
+                    s = self.move(c, 'resuming' if live else 'agent_running', bump=True, controller_device_id=None)
+                    self.record(c, 'control_return_requested', 'human_control_event', s, reason)
+                    if not live:
+                        self.record(c, 'control_released', 'broker_observed', s, 'no_agent_attached')
         return 202, self.view(s, device_id)
+
+    def reconcile(self, device_id, request):
+        """POST /api/viewer/reconcile: {operation_id, action_id, resolution, evidence, expected_epoch}.
+
+        Settles one unknown outcome. It never moves control and never touches the task: a cancelled task
+        stays cancelled, and an agent stays stopped until the person also returns control."""
+        if not isinstance(request, dict) or set(request) != RECONCILE_KEYS:
+            return 400, {'error': '需要 operation_id、action_id、resolution、evidence 與 expected_epoch。'}
+        for key in ('operation_id', 'action_id'):
+            try:
+                if str(uuid.UUID(request[key])) != request[key]:
+                    raise ValueError
+            except (ValueError, TypeError, AttributeError):
+                return 400, {'error': f'{key} 需為 UUID。'}
+        if request['resolution'] not in RESOLUTIONS:
+            return 400, {'error': 'resolution 只能是 happened、not_happened 或 accepted_unknown。'}
+        if request['evidence'] not in RESOLUTIONS[request['resolution']]:
+            return 400, {'error': '這個結論需要對應的查證方式。', 'reason_code': 'evidence_mismatch'}
+        if not isinstance(request['expected_epoch'], int) or isinstance(request['expected_epoch'], bool):
+            return 400, {'error': 'expected_epoch 需為整數。'}
+        fingerprint = hashlib.sha256(json.dumps([device_id, request['action_id'], request['resolution'],
+                                                 request['evidence']]).encode()).hexdigest()
+        with self.ops:
+            with self.store.connect() as c:
+                done = c.execute('SELECT * FROM browser_reconciliations WHERE reconcile_id=?', (request['operation_id'],)).fetchone()
+            if done:
+                if done['fingerprint'] != fingerprint:
+                    return 409, {'error': '這個 operation_id 已經用在別的操作上。', 'reason_code': 'operation_conflict'}
+                return done['status'], {**json.loads(done['response']), 'replayed': True}
+            # An action still being dispatched has no outcome yet; there is nothing to reconcile until it ends.
+            gate_free = self.broker is not None and self.broker.gate.acquire(blocking=False)
+            try:
+                with self.store.lock:
+                    with self.store.connect() as c:
+                        status, body = self.settle_one(c, device_id, request, gate_free)
+                        if status in (200, 409) and body.get('reason_code') not in ('stale_epoch', 'not_controller', 'wrong_state',
+                                                                                    'in_flight'):
+                            # Kept in the same transaction as the change, so a replay answers exactly what happened.
+                            c.execute('INSERT INTO browser_reconciliations VALUES (?,?,?,?,?,?,?,?,?,?)',
+                                      (request['operation_id'], fingerprint, request['action_id'], request['resolution'],
+                                       request['evidence'], device_id, request['expected_epoch'], status,
+                                       json.dumps(body, ensure_ascii=False), audit.now()))
+            finally:
+                if gate_free:
+                    self.broker.gate.release()
+        return status, body
+
+    def settle_one(self, c, device_id, request, gate_free):
+        s = self.sweep(c)
+        if request['expected_epoch'] != s['control_epoch']:
+            return 409, self.stale(s)
+        if s['state'] in ('taking_control', 'resuming'):
+            return 409, {'error': '控制權正在交接，等它穩定再核對。', 'reason_code': 'wrong_state', 'control_state': s['state']}
+        if s['controller_device_id'] and s['controller_device_id'] != device_id:
+            return 409, {'error': '現在由另一台裝置接手，請在那台核對。', 'reason_code': 'not_controller'}
+        if gate_free:
+            browser_actions.Broker.settle(c, 'settled_before_reconcile')  # nothing is in flight, so an allowed action still without an outcome is unknown, not pending
+        row = c.execute('SELECT * FROM browser_actions WHERE action_id=? AND session_id=?',
+                        (request['action_id'], audit.SESSION)).fetchone()
+        if row is None:
+            return 404, {'error': '找不到這個動作。', 'reason_code': 'unknown_action'}
+        if row['decision'] == 'allow' and row['outcome'] is None:
+            return 409, {'error': '這個動作還在進行，先等它結束。', 'reason_code': 'in_flight'}
+        if row['reconciled']:
+            if row['reconciled'] != request['resolution']:
+                return 409, {'error': '這個動作已經核對成別的結論。', 'action_id': row['action_id'],
+                             'resolution': row['reconciled'], 'reason_code': 'already_reconciled'}
+            status, code = 200, 'already_reconciled'  # the same answer again: no second change
+        elif row['outcome'] != 'unknown':
+            return 409, {'error': '這個動作的結果是確定的，不需要核對。', 'reason_code': 'not_unknown', 'outcome': row['outcome']}
+        else:
+            c.execute('UPDATE browser_actions SET reconciled=?,reconcile_id=?,reconciled_at=? WHERE action_id=? AND reconciled IS NULL',
+                      (request['resolution'], request['operation_id'], audit.now(), row['action_id']))
+            audit.append(c, 'reconciled', 'human_control_event', task_id=row['task_id'], attempt=row['attempt'],
+                         browser_session_id=audit.SESSION, control_epoch=s['control_epoch'], action_id=row['action_id'],
+                         tool=row['tool'], decision=row['decision'], outcome=request['resolution'], reason_code=request['evidence'])
+            status, code = 200, 'reconciled'
+        if gate_free and not audit.pending_reconcile(c):
+            # The block lifts only when no unknown is left and nothing is in flight; control stays where it is.
+            c.execute("UPDATE browser_sessions SET blocked='',updated=? WHERE id=?", (audit.now(), audit.SESSION))
+        return status, {'action_id': row['action_id'], 'resolution': request['resolution'], 'reason_code': code,
+                        **self.remaining(c, self.session(c))}
+
+    @staticmethod
+    def remaining(c, s):
+        left = audit.pending_reconcile(c)
+        return {'reconcile_pending': bool(left) or bool(s['blocked']), 'remaining': len(left),
+                'control_state': s['state'], 'control_epoch': s['control_epoch']}
 
     def ping(self, device_id, expected):
         """The controller's connection is alive; a disconnected controller has to take again."""
@@ -193,12 +294,15 @@ class Control:
                 return self.view(self.sweep(c), device_id)
 
     def view(self, s, device_id):
-        """What a paired device may see: no lease, no CDP address, no page content."""
+        """What a paired device may see: no lease, no CDP address, no page content. Pending unknown outcomes
+        show only their tool and origin, the same as the owner's action history."""
         controller = s['controller_device_id']
+        with self.store.connect() as c:
+            items = [{k: r[k] for k in ('action_id', 'task_id', 'tool', 'target_summary', 'created')} for r in audit.pending_reconcile(c)]
         return {'control_state': s['state'], 'control_epoch': s['control_epoch'], 'hold_reason': s['hold_reason'],
                 'controller': None if not controller else ('this_device' if controller == device_id else 'other_device'),
                 'can_input': s['state'] == 'human_control' and controller == device_id,
-                'reconcile_pending': bool(s['blocked']), 'task_id': s['task_id'],
+                'reconcile_pending': bool(s['blocked']) or bool(items), 'reconcile_items': items, 'task_id': s['task_id'],
                 'waiting_seconds': int(self.clock() - s['state_since']) if s['state_since'] and s['state'] != 'agent_running' else 0}
 
     @staticmethod

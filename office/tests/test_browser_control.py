@@ -254,23 +254,6 @@ class StateMachineTests(ControlBase):
             self.assertEqual(self.session()['state'], after, state)
             self.assertEqual(office.control.claimable(), after == 'agent_running', state)
 
-    def test_unknown_outcome_blocks_until_a_person_returns(self):
-        task, claimed = self.new_task()
-        with self.store.connect() as c:  # an allowed action whose result never arrived (crash mid-dispatch)
-            c.execute("INSERT INTO browser_actions(action_id,task_id,attempt,fingerprint,session_id,control_epoch,tool,target_summary,"
-                      "policy_version,rule_id,decision,reason_code,created) VALUES (?,?,1,'f','cat-chrome',1,'navigate','https://x.test',"
-                      "'browser-policy-1','R2-navigate','allow','navigation','t')", (str(uuid.uuid4()), task['id']))
-        self.broker.recover()
-        self.assertEqual(self.act(claimed, 'read_text')[1]['reason_code'], 'reconcile_pending')
-        self.assertEqual(self.op('take')[1]['control_state'], 'taking_control')
-        self.ack(claimed, 'stopped')
-        self.assertTrue(self.control.state('dev-a')['reconcile_pending'])
-        self.op('return')
-        fresh = self.act(claimed, 'take_snapshot')[1]['result']
-        self.ack(claimed, 'observed', snapshot_id=fresh['snapshot_id'])
-        self.assertEqual(self.act(claimed, 'read_text')[1]['outcome'], 'succeeded')
-        self.assertIn(('control_return_requested', 'reconcile_acknowledged'), self.events())
-
     def test_revoked_controller_loses_input_at_once(self):
         self.op('take')
         epoch = self.session()['control_epoch']
@@ -343,6 +326,191 @@ class StateMachineTests(ControlBase):
         self.assertEqual((body['control_state'], self.session()['hold_reason']), ('held', 'in_flight_unresolved'))
 
 
+class ReconcileTests(ControlBase):
+    """Handing control back and reconciling an unknown outcome are two separate steps (施工單 2026-10-28 第三節)."""
+
+    def unknown_action(self, task, tool='navigate'):
+        """An allowed action whose result never arrived (a crash mid-dispatch), found at the next start."""
+        action_id = str(uuid.uuid4())
+        with self.store.connect() as c:
+            c.execute("INSERT INTO browser_actions(action_id,task_id,attempt,fingerprint,session_id,control_epoch,tool,target_summary,"
+                      "policy_version,rule_id,decision,reason_code,created) VALUES (?,?,1,'f','cat-chrome',1,?,'https://x.test',"
+                      "'browser-policy-1','R2-navigate','allow','navigation','t')", (action_id, task['id'], tool))
+        self.broker.recover()
+        return action_id
+
+    def reconcile(self, action_id, resolution='happened', evidence='checked_on_site', device='dev-a', epoch=None, operation_id=None):
+        epoch = self.session()['control_epoch'] if epoch is None else epoch
+        return self.control.reconcile(device, {'operation_id': operation_id or str(uuid.uuid4()), 'action_id': action_id,
+                                               'resolution': resolution, 'evidence': evidence, 'expected_epoch': epoch})
+
+    def take_over(self, claimed):
+        self.op('take')
+        self.assertEqual(self.ack(claimed, 'stopped')[0], 200)
+
+    def test_return_does_not_settle_an_unknown_outcome(self):
+        task, claimed = self.new_task()
+        action = self.unknown_action(task)
+        self.assertEqual(self.act(claimed, 'read_text')[1]['reason_code'], 'reconcile_pending')
+        self.take_over(claimed)
+        state = self.control.state('dev-a')
+        self.assertTrue(state['reconcile_pending'])
+        self.assertEqual([i['action_id'] for i in state['reconcile_items']], [action])
+        self.assertNotIn('lease', json.dumps(state))
+        body = self.op('return')[1]
+        # The agent is not resumed: control left the person, the unknown is still there.
+        self.assertEqual((body['control_state'], body['hold_reason'], body['reconcile_pending']), ('held', 'reconcile_pending', True))
+        self.assertTrue(self.control.worker_view(task['id'])['hold'])
+        self.assertEqual(self.act(claimed, 'take_snapshot')[1]['reason_code'], 'reconcile_pending')
+        self.assertIn(('control_return_requested', 'return_with_reconcile_pending'), self.events())
+        self.assertEqual(self.session()['blocked'], 'reconcile_pending')
+
+    def test_reconcile_then_return_resumes_from_a_new_observation(self):
+        task, claimed = self.new_task()
+        action = self.unknown_action(task)
+        self.take_over(claimed)
+        status, body = self.reconcile(action, 'not_happened', 'checked_on_site')
+        self.assertEqual((status, body['reason_code'], body['reconcile_pending'], body['control_state']),
+                         (200, 'reconciled', False, 'human_control'))  # reconciling never moves control
+        self.assertEqual(self.op('return')[1]['control_state'], 'resuming')
+        fresh = self.act(claimed, 'take_snapshot')[1]['result']
+        self.assertEqual(self.ack(claimed, 'observed', snapshot_id=fresh['snapshot_id'])[0], 200)
+        self.assertEqual(self.act(claimed, 'read_text')[1]['outcome'], 'succeeded')
+        with self.store.connect() as c:
+            row = c.execute('SELECT outcome,reconciled FROM browser_actions WHERE action_id=?', (action,)).fetchone()
+            event = c.execute("SELECT provenance,outcome,reason_code FROM browser_audit_events WHERE event_type='reconciled' "
+                              "AND action_id=? ORDER BY seq DESC LIMIT 1", (action,)).fetchone()
+        self.assertEqual(tuple(row), ('unknown', 'not_happened'))  # the broker's record of the dispatch is not rewritten
+        self.assertEqual(tuple(event), ('human_control_event', 'not_happened', 'checked_on_site'))
+        self.assertEqual([c[0] for c in self.browser.calls].count('navigate'), 0)  # nothing was resent
+
+    def test_block_lifts_only_after_the_last_unknown(self):
+        task, claimed = self.new_task()
+        first, second = self.unknown_action(task), self.unknown_action(task, 'click')
+        self.take_over(claimed)
+        body = self.reconcile(first)[1]
+        self.assertEqual((body['remaining'], body['reconcile_pending'], self.session()['blocked']), (1, True, 'reconcile_pending'))
+        body = self.reconcile(second, 'accepted_unknown', 'accept_risk')[1]
+        self.assertEqual((body['remaining'], body['reconcile_pending'], self.session()['blocked']), (0, False, ''))
+
+    def test_return_from_held_after_reconcile_resumes(self):
+        task, claimed = self.new_task()
+        action = self.unknown_action(task)
+        self.take_over(claimed)
+        self.assertEqual(self.op('return')[1]['control_state'], 'held')
+        self.assertEqual(self.reconcile(action, 'happened', 'external_record')[0], 200)
+        self.assertEqual(self.op('return')[1]['control_state'], 'resuming')
+
+    def test_restart_and_new_lease_keep_the_block(self):
+        task, claimed = self.new_task()
+        self.unknown_action(task)
+        self.take_over(claimed)
+        self.op('return')
+        with self.store.connect() as c:  # even if something cleared the flag, the unknown row itself still blocks
+            c.execute("UPDATE browser_sessions SET blocked='',state='agent_running' WHERE id='cat-chrome'")
+        self.assertEqual(self.act(claimed, 'read_text')[1]['reason_code'], 'reconcile_pending')
+        office = app.Office(self.store, FakeModel(), broker=ba.Broker(self.store, self.browser))  # the office restarts
+        self.assertEqual(self.session()['blocked'], 'reconcile_pending')
+        self.assertTrue(office.control.state('dev-a')['reconcile_pending'])
+        with self.store.connect() as c:  # a new attempt with a new lease does not get around it
+            c.execute("UPDATE browser_sessions SET state='agent_running' WHERE id='cat-chrome'")
+            c.execute("UPDATE tasks SET lease='0123456789abcdef0123456789abcdef', attempts=attempts+1 WHERE id=?", (task['id'],))
+        renewed = {**claimed, 'lease': '0123456789abcdef0123456789abcdef'}
+        self.assertEqual(self.act(renewed, 'read_text')[1]['reason_code'], 'reconcile_pending')
+
+    def test_same_operation_replays_and_repeats_change_nothing(self):
+        task, claimed = self.new_task()
+        action = self.unknown_action(task)
+        self.take_over(claimed)
+        op = str(uuid.uuid4())
+        first = self.reconcile(action, operation_id=op)
+        again = self.reconcile(action, operation_id=op)
+        self.assertEqual((again[0], again[1]['replayed'], again[1]['reason_code']), (200, True, 'reconciled'))
+        self.assertEqual(self.reconcile(action, 'not_happened', operation_id=op)[1]['reason_code'], 'operation_conflict')
+        self.assertEqual(self.reconcile(action)[1]['reason_code'], 'already_reconciled')       # new op, same answer: no change
+        self.assertEqual(self.reconcile(action, 'not_happened')[0], 409)                        # new op, other answer
+        with self.store.connect() as c:
+            n = c.execute("SELECT COUNT(*) FROM browser_audit_events WHERE event_type='reconciled' AND provenance='human_control_event'").fetchone()[0]
+            reconcile_id = c.execute('SELECT reconcile_id FROM browser_actions WHERE action_id=?', (action,)).fetchone()[0]
+        self.assertEqual((first[0], n, reconcile_id), (200, 1, op))
+
+    def test_old_or_other_controller_cannot_reconcile(self):
+        task, claimed = self.new_task()
+        action = self.unknown_action(task)
+        old_epoch = self.session()['control_epoch']
+        self.take_over(claimed)
+        self.assertEqual(self.reconcile(action, epoch=old_epoch)[1]['reason_code'], 'stale_epoch')
+        self.assertEqual(self.reconcile(action, device='dev-b')[1]['reason_code'], 'not_controller')
+        self.control.revoked('dev-a')  # a revoked device no longer authenticates at all (HTTP layer, test_mobile)
+        self.assertTrue(self.control.state('dev-b')['reconcile_pending'])
+        self.assertEqual(self.reconcile(action, device='dev-b')[0], 200)  # no controller now: another paired device may
+
+    def test_evidence_must_fit_and_agent_word_is_not_evidence(self):
+        task, claimed = self.new_task()
+        action = self.unknown_action(task)
+        self.take_over(claimed)
+        for resolution, evidence in (('happened', 'accept_risk'), ('accepted_unknown', 'checked_on_site'),
+                                     ('happened', 'agent_reported'), ('happened', 'page_text'), ('succeeded', 'checked_on_site')):
+            self.assertEqual(self.reconcile(action, resolution, evidence)[0], 400, (resolution, evidence))
+        self.assertEqual(self.reconcile(action, 'accepted_unknown', 'accept_risk')[1]['reason_code'], 'reconciled')
+        self.assertEqual(self.control.reconcile('dev-a', {'operation_id': str(uuid.uuid4()), 'action_id': action})[0], 400)
+
+    def test_only_unknown_outcomes_and_finished_actions_are_reconciled(self):
+        task, claimed = self.new_task()
+        done = self.act(claimed, 'read_text')[1]['action_id']
+        self.op('take')
+        self.ack(claimed, 'stopped')
+        self.assertEqual(self.reconcile(done)[1]['reason_code'], 'not_unknown')
+        self.assertEqual(self.reconcile(str(uuid.uuid4()))[1]['reason_code'], 'unknown_action')
+
+    def test_action_in_flight_cannot_be_reconciled(self):
+        task, claimed = self.new_task()
+        self.browser.gate = threading.Event()
+        result = {}
+        worker = threading.Thread(target=lambda: result.update(r=self.act(claimed, 'navigate', {'url': 'https://example.test/a'})))
+        worker.start()
+        action = wait_for(lambda: self.session_action())
+        try:
+            self.assertEqual(self.reconcile(action)[1]['reason_code'], 'in_flight')
+        finally:
+            self.browser.gate.set()
+        worker.join(5)
+
+    def session_action(self):
+        with self.store.connect() as c:
+            row = c.execute("SELECT action_id FROM browser_actions WHERE decision='allow' AND outcome IS NULL").fetchone()
+        return row and row[0]
+
+    def test_unwritten_outcome_is_settled_then_reconciled(self):
+        task, claimed = self.new_task()
+        action = str(uuid.uuid4())
+        with self.store.connect() as c:  # dispatched, then the outcome could not be written: no outcome, session blocked
+            c.execute("INSERT INTO browser_actions(action_id,task_id,attempt,fingerprint,session_id,control_epoch,tool,target_summary,"
+                      "policy_version,rule_id,decision,reason_code,created) VALUES (?,?,1,'f','cat-chrome',1,'click','button',"
+                      "'browser-policy-1','R5-click','allow','click_effect_unknown','t')", (action, task['id']))
+            c.execute("UPDATE browser_sessions SET blocked='outcome_unwritten' WHERE id='cat-chrome'")
+        self.take_over_without_ack()
+        self.assertEqual(self.reconcile(action, 'happened', 'checked_on_site')[1]['reconcile_pending'], False)
+        self.assertEqual(self.session()['blocked'], '')
+
+    def take_over_without_ack(self):
+        """No live agent to stop (the unwritten row would otherwise read as in flight to the stop check)."""
+        with self.store.connect() as c:
+            c.execute("UPDATE browser_sessions SET state='human_control',controller_device_id='dev-a',controller_seen=?,"
+                      "control_epoch=control_epoch+1 WHERE id='cat-chrome'", (self.clock(),))
+
+    def test_cancelled_task_stays_cancelled_after_reconcile_and_return(self):
+        task, claimed = self.new_task()
+        action = self.unknown_action(task)
+        self.take_over(claimed)
+        self.store.cancel(task['id'])
+        self.assertEqual(self.reconcile(action)[0], 200)
+        self.assertEqual(self.op('return')[1]['control_state'], 'agent_running')  # nothing left to resume
+        self.assertEqual(self.store.get(task['id'])['status'], 'cancelled')
+        self.assertIsNone(self.store.claim_hands())
+        self.assertEqual(self.act(claimed, 'read_text')[1]['reason_code'], 'stale_lease')
+
+
 class HttpAndWorkerTests(ControlBase):
     def setUp(self):
         super().setUp()
@@ -381,6 +549,12 @@ class HttpAndWorkerTests(ControlBase):
         self.assertEqual(self.owner('POST', '/api/worker/browser/control-ack', {'task_id': 'x'})[0], 404)
         claim = self.worker_post('/api/worker/claim', {})[1]
         self.assertEqual((claim['task'], claim.get('held')), (None, True))  # a person holds the Chrome: no task starts
+
+    def test_reconcile_route_is_owner_only(self):
+        body = {'operation_id': str(uuid.uuid4()), 'action_id': str(uuid.uuid4()), 'resolution': 'happened',
+                'evidence': 'checked_on_site', 'expected_epoch': self.owner('GET', '/api/viewer/state')[1]['control_epoch']}
+        self.assertEqual(self.worker_post('/api/viewer/reconcile', body)[0], 404)
+        self.assertEqual(self.owner('POST', '/api/viewer/reconcile', body)[1]['reason_code'], 'unknown_action')
 
     def run_worker(self, prompt_url='https://example.test/docs'):
         task = self.office.command({'id': str(uuid.uuid4()), 'prompt': f'合成任務：URL={prompt_url}', 'executor': 'hands'})['task']

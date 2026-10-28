@@ -223,6 +223,15 @@ class FailureTests(BrokerBase):
         self.assertEqual(self.act('read_text', action_id=action)[1]['outcome'], 'unknown')
         self.assertEqual(len(self.browser.calls), 1)
 
+    def test_unknown_result_blocks_the_next_action(self):
+        self.browser.fail = TimeoutError('no answer')
+        self.assertEqual(self.act('navigate', {'url': 'https://example.test/a'})[1]['outcome'], 'unknown')
+        self.browser.fail = None
+        self.assertEqual(self.act('read_text')[1]['reason_code'], 'reconcile_pending')
+        self.assertEqual(len(self.browser.calls), 1)
+        with self.store.connect() as c:
+            self.assertEqual(c.execute("SELECT blocked FROM browser_sessions WHERE id='cat-chrome'").fetchone()[0], 'reconcile_pending')
+
     def test_definite_failure_is_failed_not_success(self):
         self.browser.fail = ba.BrowserFailed('closed tab')
         self.assertEqual(self.act('read_text')[1]['outcome'], 'failed')
@@ -350,6 +359,28 @@ class MigrationTests(unittest.TestCase):
             app.Store(data)  # a second run of the migration changes nothing
             with store.connect() as c:
                 self.assertEqual(c.execute("SELECT state,control_epoch FROM browser_sessions").fetchall()[0][:], ('agent_running', 1))
+
+    def test_unknowns_a_person_already_returned_past_stay_acknowledged(self):
+        import sqlite3
+        for blocked, expect in (('', 'legacy_acknowledged'), ('reconcile_pending', None)):
+            with tempfile.TemporaryDirectory() as temp:
+                data = Path(temp) / 'data'
+                store = app.Store(data)
+                ba.Broker(store, FakeBrowser())
+                c = sqlite3.connect(data / 'office.sqlite3')  # rebuild the pre-reconcile table, as an older office left it
+                c.executescript('''DROP TABLE browser_actions; DROP TABLE browser_reconciliations;
+                    CREATE TABLE browser_actions (action_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, attempt INTEGER NOT NULL,
+                    fingerprint TEXT NOT NULL, session_id TEXT NOT NULL, control_epoch INTEGER NOT NULL, tool TEXT NOT NULL,
+                    target_summary TEXT NOT NULL, policy_version TEXT NOT NULL, rule_id TEXT NOT NULL, decision TEXT NOT NULL,
+                    reason_code TEXT NOT NULL, outcome TEXT, response TEXT, created TEXT NOT NULL, finished TEXT);''')
+                c.execute("INSERT INTO browser_actions VALUES ('a1','t',1,'f','cat-chrome',1,'navigate','https://x.test','p','R2',"
+                          "'allow','navigation','unknown',NULL,'t',NULL)")
+                c.execute("UPDATE browser_sessions SET blocked=?", (blocked,))
+                c.commit(); c.close()
+                ba.Broker(store, FakeBrowser())
+                with store.connect() as c:
+                    self.assertEqual(c.execute("SELECT reconciled FROM browser_actions WHERE action_id='a1'").fetchone()[0], expect)
+                ba.Broker(store, FakeBrowser())  # a second run changes nothing
 
 
 if __name__ == '__main__':

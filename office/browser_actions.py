@@ -105,7 +105,7 @@ class Broker:
                     if existing:
                         return self.replay(existing, request)
                     session = c.execute('SELECT * FROM browser_sessions WHERE id=?', (audit.SESSION,)).fetchone()
-                    if session['blocked']:
+                    if session['blocked'] or audit.pending_reconcile(c):
                         return 503, {'error': '有一個動作的結果還沒核對，先停下來。', 'reason_code': 'reconcile_pending'}
                     if request['control_epoch'] != session['control_epoch']:
                         return 409, {'error': '控制世代已經變了，請重新觀察。', 'reason_code': 'stale_epoch',
@@ -265,6 +265,9 @@ class Broker:
             with self.store.connect() as c:
                 c.execute('UPDATE browser_actions SET outcome=?,response=?,finished=? WHERE action_id=?',
                           (outcome, json.dumps(body, ensure_ascii=False), audit.now(), action_id))
+                if outcome == 'unknown':
+                    # The page may have acted: no further agent action on this Chrome until a person reconciles it.
+                    c.execute("UPDATE browser_sessions SET blocked='reconcile_pending',updated=? WHERE id=?", (audit.now(), audit.SESSION))
                 audit.append(c, 'outcome', 'broker_observed', task_id=task['id'], attempt=task['attempts'],
                              browser_session_id=audit.SESSION, action_id=action_id, decision=decision,
                              outcome=outcome, reason_code=reason)
@@ -283,14 +286,22 @@ class Broker:
             pass  # the database is down too; act() cannot write a decision, so nothing is dispatched anyway
 
     def recover(self):
-        """At startup: an allowed action with no outcome may have acted, so it becomes unknown and is never resent."""
+        """At startup: an allowed action with no outcome may have acted, so it becomes unknown and is never resent.
+        A restart never clears an earlier unknown either: the block stays until each one is reconciled."""
         with self.store.connect() as c:
-            rows = c.execute("SELECT action_id,task_id,attempt FROM browser_actions WHERE decision='allow' AND outcome IS NULL").fetchall()
-            for row in rows:
-                c.execute("UPDATE browser_actions SET outcome='unknown',finished=? WHERE action_id=?", (audit.now(), row['action_id']))
-                audit.append(c, 'reconciled', 'broker_observed', task_id=row['task_id'], attempt=row['attempt'],
-                             browser_session_id=audit.SESSION, action_id=row['action_id'], decision='allow',
-                             outcome='unknown', reason_code='restart_without_outcome')
-            if rows:
+            rows = self.settle(c, 'restart_without_outcome')
+            if rows or audit.pending_reconcile(c):
                 c.execute('UPDATE browser_sessions SET blocked=?,updated=? WHERE id=?', ('reconcile_pending', audit.now(), audit.SESSION))
+        return rows
+
+    @staticmethod
+    def settle(c, reason):
+        """Allowed actions with no outcome become unknown. Only call it when nothing can be in flight
+        (at startup, or while holding the gate)."""
+        rows = c.execute("SELECT action_id,task_id,attempt FROM browser_actions WHERE decision='allow' AND outcome IS NULL").fetchall()
+        for row in rows:
+            c.execute("UPDATE browser_actions SET outcome='unknown',finished=? WHERE action_id=?", (audit.now(), row['action_id']))
+            audit.append(c, 'reconciled', 'broker_observed', task_id=row['task_id'], attempt=row['attempt'],
+                         browser_session_id=audit.SESSION, action_id=row['action_id'], decision='allow',
+                         outcome='unknown', reason_code=reason)
         return len(rows)

@@ -32,9 +32,37 @@ def now():
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
 
+# Reconciling an unknown outcome is its own step, apart from handing control back (施工單 2026-10-28 第三節).
+RECONCILE_COLUMNS = {'reconciled': 'TEXT', 'reconcile_id': 'TEXT', 'reconciled_at': 'TEXT'}
+RECONCILE_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS browser_reconciliations (reconcile_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,
+    action_id TEXT NOT NULL, resolution TEXT NOT NULL, evidence TEXT NOT NULL, device_id TEXT NOT NULL,
+    control_epoch INTEGER NOT NULL, status INTEGER NOT NULL, response TEXT NOT NULL, created TEXT NOT NULL);
+'''
+
+
 def ensure_schema(c):
     c.executescript(SCHEMA)
     c.execute("INSERT OR IGNORE INTO browser_sessions(id,state,control_epoch,updated) VALUES (?,?,1,?)", (SESSION, 'agent_running', now()))
+    have = {r[1] for r in c.execute('PRAGMA table_info(browser_actions)')}
+    missing = [name for name in RECONCILE_COLUMNS if name not in have]
+    for name in missing:
+        c.execute(f'ALTER TABLE browser_actions ADD COLUMN {name} {RECONCILE_COLUMNS[name]}')
+    c.executescript(RECONCILE_SCHEMA)
+    if 'reconciled' in missing:
+        # Before this column, handing control back cleared the block: unknown rows on an unblocked session were
+        # already acknowledged by a person under that rule. Rows on a blocked session stay pending.
+        blocked = c.execute('SELECT blocked FROM browser_sessions WHERE id=?', (SESSION,)).fetchone()[0]
+        if not blocked:
+            c.execute("UPDATE browser_actions SET reconciled='legacy_acknowledged',reconciled_at=? "
+                      "WHERE outcome='unknown' AND reconciled IS NULL", (now(),))
+
+
+def pending_reconcile(c, session_id=SESSION):
+    """Unknown outcomes nobody has reconciled yet: while any exist, the session takes no new agent action."""
+    return c.execute("SELECT action_id,task_id,attempt,tool,target_summary,created FROM browser_actions "
+                     "WHERE session_id=? AND outcome='unknown' AND reconciled IS NULL ORDER BY created,action_id",
+                     (session_id,)).fetchall()
 
 
 def origin(url):
