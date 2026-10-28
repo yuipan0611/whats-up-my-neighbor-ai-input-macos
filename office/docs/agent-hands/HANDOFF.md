@@ -69,6 +69,45 @@ status: D1–D17 已拍板；H3 有第一件真任務證據、仍待完整驗收
 
 ## 進度紀錄
 
+- 2026-10-28｜Claude｜沙盒整合施工單：未知結果核對、runner 骨架、上傳擴充、H4 離線流程｜完成（本機自動測試＋模擬；已在本機分支 commit，未 push、未安裝、未部署、未啟用真實 provider）
+  - 基準：`claude/agent-hands-prd` HEAD `b8599c6`，開工時工作樹乾淨。基線 200 項通過、7 項略過。
+  - **未知結果核對（接 G1／G2／G4、H3／H6）：**
+    - 原本 `browser_control.ret()` 交還時直接清掉 `blocked`，等於「交還＝已核對」。改成兩個獨立動作：交還只動控制權；核對走新的 owner 路由 `POST /api/viewer/reconcile`（worker socket 沒有這條）。
+    - 有未核對的 unknown 時交還：不恢復 agent，session 轉 `held`（`hold_reason=reconcile_pending`）；核對完再交還一次才恢復，仍要先由 broker 重新觀察。
+    - 封鎖改以資料列為準：`browser_actions.outcome='unknown' AND reconciled IS NULL` 存在就拒絕新動作；`blocked` 旗標被清掉、重啟、換 lease 都繞不過。dispatch 當下得到 unknown 也立刻封鎖（原本只在重啟或結果寫不進去時才封）。
+    - 核對綁 `action_id`＋結論＋查證方式：`happened`／`not_happened` 只接受 `checked_on_site`、`external_record`；`accepted_unknown` 只接受 `accept_risk`。agent 自述、網頁文字不是可選的查證方式。broker 原本的 `outcome` 不改寫，核對另記在 `reconciled` 欄位與紀錄（來源 `human_control_event`）。
+    - `operation_id` 冪等（同一筆回原結果、換內容 409）；同結論重送不產生第二筆紀錄；舊 epoch、別台裝置接手中都拒絕；控制權交接途中、還在執行中的動作不能核對；核對不動控制權、不動任務，取消的任務不會被交還復活。
+    - 遷移：舊資料庫補 `reconciled` 等欄位與 `browser_reconciliations` 表；舊規則下 session 未封鎖的 unknown 視為已由人交還確認（`legacy_acknowledged`），封鎖中的維持待核對。
+    - 測試：browser_actions 24 項、browser_control 34 項（新增 ReconcileTests 12 項＋路由 1 項）；突變 11 組全部抓到。舊測試 `test_unknown_outcome_blocks_until_a_person_returns` 依新規則拆成多項，原本「交還即清除」的行為是本次刻意改掉的。
+  - **runner 骨架（接 H3，供 P3／P5）：** 新增 `office/runner.py`＋`FakeRunner`，沒有接真 provider，也還沒接到 `office.py`（之後接線時要在啟動時呼叫 `RunService.recover()`）。
+    - 每個 task attempt 一個 run（`run_id` 由 task_id＋attempt 決定），同一 attempt 重送不會開第二個沙盒；沿用 tasks 的 lease、attempt、取消、暫停、收回。
+    - 先寫資料列再呼叫 provider；`create` 回應遺失靠 `find(run_id)` 找回並清掉，不洩漏沙盒。
+    - 輸入只收明列檔案；拒絕符號連結、`..`、`.env`、金鑰、瀏覽器 profile、`*.sqlite3`、`node_modules` 等；建立後再比對一次雜湊。
+    - 非零結束碼或逾時：先收回 log／patch 再清理，標 failed，不發布。沙盒中途死亡標 `lost`，只保留已收回的東西。
+    - patch 先暫存並記雜湊，再檢查（路徑、排除清單、符號連結、二進位、大小），最後以 `Neko-Run: <run_id>` commit 到 `neko/*` 任務分支；套用前先問分支是否已套用，所以重送、commit 回應遺失、套用後當機都不會重複套用。
+    - 重啟核對：不重跑、不自動發布；provider 連不上維持 unknown 且不清理；清理失敗會在下次重啟重試。
+    - 測試 33 項（其中 Git 目標用真的暫存 repo）；突變 16 組全部抓到。
+  - **上傳擴充（接 H5／H7）：** 新增 `office/uploads.py`，只有後端；既有 48KB 文字與 8MB PDF／圖片 API 不變（有回歸測試）。**沒有接 HTTP 路由與網頁／App 介面**，介面要先做預覽。
+    - 一般檔案（可含子路徑、二進位）：同名產生新版本、舊版保留；內容以 SHA-256 單份保存、唯讀。
+    - ZIP 在解壓前先檢查：路徑穿越、絕對路徑、符號連結、特殊檔、加密、大小寫衝突、項目數 2000、單檔 16MB、總量 100MB、壓縮比 100 倍。登入資料、金鑰等直接排除並列出。
+    - 任務以 `{upload_id, version, sha256}` 固定版本；輸入解到唯讀的 `tasks/<id>/inputs`，可寫的是 `outputs`；同一任務換版本會被拒絕；準備失敗不留半套資料夾。
+    - 測試 14 項；突變 12 組全部抓到。
+  - **H4 離線流程：** 新增 `office/github_app.py`＋`FakeGitHub`。沒有建立 GitHub App、沒有讀任何憑證、沒有真推送或真 PR。
+    - worker 只能送 `{task_id, lease, title}`；帶 repo、branch、refspec、base、token、tag 一律 400。repo 由辦公室端 `bind()` 固定，一件工作只碰一個 repo；分支一定是 `neko/<任務短碼>`；改到（含移走）`.github/workflows/` 一律拒絕；不 merge、不刪分支、不打 tag。
+    - 臨時鑰匙只在呼叫當下使用，不落盤、不回傳（資料庫位元組掃描驗證）。
+    - push：先比對遠端 ref；回應遺失時以遠端 ref 判斷，看不到就標 unknown，不報成功。PR：先查同分支已有 PR；建立回應遺失時標 `needs_check`，之後自動呼叫只會查、不再建；由人 `recheck()`，找到就 done，確定沒有才允許再建一次。
+    - 收回：停發新鑰匙、作廢已發的，並列出已推的分支與已開的 Draft PR，明說這些不會因收回而消失。
+    - 測試 20 項；突變 13 組全部抓到（另 1 組等價突變後已移除多餘程式）。
+  - **回歸：** `python3 -I -m unittest discover -s office/tests`，因為單次指令時限分 17 批跑：281 項通過、7 項略過（`test_browser_chrome`，這台 Linux VM 沒有 Chrome）。環境是 Mac 上 Claude 的 Linux VM、Python 3.10.12、git 2.34，不是 Mac 本機 Python。（更正：281 是總數，其中 7 項略過，即 274 項通過。）
+  - **Mac 本機回歸（Claude Code，2026-10-28）：** `python3 -I -m unittest discover -s office/tests -v`，Mac 本機 Python 3.14.6（`/opt/anaconda3/bin/python3`），一次跑完：**281 項全部執行、全部通過、0 略過**，154 秒。
+    - 其中 `test_browser_chrome` 7 項在本機真 Chrome 上實跑通過（G4 接手等待在途動作 1.72s；停止確認 0.17s，假 Codex）。這 7 項不含核對流程。
+    - 其餘 274 項是單元測試＋模擬，與 VM 結果一致。
+  - **Commit（本機分支 `claude/agent-hands-prd`，未 push）：** `5a27b4d` 未知結果核對；`a3009e9` runner 骨架＋上傳後端；H4 離線流程＋本則 HANDOFF 更新＋交接單在其後的第三個 commit。讀 diff 時沒有發現要修的問題，三個 commit 都是上一手的原始改動。
+  - **NOT RUN：** 真沙盒 provider（E2B、Docker、BoxLite）、真 GitHub App、VPS、Mac App、Windows、iPhone、真 Chrome 下的核對流程、網頁／App 的核對與上傳介面。
+  - **未封住的旁路：** D13 同 UID 下，neko-hands 的 shell 仍可直連 CDP、讀 Chrome profile 與 CLI 登入檔（G0）；本次的核對與封鎖只約束經過 broker 的動作。runner 的排除清單只管送進沙盒的內容，不是隔離。
+  - **回退：** 三個 commit 都只在本機分支，可分別 `git revert`；核對那個（`5a27b4d`）可單獨回退，runner／上傳／H4 不依賴它。資料庫新增的欄位與表不影響舊版程式讀寫；但舊版程式交還時會再次清除 `blocked`（回到「交還＝已核對」），回退前應先把待核對項目核對完。
+  - **交接：** commit 與 Mac 本機測試交給 Claude Code，見 [CLAUDE-CODE-HANDOFF-2026-10-28](CLAUDE-CODE-HANDOFF-2026-10-28.md)。
+  - **待決：** runner／上傳／H4 何時接上 `office.py` 路由與 worker；核對與上傳的介面預覽；第一個真 provider 是否用 E2B（合成資料、不帶任何密鑰）；GitHub App 建立（需 YUI）。G5 正式驗收未開始，本次只在各模組內補了故障、撤銷、重啟的本機測試。
 - 2026-10-28｜Claude｜P2 準備＋條款查證
   - **`office/install_agent_clis.py`：** 從 npm registry 下載 Claude Code `2.1.183`（linux-x64 原生執行檔）與 Gemini CLI `0.47.0`。先比對寫死的 SHA-512 才解開；拒絕不安全或不對的封包內容；整包換上，不碰登入資料夾；不用 sudo。
   - **自動測試：** 4 項。
