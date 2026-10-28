@@ -20,6 +20,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 
 class OfficeTelemetry:
+    observation_contract = 'metadata-v1'
     """Keep instrumentation failures separate from task failures."""
 
     def __init__(self, provider):

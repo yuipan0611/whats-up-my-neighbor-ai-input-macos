@@ -26,7 +26,9 @@ class CompatibilityTests(unittest.TestCase):
     def test_metadata_port_and_opaque_handle_observers_remain_interchangeable(self):
         # TracePort has reporter.outcome(status); TaskObserver has observer.outcome(handle,status).
         class Port:
+            observation_contract = 'metadata-v1'
             def __init__(self): self.receiver=MetadataPort()
+            def outcome(self, *args): raise AssertionError('SDK-internal helper must not receive an application handle')
             def task(self,*args): return self.receiver.task(*args)
             def agent(self,*args): return self.receiver.agent(*args)
             def shutdown(self,*args): pass

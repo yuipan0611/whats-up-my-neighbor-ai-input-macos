@@ -35,6 +35,8 @@ class TraceObserverAdapter:
 
 
 def as_observer(port, normalise=None):
-    if port is None or callable(getattr(port, 'outcome', None)):
+    if port is None:
+        return port
+    if getattr(port, 'observation_contract', None) != 'metadata-v1' and callable(getattr(port, 'outcome', None)):
         return port
     return TraceObserverAdapter(port, normalise)
