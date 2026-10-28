@@ -9,6 +9,7 @@ final class PasteDiagnostics {
 
     enum Tag: String, Codable {
         case startup = "startup", toggle = "toggle", stateChange = "state"
+        case recordingStop = "recording.stop"
         case capture = "capture"
         case captureResult = "capture.result"
         case snapshotFrontmost = "snapshot.frontmost"
@@ -28,6 +29,8 @@ final class PasteDiagnostics {
         case learningTarget = "learning.target"
         case vocabularyPreviewRequest = "vocabulary.preview.request"
     }
+
+    enum StopMethod: String, Codable { case shortcut, hudButton, menu }
 
     enum Failure: String, Codable {
         case accessibilityDenied, noEditableTarget, targetChanged, targetExpired
@@ -77,6 +80,7 @@ final class PasteDiagnostics {
 
     struct Event: Codable {
         let tag: Tag
+        var stopMethod: StopMethod? = nil
         var trusted: Bool? = nil
         var localPolicy: Bool? = nil
         var canStart: Bool? = nil
@@ -138,19 +142,31 @@ final class PasteDiagnostics {
         var isPreview: Bool? = nil
     }
 
-    private struct Report: Encodable {
-        let schemaVersion = 1
+    private struct Report: Codable {
+        var schemaVersion = 2
         let events: [Event]
+        let lastFailure: [Event]?
     }
 
     private let outputURL: URL?
     private let lock = NSLock()
     private var events: [Event] = []
+    private var lastFailure: [Event]?
     var isEnabled: Bool { outputURL != nil }
 
     init(environment: [String: String]) {
         if let path = environment[Self.environmentKey], path.hasPrefix("/"), !path.hasSuffix("/") {
-            outputURL = URL(fileURLWithPath: path)
+            let url = URL(fileURLWithPath: path)
+            outputURL = url
+            // Restore only this typed, bounded failure snapshot, never arbitrary log contents.
+            if let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size]) as? NSNumber,
+               size.intValue <= 65_536,
+               let data = try? Data(contentsOf: url),
+               let report = try? JSONDecoder().decode(Report.self, from: data),
+               report.schemaVersion == 2, let failure = report.lastFailure,
+               failure.last?.tag == .insertionResult, failure.last?.failure != nil {
+                lastFailure = Array(failure.suffix(40))
+            }
         } else {
             outputURL = nil
         }
@@ -163,9 +179,12 @@ final class PasteDiagnostics {
         if beginCapture { events.removeAll(keepingCapacity: true) }
         events.append(event)
         if events.count > 40 { events.removeFirst(events.count - 40) }
+        if event.tag == .insertionResult, event.failure != nil {
+            lastFailure = events
+        }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(Report(events: events)) else { return }
+        guard let data = try? encoder.encode(Report(events: events, lastFailure: lastFailure)) else { return }
         // Create with private permissions before writing; rename atomically so a
         // reader never observes a partial report. No parent directories are created.
         let temporary = outputURL.deletingLastPathComponent()
