@@ -34,7 +34,12 @@ class UnixHTTPConnection(http.client.HTTPConnection):
 def local_request(socket_path, path, body=None, headers=None, method=None):
     conn = UnixHTTPConnection(socket_path)
     try:
-        conn.request(method or ('GET' if body is None else 'POST'), path, body, headers or {})
+        try:
+            conn.request(method or ('GET' if body is None else 'POST'), path, body, headers or {})
+        except BrokenPipeError:
+            # A rejected large upload may receive its HTTP error before sendall finishes.
+            # Still require a valid response below; an absent/wrong response remains a test failure.
+            pass
         response = conn.getresponse()
         return response.status, response.read(), response.headers
     finally:
