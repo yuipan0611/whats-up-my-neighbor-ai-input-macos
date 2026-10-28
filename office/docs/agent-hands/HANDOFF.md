@@ -69,6 +69,11 @@ status: D1–D17 已拍板；H3 有第一件真任務證據、仍待完整驗收
 
 ## 進度紀錄
 
+- 2026-10-28｜Claude Code｜runner 第一個真 provider（本機 Docker）施工單｜草稿，等 YUI 看過（沒有程式、沒有安裝、沒有啟動 Docker）
+  - YUI 決定：輸入用辦公室自己的 clone（固定 commit）；provider 先用本機 Docker；**只守兩條紅線：檔案改壞、刷卡**，其他放寬，執行時可連外網（先前「執行時斷網」草案作廢）。
+  - 施工單：[tasks/H3-runner-docker-v1.md](tasks/H3-runner-docker-v1.md)。
+  - 刷卡風險最大的地方不在 runner，而在貓咪的 Chrome（D13 旁路可繞過 broker）：規則是貓咪的 Chrome 不登入存了卡的帳號、不儲存付款方式。
+  - Mac 有 Docker Desktop 29.6.1，目前沒在跑；要啟動跑真測試時再問 YUI。
 - 2026-10-28｜Claude Code｜runner 接進 office.py（第一步：啟動復原＋健康狀態）｜完成（Mac 本機自動測試＋FakeRunner；未 push、未部署、沒有真 provider）
   - YUI 決定三個模組先接 runner。這一步只接生命週期，**正式環境行為不變**：`main()` 沒有傳 provider，`office.runs` 是 `None`。
   - `Office(..., sandbox=None)`：給了 `runner.Runner` provider 才建 `RunService`，並在 `store.recover()` 之後呼叫 `RunService.recover()`。順序是刻意的：hands 任務重啟後保留 lease，所以進行中任務的 run 仍算有效，不會被誤取消。還沒接發布目標（`GitTarget`），所以重啟時卡在發布中的 run 維持 `publish_unknown`，留給人處理。
