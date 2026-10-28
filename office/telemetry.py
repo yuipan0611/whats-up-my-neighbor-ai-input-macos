@@ -1,7 +1,8 @@
 """Optional, metadata-only OpenTelemetry bridge for the office's actual execution.
 
-SQLite events remain the durable progress log. This module is loaded only when
+SQLite events remain the durable progress log. This adapter is loaded only when
 NEKO_TRACE_ENABLED=1; exporters, batching and wire format come from the OTel SDK.
+It consumes our tracing contract, not any provider's CLI grammar or Phoenix API.
 """
 from contextlib import contextmanager
 import logging
@@ -80,19 +81,20 @@ class OfficeTelemetry:
                 # exception messages or stack traces via the SDK context manager.
                 self.call(manager.__exit__, None, None, None)
 
-    def task(self, task):
-        attributes = {'nekonode.task.id': task['id'],
-                      'nekonode.executor': task.get('executor', 'gemma')}
-        if task.get('parent_id'):
+    @contextmanager
+    def task(self, task_id, executor, previous_task_id=''):
+        attributes = {'nekonode.task.id': task_id, 'nekonode.executor': executor}
+        if previous_task_id:
             # A manual continuation is another task, not a child-agent span.
-            attributes['nekonode.task.previous_id'] = task['parent_id']
-        return self.scope('office.task', OpenInferenceSpanKindValues.CHAIN, attributes)
+            attributes['nekonode.task.previous_id'] = previous_task_id
+        with self.scope('office.task', OpenInferenceSpanKindValues.CHAIN, attributes) as span:
+            yield TaskObservation(self, span)
 
     @contextmanager
-    def agent(self, task):
-        with self.scope('codex.run', OpenInferenceSpanKindValues.AGENT,
-                        {'nekonode.task.id': task['id'], 'nekonode.executor': 'codex'}) as span:
-            observer = CodexObservation(self, span)
+    def agent(self, task_id, executor):
+        with self.scope(executor + '.run', OpenInferenceSpanKindValues.AGENT,
+                        {'nekonode.task.id': task_id, 'nekonode.executor': executor}) as span:
+            observer = AgentObservation(self, span, executor)
             try:
                 yield observer
             except BaseException as error:
@@ -115,16 +117,26 @@ class OfficeTelemetry:
             self._warn()
 
 
-class CodexObservation:
+class TaskObservation:
+    """Expose only the application operation; keep SDK span handles private."""
+    def __init__(self, telemetry, span):
+        self._telemetry, self._span = telemetry, span
+
+    def outcome(self, status):
+        self._telemetry.outcome(self._span, status)
+
+
+class AgentObservation:
     MAX_TOOL_SPANS = 64
     MAX_EVENTS = 128
     ITEM_ID = re.compile(r'[A-Za-z0-9_.:-]{1,128}')
-    ITEM_TYPES = frozenset(('agent_message', 'reasoning', 'web_search', 'error'))
-    EVENT_TYPES = frozenset(('thread.started', 'turn.started', 'turn.completed',
-                             'turn.failed', 'item.started', 'item.completed', 'error'))
+    ITEM_TYPES = frozenset(('message', 'reasoning_summary', 'tool', 'error', 'other'))
+    EVENT_TYPES = frozenset(('session.started', 'run.started', 'run.completed',
+                             'run.failed', 'item.started', 'item.completed', 'run.error'))
+    TOOL_NAME = re.compile(r'[a-z][a-z0-9_.-]{0,63}')
 
-    def __init__(self, telemetry, span):
-        self.telemetry, self.span = telemetry, span
+    def __init__(self, telemetry, span, executor):
+        self.telemetry, self.span, self.executor = telemetry, span, executor
         self.active = {}
         self.seen_tool_ids = set()
         self.tool_count = self.event_count = self.dropped_events = 0
@@ -133,36 +145,37 @@ class CodexObservation:
         self.telemetry.call(self._event, event)
 
     def _event(self, event):
-        if self.span is None or not isinstance(event, dict):
+        if (self.span is None or not isinstance(event, dict) or
+                type(event.get('schema_version')) is not int or event['schema_version'] != 1):
             return
-        phase = event.get('type')
+        phase = event.get('phase')
         if not isinstance(phase, str) or phase not in self.EVENT_TYPES:
             return
         attributes = {}
-        item = event.get('item')
-        item = item if isinstance(item, dict) else {}
-        kind = item.get('type')
+        kind = event.get('item_kind')
         kind = kind if isinstance(kind, str) and kind in self.ITEM_TYPES else 'other'
-        item_id = item.get('id')
+        item_id = event.get('item_id')
         item_id = item_id if isinstance(item_id, str) and self.ITEM_ID.fullmatch(item_id) else None
+        tool_name = event.get('tool_name')
+        tool_name = tool_name if isinstance(tool_name, str) and self.TOOL_NAME.fullmatch(tool_name) else None
         if phase.startswith('item.'):
             attributes['nekonode.item.type'] = kind
             if item_id:
                 attributes['nekonode.item.id'] = item_id
         if self.event_count < self.MAX_EVENTS:
-            self.telemetry.call(self.span.add_event, 'codex.' + phase, attributes)
+            self.telemetry.call(self.span.add_event, self.executor + '.' + phase, attributes)
             self.event_count += 1
         else:
             self.dropped_events += 1
-        # Only this existing CLI tool is currently connected. Completion-only
-        # events remain timestamped events; no start time is invented for them.
-        if kind == 'web_search' and item_id:
+        # Completion-only events remain timestamped events; no start time is
+        # invented. Provider adapters decide which actual tools they can observe.
+        if kind == 'tool' and item_id and tool_name:
             if phase == 'item.started' and item_id not in self.seen_tool_ids and self.tool_count < self.MAX_TOOL_SPANS:
                 child = self.telemetry.call(
-                    self.telemetry.tracer.start_span, 'codex.web_search',
+                    self.telemetry.tracer.start_span, self.executor + '.' + tool_name,
                     context=trace.set_span_in_context(self.span),
                     attributes={SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.TOOL.value,
-                                SpanAttributes.TOOL_NAME: 'web_search', **attributes},
+                                SpanAttributes.TOOL_NAME: tool_name, **attributes},
                 )
                 if child is not None:
                     self.active[item_id] = child
@@ -170,18 +183,16 @@ class CodexObservation:
                     self.tool_count += 1
             elif phase == 'item.completed' and item_id in self.active:
                 child = self.active.pop(item_id)
-                self.telemetry.outcome(child, 'failed' if item.get('status') == 'failed' else 'completed')
+                self.telemetry.outcome(child, 'failed' if event.get('outcome') == 'failed' else 'completed')
                 self.telemetry.call(child.end)
-        if phase == 'turn.completed':
-            usage = event.get('usage')
-            if isinstance(usage, dict):
-                safe = {}
-                for source, target in (('input_tokens', SpanAttributes.LLM_TOKEN_COUNT_PROMPT),
-                                       ('output_tokens', SpanAttributes.LLM_TOKEN_COUNT_COMPLETION)):
-                    value = usage.get(source)
-                    if type(value) is int and 0 <= value < 2 ** 63:
-                        safe[target] = value
-                self.telemetry.attributes(self.span, safe)
+        if phase == 'run.completed':
+            safe = {}
+            for source, target in (('input_tokens', SpanAttributes.LLM_TOKEN_COUNT_PROMPT),
+                                   ('output_tokens', SpanAttributes.LLM_TOKEN_COUNT_COMPLETION)):
+                value = event.get(source)
+                if type(value) is int and 0 <= value < 2 ** 63:
+                    safe[target] = value
+            self.telemetry.attributes(self.span, safe)
 
     def close(self, status):
         for child in self.active.values():

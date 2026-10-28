@@ -1,0 +1,54 @@
+# Standalone Jaeger 2.22.0 lab: native binary defaults to loopback; Compose sets
+# JAEGER_LAB_HOST=0.0.0.0 inside the private container network.
+# Configuration reference (Apache-2.0 upstream):
+# https://github.com/jaegertracing/jaeger/blob/v2.22.0/cmd/jaeger/config-ocb-smoketest.yaml
+
+extensions:
+  jaeger_storage:
+    backends:
+      lab:
+        memory:
+          max_traces: 1000
+  jaeger_query:
+    storage:
+      traces: lab
+    http:
+      endpoint: "${env:JAEGER_LAB_HOST:-127.0.0.1}:${env:JAEGER_LAB_UI_PORT:-16686}"
+    grpc:
+      endpoint: "${env:JAEGER_LAB_HOST:-127.0.0.1}:${env:JAEGER_LAB_QUERY_GRPC_PORT:-16685}"
+    enable_tracing: false
+    # No AI/MCP or UI OTLP proxy. They are optional query-service features.
+  healthcheckv2:
+    use_v2: true
+    http:
+      endpoint: "${env:JAEGER_LAB_HOST:-127.0.0.1}:${env:JAEGER_LAB_HEALTH_PORT:-13133}"
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: "${env:JAEGER_LAB_HOST:-127.0.0.1}:${env:JAEGER_LAB_OTLP_PORT:-4318}"
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 64
+
+exporters:
+  jaeger_storage_exporter:
+    trace_storage: lab
+
+service:
+  extensions: [jaeger_storage, jaeger_query, healthcheckv2]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [jaeger_storage_exporter]
+  telemetry:
+    resource:
+      service.name: nekonode-jaeger-lab
+    metrics:
+      level: none
+    logs:
+      level: info

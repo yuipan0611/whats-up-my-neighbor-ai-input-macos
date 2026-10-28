@@ -32,6 +32,10 @@ import urllib.request
 from urllib.parse import parse_qs, urlsplit
 import uuid
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tracing_contract import TracePort
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # python3 -I leaves the script's own folder off the path
 import browser_audit  # noqa: E402
@@ -243,6 +247,15 @@ class Store:
     def latest_seq(self):
         with self.connect() as c:
             return c.execute('SELECT COALESCE(MAX(seq),0) FROM events').fetchone()[0]
+
+    def executor_last_success(self, executor):
+        with self.connect() as c:
+            row = c.execute('SELECT value FROM settings WHERE key=?', (executor + '_last_success',)).fetchone()
+            return row[0] if row else None
+
+    def record_executor_success(self, executor):
+        with self.connect() as c:
+            c.execute('INSERT OR REPLACE INTO settings VALUES(?,?)', (executor + '_last_success', now()))
 
     def snapshot(self):
         """Tasks, pause flag and latest seq from one read transaction, so a client resumes from a matching cursor."""
@@ -991,7 +1004,7 @@ class CodexAgent(CliAgent):
     name = 'Codex'
     model = 'Codex（帳號預設模型）'
 
-    def __init__(self, runtime, telemetry=None):
+    def __init__(self, runtime, telemetry: TracePort = None):
         self.runtime = Path(runtime).resolve()
         self.telemetry = telemetry
         self.binary = self.runtime / 'codex/codex-x86_64-unknown-linux-musl'
@@ -1036,8 +1049,45 @@ class CodexAgent(CliAgent):
     def run(self, task, check, progress, note=None):
         if self.telemetry is None:
             return self._run(task, check, progress, note)
-        with self.telemetry.agent(task) as observer:
-            return self._run(task, check, progress, note, observe=observer.event)
+        with self.telemetry.agent(task['id'], 'codex') as observer:
+            def observe(raw):
+                event = self.normalise_trace_event(raw)
+                if event is not None:
+                    observer.event(event)
+            return self._run(task, check, progress, note, observe=observe)
+
+    @staticmethod
+    def normalise_trace_event(raw):
+        """Codex JSONL -> our metadata contract. Never forward provider payloads."""
+        if not isinstance(raw, dict) or not isinstance(raw.get('type'), str):
+            return None
+        phase = {'thread.started': 'session.started', 'turn.started': 'run.started',
+                 'turn.completed': 'run.completed', 'turn.failed': 'run.failed',
+                 'error': 'run.error', 'item.started': 'item.started',
+                 'item.completed': 'item.completed'}.get(raw['type'])
+        if phase is None:
+            return None
+        event = {'schema_version': 1, 'phase': phase}
+        item = raw.get('item')
+        if phase.startswith('item.') and isinstance(item, dict):
+            kind = item.get('type')
+            kinds = {'reasoning': 'reasoning_summary', 'agent_message': 'message',
+                     'web_search': 'tool', 'error': 'error'}
+            event['item_kind'] = kinds.get(kind, 'other') if isinstance(kind, str) else 'other'
+            item_id = item.get('id')
+            if isinstance(item_id, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', item_id):
+                event['item_id'] = item_id
+            if kind == 'web_search':
+                event['tool_name'] = 'web_search'
+            if phase == 'item.completed':
+                event['outcome'] = 'failed' if item.get('status') == 'failed' else 'completed'
+        usage = raw.get('usage')
+        if phase == 'run.completed' and isinstance(usage, dict):
+            for key in ('input_tokens', 'output_tokens'):
+                value = usage.get(key)
+                if type(value) is int and 0 <= value < 2 ** 63:
+                    event[key] = value
+        return event
 
     def _run(self, task, check, progress, note=None, observe=None):
         note = note or (lambda kind, text: None)
@@ -1336,7 +1386,7 @@ class GeminiAgent(CliAgent):
 
 
 class Office:
-    def __init__(self, store, model, agent=None, broker=None, providers=None, sandbox=None, checkouts=None, workbench=None, telemetry=None):
+    def __init__(self, store, model, agent=None, telemetry: TracePort = None, *, broker=None, providers=None, sandbox=None, checkouts=None, workbench=None):
         self.store, self.model, self.agent = store, model, agent
         self.agents = {'codex': agent, **(providers or {})}  # executor -> agent CLI; agent stays Codex
         self.broker = broker  # a browser_actions.Broker only where broker mode is switched on; legacy otherwise
@@ -1540,9 +1590,9 @@ class Office:
     def execute(self, task):
         if self.telemetry is None:
             return self._execute(task)
-        with self.telemetry.task(task) as span:
+        with self.telemetry.task(task['id'], task.get('executor', 'gemma'), task.get('parent_id', '')) as reporter:
             result = self._execute(task)
-            self.telemetry.outcome(span, self.store.get(task['id'])['status'])
+            reporter.outcome(self.store.get(task['id'])['status'])
             return result
 
     def _execute(self, task):
@@ -1573,7 +1623,7 @@ class Office:
                 self.store.change(id_, status, '外部成果已保存。' if status == 'completed' else '需要你補充；說明已保存。',
                                   result=content, artifact=path, metrics=json.dumps(metrics))
                 if status == 'completed':
-                    self.store.record_provider_success(executor)
+                    self.store.record_executor_success(executor)
             return
         if hasattr(self.model, 'ensure_started'):
             self.model.ensure_started()
@@ -2017,10 +2067,8 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/health':
                 providers = {executor: office.agents[executor].health() if office.agents.get(executor) else
                              {'name': name, 'installed': False, 'authenticated': False} for executor, name in AGENT_EXECUTORS.items()}
-                with office.store.connect() as c:
-                    for executor, health in providers.items():
-                        success = c.execute('SELECT value FROM settings WHERE key=?', (executor + '_last_success',)).fetchone()
-                        health['last_success'] = success[0] if success else None
+                for executor, health in providers.items():
+                    health['last_success'] = office.store.executor_last_success(executor)
                 provider = providers['codex']  # older clients read Codex here
                 self.send(200, {'service': 'neighbor-office', 'version': VERSION, 'model': office.model.health(),
                                'provider': provider, 'providers': providers, 'paused': office.store.paused(),
@@ -2462,8 +2510,8 @@ def main():
         from workbench_control import Workbench
         workbench = Workbench(store,json.loads(args.workbench_config.read_text()))
     runtime = args.data.parent / 'runtime'
-    office = Office(store, Ollama(args.model, managed=True), CodexAgent(runtime, telemetry), broker,
-                    {'claude': ClaudeAgent(runtime), 'gemini': GeminiAgent(runtime)}, sandbox, workbench=workbench, telemetry=telemetry)
+    office = Office(store, Ollama(args.model, managed=True), CodexAgent(runtime, telemetry), telemetry, broker=broker,
+                    providers={'claude': ClaudeAgent(runtime), 'gemini': GeminiAgent(runtime)}, sandbox=sandbox, workbench=workbench)
     local_socket = args.local_socket or args.data.parent / 'run' / 'office.sock'
     try:
         server = Server(args.port, office, args.public_origin, local_socket, args.dev_tcp_local, args.worker_socket, browser_socket=args.browser_socket)

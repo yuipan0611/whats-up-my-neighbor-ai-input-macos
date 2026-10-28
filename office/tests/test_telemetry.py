@@ -20,6 +20,7 @@ try:
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
     from opentelemetry.sdk.trace.sampling import ALWAYS_ON
     from opentelemetry.trace import StatusCode
+    import opentelemetry.exporter.otlp.proto.http.trace_exporter
     import openinference.semconv.trace
 except ImportError:
     SDK_AVAILABLE = False
@@ -215,7 +216,7 @@ class TracingIntegrationTests(unittest.TestCase):
 
     def test_event_observer_failure_does_not_change_durable_progress_or_result(self):
         office, task = self.submit(self.codex())
-        with mock.patch.object(telemetry_module.CodexObservation, '_event', side_effect=RuntimeError(PRIVATE)):
+        with mock.patch.object(telemetry_module.AgentObservation, '_event', side_effect=RuntimeError(PRIVATE)):
             with self.assertLogs(telemetry_module.__name__, level='WARNING'):
                 office.execute(self.store.claim())
         saved = self.store.get(task['id'])
@@ -241,11 +242,12 @@ class TracingIntegrationTests(unittest.TestCase):
         self.assertEqual(self.store.get(task['id'])['result'], FINAL['content'])
 
     def test_limits_bound_events_and_tools_while_late_usage_is_still_recorded(self):
-        with self.telemetry.agent({'id': str(uuid.uuid4())}) as observer:
+        with self.telemetry.agent(str(uuid.uuid4()), 'codex') as observer:
             for i in range(observer.MAX_TOOL_SPANS + 20):
                 for phase in ('item.started', 'item.completed'):
-                    observer.event({'type': phase, 'item': {'type': 'web_search', 'id': f'search-{i}'}})
-            observer.event({'type': 'turn.completed', 'usage': {'input_tokens': 17, 'output_tokens': 9}})
+                    observer.event({'schema_version': 1, 'phase': phase, 'item_kind': 'tool',
+                                    'item_id': f'search-{i}', 'tool_name': 'web_search'})
+            observer.event({'schema_version': 1, 'phase': 'run.completed', 'input_tokens': 17, 'output_tokens': 9})
         run = next(span for span in self.spans() if span.name == 'codex.run')
         self.assertEqual(sum(span.name == 'codex.web_search' for span in self.spans()), observer.MAX_TOOL_SPANS)
         self.assertLessEqual(len(run.events), observer.MAX_EVENTS)
@@ -254,18 +256,74 @@ class TracingIntegrationTests(unittest.TestCase):
         self.assertEqual(run.attributes['llm.token_count.completion'], 9)
 
     def test_malformed_metadata_and_invalid_usage_are_ignored(self):
-        with self.telemetry.agent({'id': str(uuid.uuid4())}) as observer:
-            for event in (None, [], {'type': []}, {'type': 'unknown', 'text': PRIVATE},
-                          {'type': 'item.started', 'item': None},
-                          {'type': 'item.started', 'item': {'type': [], 'id': []}},
-                          {'type': 'item.started', 'item': {'type': 'web_search', 'id': 'x' * 129}}):
+        with self.telemetry.agent(str(uuid.uuid4()), 'codex') as observer:
+            for event in (None, [], {'schema_version': 1, 'phase': []},
+                          {'schema_version': 1, 'phase': 'unknown', 'text': PRIVATE},
+                          {'schema_version': 1, 'phase': 'item.started', 'item_kind': [], 'item_id': []},
+                          {'schema_version': 1, 'phase': 'item.started', 'item_kind': 'tool',
+                           'tool_name': 'web_search', 'item_id': 'x' * 129},
+                          {'schema_version': 1, 'phase': 'item.started', 'item_kind': 'tool',
+                           'tool_name': PRIVATE + '/invalid', 'item_id': 'search-1'}):
                 observer.event(event)
-            observer.event({'type': 'turn.completed', 'usage': {'input_tokens': True, 'output_tokens': -1}})
-            observer.event({'type': 'turn.completed', 'usage': {'input_tokens': 2 ** 63, 'output_tokens': PRIVATE}})
+            observer.event({'schema_version': 1, 'phase': 'run.completed', 'input_tokens': True, 'output_tokens': -1})
+            observer.event({'schema_version': 1, 'phase': 'run.completed', 'input_tokens': 2 ** 63, 'output_tokens': PRIVATE})
         self.assertEqual(len(self.spans()), 1)
         self.assertNotIn('llm.token_count.prompt', self.spans()[0].attributes)
         self.assertNotIn('llm.token_count.completion', self.spans()[0].attributes)
         self.assert_private_content_absent()
+
+    def test_unknown_contract_version_never_falls_back_to_provider_payload(self):
+        with self.telemetry.agent(str(uuid.uuid4()), 'fixture') as observer:
+            for version in (None, 2, '1', True):
+                observer.event({'schema_version': version, 'phase': 'item.started', 'item_kind': 'tool',
+                                'tool_name': 'file_lookup', 'item_id': 'lookup-1', 'raw': PRIVATE})
+            observer.event({'type': 'item.started', 'item': {'type': 'web_search', 'id': 'search-1', 'query': PRIVATE}})
+        self.assertEqual(len(self.spans()), 1)
+        self.assertEqual(len(self.spans()[0].events), 0)
+        self.assert_private_content_absent()
+
+    def test_same_business_case_survives_replacing_the_entire_tracing_sdk(self):
+        from test_tracing_contract import RecordingTelemetry, run_fixture
+
+        task_id = str(uuid.uuid4())
+        recording = RecordingTelemetry()
+        outputs = [run_fixture(self.root / name, backend, task_id)
+                   for name, backend in [('disabled', None), ('recording', recording), ('otel', self.telemetry)]]
+        self.assertEqual(outputs[0], outputs[1])
+        self.assertEqual(outputs[0], outputs[2])
+        self.assertEqual(outputs[0]['status'], 'completed')
+        self.assertEqual([record['kind'] for record in recording.records], ['task', 'agent'])
+        self.assertEqual({span.name for span in self.spans()}, {'office.task', 'codex.run', 'codex.web_search'})
+
+    def test_generic_port_supports_a_different_synthetic_provider(self):
+        from test_tracing_contract import contract
+
+        task_id = str(uuid.uuid4())
+
+        class SyntheticProviderAdapter:
+            """Exercises the port, without claiming a real second model integration."""
+            def __init__(self, tracing):
+                self.tracing = tracing
+
+            def execute(self):
+                with self.tracing.agent(task_id, 'fixture') as reporter:
+                    for phase in ('item.started', 'item.completed'):
+                        reporter.event({'schema_version': 1, 'phase': phase, 'item_kind': 'tool',
+                                        'item_id': 'lookup-1', 'tool_name': 'file_lookup', 'outcome': 'completed'})
+                    reporter.event({'schema_version': 1, 'phase': 'run.completed',
+                                    'input_tokens': 3, 'output_tokens': 2})
+
+        self.assertIsInstance(self.telemetry, contract.TracePort)
+        with self.telemetry.task(task_id, 'fixture') as reporter:
+            self.assertIsInstance(reporter, contract.TaskReporter)
+            SyntheticProviderAdapter(self.telemetry).execute()
+            reporter.outcome('completed')
+        spans = {span.name: span for span in self.spans()}
+        self.assertEqual(set(spans), {'office.task', 'fixture.run', 'fixture.file_lookup'})
+        self.assertEqual(spans['fixture.run'].parent.span_id, spans['office.task'].context.span_id)
+        self.assertEqual(spans['fixture.file_lookup'].parent.span_id, spans['fixture.run'].context.span_id)
+        self.assertEqual(spans['fixture.file_lookup'].attributes['tool.name'], 'file_lookup')
+        self.assertEqual(spans['fixture.run'].attributes['nekonode.executor'], 'fixture')
 
     def test_enabled_loader_works_in_isolated_python_mode(self):
         script = (
