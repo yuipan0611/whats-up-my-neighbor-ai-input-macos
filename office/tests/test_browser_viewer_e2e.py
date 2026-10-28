@@ -74,7 +74,7 @@ class ViewerE2E(unittest.IsolatedAsyncioTestCase):
         await self.remote_page.locator('#remote').focus()
 
         office = office_app.Office(office_app.Store(self.root / 'office-data'), FakeModel())
-        self.server = office_app.Server(0, office, browser_socket=self.root / 'run/gateway.sock')
+        self.server = office_app.Server(0, office, dev_tcp_local=True, browser_socket=self.root / 'run/gateway.sock')
         self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.server_thread.start()
         self.base = f'http://127.0.0.1:{self.server.server_port}'

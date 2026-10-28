@@ -42,8 +42,9 @@ import browser_audit  # noqa: E402
 import browser_control  # noqa: E402
 import github_app  # noqa: E402
 import runner  # noqa: E402
+from observation_adapter import as_observer  # noqa: E402
 
-VERSION = '0.6.0-workbench.1'
+VERSION = '0.6.0-workbench.2'
 ACTIVE = ('planning', 'running', 'saving')
 # Executors run by an outside agent CLI, with the name the progress text uses.
 AGENT_EXECUTORS = {'codex': 'Codex', 'claude': 'Claude', 'gemini': 'Gemini'}
@@ -1006,7 +1007,7 @@ class CodexAgent(CliAgent):
 
     def __init__(self, runtime, telemetry: TracePort = None):
         self.runtime = Path(runtime).resolve()
-        self.telemetry = telemetry
+        self.telemetry = as_observer(telemetry, self.normalise_trace_event)
         self.binary = self.runtime / 'codex/codex-x86_64-unknown-linux-musl'
         self.home = self.runtime / 'codex-home'
         self.workspace = self.runtime / 'agent-workspace'
@@ -1049,12 +1050,8 @@ class CodexAgent(CliAgent):
     def run(self, task, check, progress, note=None):
         if self.telemetry is None:
             return self._run(task, check, progress, note)
-        with self.telemetry.agent(task['id'], 'codex') as observer:
-            def observe(raw):
-                event = self.normalise_trace_event(raw)
-                if event is not None:
-                    observer.event(event)
-            return self._run(task, check, progress, note, observe=observe)
+        with self.telemetry.agent(task) as observer:
+            return self._run(task, check, progress, note, observe=observer.event)
 
     @staticmethod
     def normalise_trace_event(raw):
@@ -1394,7 +1391,7 @@ class Office:
         if broker:
             broker.recover()
             self.control.recover()
-        self.telemetry = telemetry
+        self.telemetry = as_observer(telemetry)
         self.stopping = threading.Event()
         self.store.recover()
         if workbench and sandbox:
@@ -1590,9 +1587,9 @@ class Office:
     def execute(self, task):
         if self.telemetry is None:
             return self._execute(task)
-        with self.telemetry.task(task['id'], task.get('executor', 'gemma'), task.get('parent_id', '')) as reporter:
+        with self.telemetry.task(task) as reporter:
             result = self._execute(task)
-            reporter.outcome(self.store.get(task['id'])['status'])
+            self.telemetry.outcome(reporter, self.store.get(task['id'])['status'])
             return result
 
     def _execute(self, task):

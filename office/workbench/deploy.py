@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import http.client
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import socket
@@ -15,7 +16,7 @@ import time
 ROOT=Path('/home/neighbor/neighbor-office')
 UNIT=Path('/home/neighbor/.config/systemd/user/neighbor-office.service')
 HELPERS_ROOT=Path('/opt/neko-hands')
-HELPERS=('worker.py','team_worker.py','project_tools.py','review_gate.py','review_policy.py','verify_google_policy.py')
+HELPERS=('worker.py','browser_adapter.py','team_worker.py','project_tools.py','review_gate.py','review_policy.py','verify_google_policy.py')
 
 def run(*args):
     return subprocess.run(args,check=True,capture_output=True,text=True)
@@ -91,8 +92,11 @@ def main():
     release=args.release.resolve()
     if release.parent!=ROOT/'releases' or not (release/'office.py').is_file():
         raise SystemExit('Expected a staged Office release')
+    version=re.search(r"^VERSION = '([A-Za-z0-9.+-]+)'$",(release/'office.py').read_text(),re.M)
+    if not version: raise SystemExit('Release version is missing')
+    version=version.group(1)
     old=health()
-    if old['version']=='0.6.0-workbench.1': raise SystemExit('Version already deployed; inspect rather than replay')
+    if old['version']==version: raise SystemExit('Version already deployed; inspect rather than replay')
     backup=ROOT/'backups'/('workbench-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'))
     backup.mkdir(mode=0o700,parents=True)
     with sqlite3.connect(ROOT/'data/office.sqlite3',timeout=10) as c:
@@ -122,12 +126,14 @@ def main():
         service('stop',True); service('stop')
         for name in HELPERS: atomic_copy(release/'hands'/name,HELPERS_ROOT/name)
         unit=(backup/'neighbor-office.service').read_text()
-        unit=unit.replace('--worker-socket /srv/neko-office/worker.sock','--worker-socket /srv/neko-office/worker.sock --workbench-config %h/neighbor-office/workbench.json')
-        unit=unit.replace('[Service]\n','[Service]\nEnvironment=DOCKER_HOST=unix:///run/user/1000/docker.sock\n')
+        if '--workbench-config ' not in unit:
+            unit=unit.replace('--worker-socket /srv/neko-office/worker.sock','--worker-socket /srv/neko-office/worker.sock --workbench-config %h/neighbor-office/workbench.json')
+        if 'Environment=DOCKER_HOST=' not in unit:
+            unit=unit.replace('[Service]\n','[Service]\nEnvironment=DOCKER_HOST=unix:///run/user/1000/docker.sock\n')
         UNIT.write_text(unit); UNIT.chmod(0o600); run('chown','neighbor:neighbor',str(UNIT))
         point(str(release))
         run('runuser','-u','neighbor','--','env','XDG_RUNTIME_DIR=/run/user/1000','systemctl','--user','daemon-reload')
-        service('start'); result=wait_health('0.6.0-workbench.1')
+        service('start'); result=wait_health(version)
         if not result['workbench']['enabled']: raise RuntimeError('Workbench is not enabled')
         service('start',True); service('is-active',True)
         flags(previous)

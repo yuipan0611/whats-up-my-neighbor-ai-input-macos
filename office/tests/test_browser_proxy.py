@@ -65,15 +65,15 @@ class UnixServer(socketserver.ThreadingUnixStreamServer):
 class BrowserProxyTests(Base):
     def setUp(self):
         super().setUp()
-        root = Path(self.temp.name) / 'browser'
+        root = Path(self.temp.name).resolve() / 'browser'
         root.mkdir(mode=0o700)
-        self.socket_path = root / 'gateway.sock'
-        self.upstream = UnixServer(str(self.socket_path), UpstreamHandler)
-        os.chmod(self.socket_path, 0o600)
+        self.gateway_path = root / 'gateway.sock'
+        self.upstream = UnixServer(str(self.gateway_path), UpstreamHandler)
+        os.chmod(self.gateway_path, 0o600)
         self.upstream.observed = []
         self.upstream_thread = threading.Thread(target=self.upstream.serve_forever, daemon=True)
         self.upstream_thread.start()
-        self.server.browser = BrowserProxy(self.socket_path)
+        self.server.browser = BrowserProxy(self.gateway_path)
         self.server.browser_error = BrowserProxyError
 
     def tearDown(self):
@@ -132,11 +132,11 @@ class BrowserProxyTests(Base):
     def test_disabled_missing_or_public_socket_fails_closed(self):
         self.server.browser = None
         self.assertEqual(self.request('/api/browser/state', headers=self.local)[1]['error'], 'browser_disabled')
-        self.server.browser = BrowserProxy(self.socket_path)
-        os.chmod(self.socket_path, 0o666)
+        self.server.browser = BrowserProxy(self.gateway_path)
+        os.chmod(self.gateway_path, 0o666)
         self.assertEqual(self.request('/api/browser/state', headers=self.local)[0], 503)
         self.assertEqual(self.upstream.observed, [])
-        os.chmod(self.socket_path, 0o600)
+        os.chmod(self.gateway_path, 0o600)
         self.assertEqual(self.request('/api/browser/state', headers=self.local)[1]['actor'], 'local-owner')
 
     def test_upstream_eof_preserves_already_received_websocket_close_frame(self):
