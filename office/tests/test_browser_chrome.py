@@ -98,21 +98,34 @@ class RealChromeTests(unittest.TestCase):
         cls.temp = tempfile.mkdtemp(prefix='neko-g3-')
         cls.site = socketserver.ThreadingTCPServer(('127.0.0.1', 0), Site)
         threading.Thread(target=cls.site.serve_forever, daemon=True).start()
+        cls.chrome = None
+        cls.addClassCleanup(cls.cleanup)
         cls.base = f'http://127.0.0.1:{cls.site.server_address[1]}'
         profile = os.path.join(cls.temp, 'profile')
-        cls.chrome = subprocess.Popen([CHROME, '--headless=new', '--remote-debugging-port=0', f'--user-data-dir={profile}',
-                                       '--no-first-run', '--no-default-browser-check', '--disable-extensions', 'about:blank'],
-                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        log = Path(cls.temp) / 'chrome-startup.log'
+        with log.open('wb') as errors:
+            cls.chrome = subprocess.Popen([CHROME, '--headless=new', '--remote-debugging-port=0', f'--user-data-dir={profile}',
+                                           '--no-first-run', '--no-default-browser-check', '--disable-extensions', 'about:blank'],
+                                          stdout=subprocess.DEVNULL, stderr=errors)
         port_file = Path(profile) / 'DevToolsActivePort'
-        for _ in range(100):
-            if port_file.exists() and port_file.read_text().strip():
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if port_file.exists():
+                lines = port_file.read_text().splitlines()
+                if lines and lines[0].isdigit() and 0 < int(lines[0]) < 65536:
+                    cls.endpoint = f'http://127.0.0.1:{lines[0]}'
+                    return
+            if cls.chrome.poll() is not None:
                 break
             time.sleep(0.1)
-        cls.endpoint = f'http://127.0.0.1:{port_file.read_text().split()[0]}'
+        raise RuntimeError('Synthetic Chrome did not become ready: ' + log.read_text(errors='replace')[-2000:])
 
     @classmethod
-    def tearDownClass(cls):
-        cls.chrome.terminate(); cls.chrome.wait(10)
+    def cleanup(cls):
+        if cls.chrome is not None and cls.chrome.poll() is None:
+            cls.chrome.terminate()
+            try: cls.chrome.wait(10)
+            except subprocess.TimeoutExpired: cls.chrome.kill(); cls.chrome.wait()
         cls.site.shutdown(); cls.site.server_close()
         shutil.rmtree(cls.temp, ignore_errors=True)
 
