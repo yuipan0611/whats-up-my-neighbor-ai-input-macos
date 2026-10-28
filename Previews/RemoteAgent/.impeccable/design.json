@@ -1,0 +1,151 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-19T03:53:38.959796Z",
+  "title": "Design System: Remote agent preview",
+  "extensions": {
+    "colorMeta": {
+      "secondary-light": {
+        "role": "neutral",
+        "displayName": "Secondary light"
+      },
+      "secondary-dark": {
+        "role": "neutral",
+        "displayName": "Secondary dark"
+      },
+      "error-light": {
+        "role": "error",
+        "displayName": "Error light"
+      },
+      "error-dark": {
+        "role": "error",
+        "displayName": "Error dark"
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Native headline",
+        "purpose": "Section headings using SwiftUI .headline."
+      },
+      "body": {
+        "displayName": "Native body",
+        "purpose": "Task editor and ordinary content using SwiftUI .body."
+      },
+      "callout": {
+        "displayName": "Native callout",
+        "purpose": "Supporting labels and chronological activity using SwiftUI .callout."
+      }
+    },
+    "shadows": [],
+    "motion": [],
+    "breakpoints": [],
+    "native": {
+      "platform": "macOS / AppKit with SwiftUI",
+      "sourceFiles": [
+        "RemoteAgentView.swift",
+        "PreviewModel.swift",
+        "PreviewMain.swift",
+        "PreviewRenderer.swift"
+      ],
+      "appearance": {
+        "selector": "NSAppearance.bestMatch(from: [.aqua, .darkAqua])",
+        "secondary": {
+          "aqua": "{colors.secondary-light}",
+          "darkAqua": "{colors.secondary-dark}"
+        },
+        "error": {
+          "aqua": "{colors.error-light}",
+          "darkAqua": "{colors.error-dark}"
+        }
+      },
+      "semanticSurfaces": {
+        "rail": "NSColor.windowBackgroundColor",
+        "workspace": "NSColor.textBackgroundColor",
+        "indicator": "NSColor.controlBackgroundColor",
+        "editorStroke": "NSColor.separatorColor"
+      },
+      "controls": [
+        "SwiftUI .borderedProminent Button",
+        "SwiftUI Button",
+        "SwiftUI Picker",
+        "SwiftUI TextEditor",
+        "SwiftUI ProgressView"
+      ],
+      "window": {
+        "initialPoints": [
+          980,
+          740
+        ],
+        "minimumContentPoints": [
+          760,
+          620
+        ],
+        "fixedRailPoints": 220,
+        "compactRenderPoints": [
+          760,
+          680
+        ]
+      },
+      "states": [
+        "ready",
+        "running",
+        "cancelled",
+        "failed",
+        "completed",
+        "compact-dark"
+      ],
+      "keyboard": {
+        "submit": "Command-Return",
+        "cancel": "cancelAction",
+        "editing": "Standard AppKit edit-menu commands"
+      },
+      "reviewEvidence": {
+        "disposition": "ship",
+        "lightSecondaryContrast": 5.02,
+        "lightErrorContrast": 5.62,
+        "darkSecondaryContrast": 10.07,
+        "source": "Finish reviewer measurements supplied to documenter"
+      },
+      "limitations": [
+        "Native appearance and control geometry are authoritative; no browser HTML/CSS replicas are provided.",
+        "Appearance pairs are not tonal ramps; no invented ramp is recorded.",
+        "No custom motion or web breakpoint tokens exist.",
+        "Fixture renders do not verify live SSH, provider login, remote execution, VoiceOver acceptance or active-window focus appearance.",
+        "Only the selected provider is persisted in the preview-specific preferences store."
+      ]
+    }
+  },
+  "components": [],
+  "narrative": {
+    "northStar": "The native task panel",
+    "overview": "This is a narrow extension of the existing macOS product: the approved black cat, system typography, semantic surfaces and native controls supply its identity. The panel stays quiet enough to read a task and its chronological activity without decorative containers.\n\nIts visual hierarchy continually identifies this as a local demonstration. Provider names are labels awaiting remote verification; the interface does not establish live SSH, provider login or remote capability. This document describes only the standalone preview, not a shipped production feature.",
+    "keyCharacteristics": [
+      "Existing black cat and Traditional Chinese interface copy.",
+      "Stable environment rail beside a scrollable task workspace.",
+      "Native controls and appearance-aware neutral surfaces.",
+      "Explicit demonstration, progress, cancellation, failure and result states."
+    ],
+    "rules": [
+      {
+        "name": "The Semantic Surface Rule",
+        "body": "Preserve AppKit surface roles and the paired appearance overrides; do not freeze a sampled screenshot color into a new palette.",
+        "section": "colors"
+      },
+      {
+        "name": "The Native Type Rule",
+        "body": "Extend this desktop surface with semantic system text roles; preserve the title's modest hierarchy and readable explanatory copy.",
+        "section": "typography"
+      }
+    ],
+    "dos": [
+      "Do reuse the approved cat, native control styling and Traditional Chinese wording.",
+      "Do keep demonstration status and provider verification limits visible alongside the task workflow.",
+      "Do pair state color with text or a symbol, preserve keyboard commands and allow supporting text to wrap.",
+      "Do test both appearances and the minimum desktop width when changing this panel."
+    ],
+    "donts": [
+      "Don't present a provider selection, fixture result or completed demonstration as verified remote capability.",
+      "Don't replace semantic macOS surfaces with screenshot-derived fixed colors or add a new accent identity.",
+      "Don't turn this preview's task layout into a production-wide or mobile design requirement."
+    ]
+  }
+}
