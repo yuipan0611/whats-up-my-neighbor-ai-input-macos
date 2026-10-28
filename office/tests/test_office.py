@@ -42,6 +42,8 @@ def local_request(socket_path, path, body=None, headers=None, method=None):
 
 class FakeModel:
     model = 'test-model'
+    def health(self):
+        return {'ready':True,'name':self.model,'digest':'fake'}
     def __init__(self, action='write', result='測試成果', question='', source='', hook=None, truncated=False):
         self.action, self.result, self.question, self.source = action, result, question, source
         self.hook, self.truncated = hook, truncated

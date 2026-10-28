@@ -32,7 +32,9 @@ from urllib.parse import parse_qs, urlsplit
 import uuid
 from datetime import datetime, timezone
 
-VERSION = '0.5.1'
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+VERSION = '0.6.0-workbench.1'
 ACTIVE = ('planning', 'running', 'saving')
 ACTIONS = ['summarize', 'write', 'list_files', 'status', 'clarify', 'external']
 PLAN_SCHEMA = {
@@ -150,7 +152,7 @@ class Store:
             for name, definition in [('executor', "TEXT NOT NULL DEFAULT 'gemma'"), ('parent_id', "TEXT NOT NULL DEFAULT ''"),
                                      ('journal_ids', "TEXT NOT NULL DEFAULT '[]'"), ('context_snapshot', "TEXT NOT NULL DEFAULT ''"),
                                      ('attempts', 'INTEGER NOT NULL DEFAULT 0'), ('heartbeat', 'REAL NOT NULL DEFAULT 0'),
-                                     ('lease', "TEXT NOT NULL DEFAULT ''")]:
+                                     ('lease', "TEXT NOT NULL DEFAULT ''"), ('workflow', "TEXT NOT NULL DEFAULT ''")]:
                 if name not in columns:
                     c.execute(f'ALTER TABLE tasks ADD COLUMN {name} {definition}')
             c.executescript('''
@@ -336,13 +338,15 @@ class Store:
                 raise Cancelled()
             self._change(c, id_, status, message, **fields)
 
-    def submit(self, id_, prompt, source, model, executor='gemma', parent_id='', journal_ids=None):
+    def submit(self, id_, prompt, source, model, executor='gemma', parent_id='', journal_ids=None, workflow=''):
         if not isinstance(id_, str) or str(uuid.UUID(id_)) != id_:
             raise OfficeError('任務編號格式不正確。')
         if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= 5000:
             raise OfficeError('請輸入 1 至 5,000 字的交辦內容。')
         if executor not in ('gemma', 'codex', 'hands') or not isinstance(parent_id, str):
             raise OfficeError('執行者或接續任務不正確。')
+        if workflow not in ('', 'collaborate') or (workflow and executor != 'hands'):
+            raise OfficeError('協作方式不正確。')
         journal_ids = journal_ids if journal_ids is not None else []
         if not isinstance(journal_ids, list) or len(journal_ids) > 10 or not all(isinstance(i, str) for i in journal_ids) or len(set(journal_ids)) != len(journal_ids):
             raise OfficeError('每次最多選取十筆不同的生活紀錄。')
@@ -351,7 +355,7 @@ class Store:
             row = c.execute('SELECT * FROM tasks WHERE id=?', (id_,)).fetchone()
             if row:
                 if any((row['prompt'] != prompt.strip(), row['source'] != source, row['executor'] != executor,
-                        row['parent_id'] != parent_id, row['journal_ids'] != encoded_ids)):
+                        row['parent_id'] != parent_id, row['journal_ids'] != encoded_ids, row['workflow'] != workflow)):
                     raise OfficeError('這個任務編號已用於其他內容。', 409)
                 return dict(row)
             if c.execute("SELECT count(*) FROM tasks WHERE status='queued'").fetchone()[0] >= 20:
@@ -377,6 +381,7 @@ class Store:
             c.execute('INSERT INTO tasks(id,prompt,source,status,stage,title,created,updated,model,source_snapshot,executor,parent_id,journal_ids,context_snapshot) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                       (id_, prompt.strip(), source, 'queued', '已收到，等待處理。', '新交辦', t, t, model, snapshot, executor, parent_id, encoded_ids, context_text))
             c.execute('INSERT INTO events(task_id,at,status,message) VALUES(?,?,?,?)', (id_, t, 'queued', '交辦已保存到 VPS。'))
+            c.execute('UPDATE tasks SET workflow=? WHERE id=?', (workflow,id_))
         return self.get(id_)
 
     def get(self, id_):
@@ -387,9 +392,15 @@ class Store:
             task = dict(row)
             del task['lease']  # only the worker that claimed this attempt holds it
             task['events'] = [dict(e) for e in c.execute('SELECT * FROM events WHERE task_id=? ORDER BY seq', (id_,))]
+            if task.get('workflow') == 'collaborate' and c.execute("SELECT 1 FROM sqlite_master WHERE name='workbench_tasks'").fetchone():
+                row=c.execute('SELECT phase,state,outputs FROM workbench_tasks WHERE task_id=? AND attempt=?',(id_,task['attempts'])).fetchone()
+                run=c.execute('SELECT run_id FROM runner_runs WHERE task_id=? AND attempt=?',(id_,task['attempts'])).fetchone()
+                task['collaboration']={'phase':row['phase'] if row else '', 'state':row['state'] if row else 'waiting',
+                                       'steps':json.loads(row['outputs']) if row else {},
+                                       'has_patch':bool(run and (self.root/'tasks'/id_/'runs'/run['run_id']/'staging'/'result.patch').is_file())}
             return task
 
-    TASK_LIST = 'SELECT id,prompt,source,status,stage,title,created,updated,model,executor,parent_id FROM tasks ORDER BY created DESC,rowid DESC LIMIT 100'
+    TASK_LIST = 'SELECT id,prompt,source,status,stage,title,created,updated,model,executor,parent_id,workflow FROM tasks ORDER BY created DESC,rowid DESC LIMIT 100'
 
     def list(self):
         with self.connect() as c:
@@ -425,7 +436,7 @@ class Store:
 
     HANDS_LEASE = 120
     HANDS_ATTEMPTS = 3
-    HANDS_FIELDS = ('id', 'prompt', 'source', 'source_snapshot', 'context_snapshot', 'parent_id', 'attempts', 'lease', 'created')
+    HANDS_FIELDS = ('id', 'prompt', 'source', 'source_snapshot', 'context_snapshot', 'parent_id', 'attempts', 'lease', 'created', 'workflow')
     HANDS_TEXT_LIMIT = 150000
 
     def hands_locked(self):
@@ -529,10 +540,12 @@ class Store:
         """A silent worker gives its task back to the queue; after HANDS_ATTEMPTS tries the user is told."""
         t = time.time() if t is None else t
         with self.connect() as c:
-            rows = c.execute("SELECT id,attempts FROM tasks WHERE executor='hands' AND status IN ('planning','running','saving') AND heartbeat<?",
+            rows = c.execute("SELECT id,attempts,workflow FROM tasks WHERE executor='hands' AND status IN ('planning','running','saving') AND heartbeat<?",
                              (t - self.HANDS_LEASE,)).fetchall()
             for row in rows:
-                if row['attempts'] < self.HANDS_ATTEMPTS:
+                if row['workflow'] == 'collaborate':
+                    self._change(c,row['id'],'interrupted','協作執行者連線中斷，結果需要核對；不會自動重跑。')
+                elif row['attempts'] < self.HANDS_ATTEMPTS:
                     self._change(c, row['id'], 'queued', '連線中斷了，貓咪等一下會自己重試。')
                 else:
                     self._change(c, row['id'], 'interrupted', f'連續 {self.HANDS_ATTEMPTS} 次連不上，先停下來了；做到一半的步驟都還在，可以再交辦一次。')
@@ -988,15 +1001,30 @@ class CodexAgent:
 
 
 class Office:
-    def __init__(self, store, model, agent=None):
+    def __init__(self, store, model, agent=None, workbench=None, sandbox=None):
         self.store, self.model, self.agent = store, model, agent
         self.stopping = threading.Event()
         self.store.recover()
+        self.workbench = workbench
+        self.runs = workbench.runs if workbench else None
+        if sandbox:
+            import runner
+            self.runs = runner.RunService(store,sandbox)
+            self.runs.recover()
         self.thread = None
 
     def start(self):
         self.thread = threading.Thread(target=self.worker, name='office-worker', daemon=True)
         self.thread.start()
+        if self.workbench:
+            threading.Thread(target=self.sweep_workbench,name='workbench-cleanup',daemon=True).start()
+
+    def sweep_workbench(self):
+        while not self.stopping.wait(1):
+            try:
+                self.workbench.sweep()
+            except Exception:
+                pass  # persisted cleanup state is retried; no task is executed here
 
     def command(self, body):
         prompt = body.get('prompt')
@@ -1018,8 +1046,13 @@ class Office:
         id_ = body.get('id')
         try:
             executor = body.get('executor', 'codex' if self.agent else 'gemma')
+            workflow = ''
+            if executor == 'collaborate':
+                if not self.workbench:
+                    raise OfficeError('三家協作尚未設定，這件沒有送出。',409)
+                executor,workflow = 'hands','collaborate'
             model = 'hands' if executor == 'hands' else (self.agent.model if executor == 'codex' and self.agent else self.model.model)
-            task = self.store.submit(id_, prompt, source, model, executor, body.get('parent_id', ''), body.get('journal_ids', []))
+            task = self.store.submit(id_, prompt, source, model, executor, body.get('parent_id', ''), body.get('journal_ids', []), workflow)
         except (ValueError, TypeError, AttributeError):
             raise OfficeError('任務編號格式不正確。')
         return {'task': task, 'message': '交辦已保存，貓咪會依序處理。'}
@@ -1497,6 +1530,8 @@ class Handler(BaseHTTPRequestHandler):
                 provider['last_success'] = success[0] if success else None
                 self.send(200, {'service': 'neighbor-office', 'version': VERSION, 'model': office.model.health(),
                                'provider': provider, 'paused': office.store.paused(),
+                               'workbench': {'enabled':bool(office.workbench)},
+                               'sandbox': {**office.runs.summary(),'reachable':office.workbench.reachable if office.workbench else None} if office.runs else {'enabled':False},
                                'external_connected': provider['authenticated'] and bool(success),
                                'worker_running': bool(office.thread and office.thread.is_alive())})
             elif path == '/api/tasks':
@@ -1513,6 +1548,14 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/journal/download':
                 text = '# 生活紀錄\n\n' + '\n\n---\n\n'.join(f"{e['day']} · {e['id']}\n\n{e['text']}" for e in reversed(office.store.journal()))
                 self.send(200, text, 'text/markdown; charset=utf-8', True)
+            elif re.fullmatch(r'/api/tasks/[0-9a-f-]{36}/(patch|test-log)', path) and office.workbench:
+                task = office.store.get(path.split('/')[3])
+                run = office.workbench.get_run(task)
+                filename = 'result.patch' if path.endswith('/patch') else 'log.txt'
+                patch = office.workbench.runs.runs_dir(run)/'staging'/filename
+                if not patch.is_file():
+                    raise OfficeError('這件工作還沒有可下載的 patch。',404)
+                self.send(200,patch.read_bytes(),'text/plain; charset=utf-8',headers={'Content-Disposition':'attachment; filename="'+filename+'"'})
             elif re.fullmatch(r'/api/tasks/[0-9a-f-]{36}(/download)?', path):
                 task = office.store.get(path.split('/')[3])
                 if path.endswith('/download'):
@@ -1586,6 +1629,14 @@ class Handler(BaseHTTPRequestHandler):
     def worker_call(self, path, body):
         """The only routes on the worker socket (agent-hands PRD 9)."""
         store = self.server.office.store
+        if path.startswith('/api/worker/workbench/') and self.server.office.workbench:
+            import runner
+            try:
+                return self.server.office.workbench.call(path.rsplit('/',1)[-1],body)
+            except runner.RunRefused as e:
+                raise OfficeError(str(e),409,{'reason_code':e.reason})
+            except runner.RunnerError:
+                raise OfficeError('Docker 沒有回報完整結果；任務已保留，請核對狀態。',503)
         if path == '/api/worker/claim':
             return {'task': store.claim_hands(), 'paused': store.paused(), 'locked': store.hands_locked()}
         task_id, lease = body.get('task_id'), body.get('lease')
@@ -1808,6 +1859,7 @@ def main():
     parser.add_argument('--local-socket', type=Path, help='private local entry for the Mac SSH tunnel (default: <data>/../run/office.sock)')
     parser.add_argument('--dev-tcp-local', action='store_true', help='development only: also serve local mode on the TCP port, which any local process can reach')
     parser.add_argument('--worker-socket', type=Path, help='hands worker entry (mode 660 for its group; off unless given)')
+    parser.add_argument('--workbench-config',type=Path,help='owner-installed project and Docker configuration')
     args = parser.parse_args()
     os.umask(0o077)
     store = Store(args.data)
@@ -1816,7 +1868,11 @@ def main():
         fcntl.flock(process_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         raise SystemExit('Office is already running for this data directory')
-    office = Office(store, Ollama(args.model, managed=True), CodexAgent(args.data.parent / 'runtime'))
+    workbench = None
+    if args.workbench_config:
+        from workbench_control import Workbench
+        workbench = Workbench(store,json.loads(args.workbench_config.read_text()))
+    office = Office(store, Ollama(args.model, managed=True), CodexAgent(args.data.parent / 'runtime'),workbench)
     local_socket = args.local_socket or args.data.parent / 'run' / 'office.sock'
     try:
         server = Server(args.port, office, args.public_origin, local_socket, args.dev_tcp_local, args.worker_socket)

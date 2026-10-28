@@ -48,7 +48,7 @@
   function setExecutor(executor) {
     byId('executor').value = executor;
     privacy();
-    byId('mobile-model-label').textContent = executor === 'gemma' ? 'Gemma · 本機' : 'Codex · 預設';
+    byId('mobile-model-label').textContent = executor === 'collaborate' ? '三家協作' : executor === 'gemma' ? 'Gemma · 本機' : 'Codex · 預設';
     renderModelOptions();
     if (newChat) renderEmpty();
   }
@@ -73,6 +73,7 @@
     box.replaceChildren();
     const mediaAttached = attachment && mediaExtensions.has(attachment.name.split('.').pop().toLowerCase());
     const groups = [
+      ['協作', [['三家協作','Claude 方案 → Codex 實作與 Docker 測試 → Gemini 檢查','collaborate',!mediaAttached]]],
       ['OpenAI', [
         ['Codex · 帳號預設', codexState, 'codex', true],
         ['Luna', '', '', false], ['Sol', '', '', false], ['Astra', '', '', false]
@@ -201,11 +202,12 @@
       file.append(icon('paperclip'), el('span', task.source));
       group.append(file);
     }
-    const handoff = el('div', `貓咪辦公室已交給 ${task.executor === 'gemma' ? 'Gemma' : 'Codex'}`, 'mobile-handoff');
+    const label = task.workflow === 'collaborate' ? 'Claude、Codex、Gemini' : task.executor === 'gemma' ? 'Gemma' : 'Codex';
+    const handoff = el('div', `貓咪辦公室已交給 ${label}`, 'mobile-handoff');
     group.append(handoff);
     const answer = el('div', undefined, 'mobile-answer');
     const byline = el('div', undefined, 'mobile-agent-byline');
-    byline.append(avatar(task.executor), el('strong', task.executor === 'gemma' ? 'Gemma' : 'Codex'));
+    byline.append(avatar(task.executor), el('strong', label));
     answer.append(byline);
     let download = null;
     if (task.result) {
@@ -231,6 +233,14 @@
     if (!notes.length) history.append(el('li', '還沒有工作步驟。'));
     process.append(history);
     if (download) process.append(download);
+    if (task.collaboration?.has_patch) {
+      for (const [suffix, title] of [['patch', '下載修改檔'], ['test-log', '下載測試紀錄']]) {
+        const link = el('a', title, 'mobile-download');
+        link.href = '/api/tasks/' + task.id + '/' + suffix;
+        link.download = suffix === 'patch' ? 'result.patch' : 'log.txt';
+        process.append(link);
+      }
+    }
     answer.append(process);
     group.append(answer);
     return group;
