@@ -163,6 +163,12 @@ class GuardTests(RunnerBase):
             self.start(limits={'seconds': 100000})
         self.assertEqual((e.exception.reason, self.fake.calls), ('over_budget', []))
 
+    def test_low_disk_does_not_start(self):
+        with self.assertRaises(rn.RunRefused) as e:
+            self.start(limits={'min_free_bytes': 10 ** 18})
+        self.assertEqual(e.exception.reason, 'low_disk')
+        self.assertEqual(self.fake.calls, [])
+
     def test_source_revision_is_required(self):
         with self.assertRaises(rn.RunRefused):
             self.service.start(self.task['id'], self.lease, self.work, ['README.md'], 'main')
@@ -207,7 +213,9 @@ class PatchTests(RunnerBase):
             b'diff --git a/.ssh/config b/.ssh/config\n--- a/.ssh/config\n+++ b/.ssh/config\n': 'patch_excluded_path',
             b'diff --git a/../x b/../x\n--- a/../x\n+++ b/../x\n': 'patch_unsafe_path',
             b'diff --git a/l b/l\nnew file mode 120000\n--- /dev/null\n+++ b/l\n': 'patch_symlink',
-            b'diff --git a/x.bin b/x.bin\nGIT binary patch\n': 'patch_binary',
+            b'diff --git a/x.bin b/x.bin\nBinary files a/x.bin and b/x.bin differ\n': 'patch_binary_without_content',
+            b'diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml\n--- a/.github/workflows/ci.yml\n'
+            b'+++ b/.github/workflows/ci.yml\n': 'patch_workflow',
             b'diff --git a/a b/a\nrename from a\nrename to .env\n': 'patch_excluded_path',
             b'   \n': 'empty_patch',
         }
@@ -215,6 +223,19 @@ class PatchTests(RunnerBase):
             with self.subTest(detail=detail):
                 self.tearDown(); self.setUp()  # a fresh task per case; the last one is torn down by unittest
                 self.assertEqual(self.run_with(patch)['detail'], detail)
+
+    def test_binary_change_is_published_to_the_task_branch(self):
+        repo, target = self.repo()
+        (repo / 'logo.bin').write_bytes(bytes(range(256)))
+        git(repo, 'add', 'logo.bin')
+        patch = subprocess.run(['git', '-C', str(repo), 'diff', '--cached', '--binary'], capture_output=True, check=True).stdout
+        git(repo, 'rm', '-q', '--cached', 'logo.bin')
+        (repo / 'logo.bin').unlink()
+        run = self.run_with(patch)
+        self.assertEqual(run['state'], 'verified')
+        self.assertEqual(self.service.publish(run['run_id'], self.lease, target)['state'], 'published')
+        self.assertEqual((repo / 'logo.bin').read_bytes(), bytes(range(256)))
+        self.assertEqual(git(repo, 'rev-parse', '--abbrev-ref', 'HEAD').strip(), 'neko/t1')
 
     def test_too_large_output_is_rejected(self):
         self.fake.result['patch'] = PATCH * 100

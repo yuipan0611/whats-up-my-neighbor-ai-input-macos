@@ -19,6 +19,7 @@ import hashlib
 import hmac
 import json
 import re
+import shutil
 import subprocess
 import time
 import uuid
@@ -29,7 +30,8 @@ ACTIVE = ('planning', 'running', 'saving')
 TERMINAL = ('published', 'failed', 'rejected', 'cancelled', 'lost', 'interrupted', 'superseded')
 NAMESPACE = uuid.UUID('5f0c8a52-3e7d-4c55-9b0e-6a1e2d7c9f41')  # run ids: one run per task attempt
 DEFAULT_LIMITS = {'seconds': 600, 'output_bytes': 1_000_000, 'artifact_bytes': 4_000_000,
-                  'input_files': 500, 'input_bytes': 20_000_000, 'budget_usd': 0.10, 'usd_per_second': 0.000046}
+                  'input_files': 500, 'input_bytes': 20_000_000, 'budget_usd': 0.10, 'usd_per_second': 0.000046,
+                  'min_free_bytes': 2_000_000_000}  # a full disk breaks the office database's writes
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS runner_runs (run_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, attempt INTEGER NOT NULL,
     provider TEXT NOT NULL, sandbox_id TEXT, state TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '',
@@ -131,15 +133,16 @@ DIFF_PATH = re.compile(r'^(?:diff --git a/(\S+) b/(\S+)|--- (?:a/)?(\S+)|\+\+\+ 
 
 def patch_problems(patch):
     """Reasons a unified diff may not be published: paths outside the tree or into excluded places,
-    symlinks, binary content. An empty list means the patch can be published."""
+    symlinks, CI workflows. An empty list means the patch can be published. Binary changes are allowed
+    (YUI 2026-10-28): they land on a task branch like any other change and are reverted the same way."""
     try:
         text = patch.decode('utf-8')
     except UnicodeDecodeError:
         return ['not_utf8']
     problems = set()
     for line in text.splitlines():
-        if line.startswith('GIT binary patch') or line.startswith('Binary files '):
-            problems.add('binary')
+        if line.startswith('Binary files '):
+            problems.add('binary_without_content')  # a diff made without --binary cannot be applied
         if re.match(r'^(new file mode|old mode|new mode|deleted file mode) 120000', line):
             problems.add('symlink')
         match = DIFF_PATH.match(line)
@@ -151,6 +154,8 @@ def patch_problems(patch):
                     problems.add('unsafe_path')
                 elif excluded(path):
                     problems.add('excluded_path')
+                elif path.startswith('.github/workflows/'):
+                    problems.add('workflow')  # CI can spend paid minutes and read repository secrets
     return sorted(problems)
 
 
@@ -355,6 +360,8 @@ class RunService:
             raise RunRefused('over_budget', '這次執行可能超出預算上限，沒有開始。')
         if not re.fullmatch(r'[0-9a-f]{7,64}', source_rev or ''):
             raise RunRefused('source_rev', '需要固定的來源版本（commit）。')
+        if shutil.disk_usage(self.store.root).free < limits['min_free_bytes']:
+            raise RunRefused('low_disk', '辦公室的磁碟空間不夠，沒有開新沙盒。')
         with self.store.connect() as c:
             task = c.execute('SELECT attempts FROM tasks WHERE id=?', (task_id,)).fetchone()
         if task is None:
