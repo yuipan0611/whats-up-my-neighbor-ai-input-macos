@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # python3 -I leaves the script's own folder off the path
 import browser_audit  # noqa: E402
 import browser_control  # noqa: E402
+import github_app  # noqa: E402
 import runner  # noqa: E402
 
 VERSION = '0.5.1'
@@ -1296,7 +1297,7 @@ class GeminiAgent(CliAgent):
 
 
 class Office:
-    def __init__(self, store, model, agent=None, broker=None, providers=None, sandbox=None):
+    def __init__(self, store, model, agent=None, broker=None, providers=None, sandbox=None, checkouts=None):
         self.store, self.model, self.agent = store, model, agent
         self.agents = {'codex': agent, **(providers or {})}  # executor -> agent CLI; agent stays Codex
         self.broker = broker  # a browser_actions.Broker only where broker mode is switched on; legacy otherwise
@@ -1306,17 +1307,99 @@ class Office:
             self.control.recover()
         self.stopping = threading.Event()
         self.store.recover()
-        # Sandbox runs only where a runner.Runner provider is given; none is wired in main() yet.
+        # Sandbox runs only where a runner.Runner provider is given (--sandbox docker); off otherwise.
         self.runs = runner.RunService(store, sandbox) if sandbox else None
+        self.checkouts = (checkouts or runner.Checkouts(store.root.parent / 'checkouts')) if sandbox else None
+        self.repos = github_app.GitHubPush(store, None) if sandbox else None  # only bind() is used until H4 is wired
+        self.run_threads = {}
         if self.runs:
             # After store.recover(): hands tasks keep their lease across a restart, so a live task's run stays live.
-            # No publish target is wired yet, so a run caught mid-publish stays publish_unknown for a person.
-            self.runs.recover()
+            self.runs.recover(target_for=lambda run: self.checkouts.target(run['task_id']))
         self.thread = None
 
     def start(self):
         self.thread = threading.Thread(target=self.worker, name='office-worker', daemon=True)
         self.thread.start()
+
+    # -- sandbox runs (tasks/H3-runner-docker-v1.md) ------------------------------------------
+
+    def bind_repo(self, task_id, body):
+        """Owner side: the one repository a hands task works on. The worker can never name it."""
+        if not isinstance(body, dict) or set(body) - {'repo', 'base'} or not isinstance(body.get('repo'), str):
+            raise OfficeError('需要 repo（owner/name），可加 base。')
+        try:
+            self.repos.bind(task_id, body['repo'], body.get('base', 'main'))
+        except github_app.PushRefused as e:
+            raise OfficeError(str(e), e.status, {'reason_code': e.reason})
+        return {'task_id': task_id, 'repo': body['repo'], 'base': body.get('base', 'main')}
+
+    RUN_KEYS = {'task_id', 'lease', 'paths', 'command'}
+
+    def run_start(self, body):
+        """Worker: {task_id, lease, paths, command}. Repository, commit and branch are the office's to decide.
+        The sandbox is made and loaded here; running, checking and publishing go on in the background."""
+        if not isinstance(body, dict) or set(body) != self.RUN_KEYS:
+            raise OfficeError('只接受 task_id、lease、paths 與 command。', 400, {'reason_code': 'bad_request'})
+        command = body['command']
+        if (not isinstance(command, list) or not 0 < len(command) <= 50
+                or not all(isinstance(a, str) and 0 < len(a) <= 1000 and '\x00' not in a for a in command)):
+            raise OfficeError('command 需為 1–50 個字串。', 400, {'reason_code': 'bad_command'})
+        task_id, lease = body['task_id'], body['lease']
+        with self.store.connect() as c:
+            task = c.execute('SELECT attempts FROM tasks WHERE id=?', (task_id,)).fetchone() if isinstance(task_id, str) else None
+            bound = c.execute('SELECT repo,base FROM github_tasks WHERE task_id=?', (task_id,)).fetchone()
+        try:
+            if task is None:
+                raise runner.RunRefused('unknown_task', '找不到這件工作。')
+            # Checked before anything is cloned: an old attempt or a stopped task gets nothing.
+            self.runs.guard({'task_id': task_id, 'attempt': task['attempts']}, lease)
+            if bound is None:
+                raise runner.RunRefused('no_repo', '這件工作沒有設定 repo。')
+            worktree, _, source_rev = self.checkouts.prepare(task_id, bound['repo'], bound['base'])
+            run = self.runs.start(task_id, lease, worktree, body['paths'], source_rev)
+        except runner.RunRefused as e:
+            raise OfficeError(str(e), 409, {'reason_code': e.reason})
+        if run['state'] == 'ready' and run['run_id'] not in self.run_threads:
+            thread = threading.Thread(target=self.drive_run, args=(task_id, run['run_id'], lease, command),
+                                      name='sandbox-run', daemon=True)
+            self.run_threads[run['run_id']] = thread
+            thread.start()
+        return self.run_view(run)
+
+    def drive_run(self, task_id, run_id, lease, command):
+        try:
+            run = self.runs.execute(run_id, lease, command)
+            if run['state'] == 'collected' and run['exit_code'] == 0:
+                run = self.runs.verify(run_id)
+            if run['state'] == 'verified':
+                self.runs.publish(run_id, lease, self.checkouts.target(task_id))
+        except runner.RunRefused:
+            pass  # the task stopped or moved on; the run row already says so
+        except Exception:
+            pass  # the row keeps the last known state; recover() and a person take it from there
+
+    def run_status(self, body):
+        """Worker: {task_id, lease}: the run of this attempt, with the start of its log."""
+        if not isinstance(body, dict) or set(body) != {'task_id', 'lease'} or not all(isinstance(v, str) for v in body.values()):
+            raise OfficeError('只接受 task_id 與 lease。', 400, {'reason_code': 'bad_request'})
+        with self.store.connect() as c:
+            task = c.execute('SELECT attempts,lease FROM tasks WHERE id=?', (body['task_id'],)).fetchone()
+            run = c.execute('SELECT * FROM runner_runs WHERE task_id=? AND attempt=?',
+                            (body['task_id'], task['attempts'] if task else -1)).fetchone()
+        if task is None or not hmac.compare_digest(task['lease'].encode(), body['lease'].encode()):
+            raise OfficeError('這件工作已經交給新的一輪。', 409, {'reason_code': 'superseded'})
+        if run is None:
+            return {'run': None}
+        view = self.run_view(dict(run))
+        log = self.runs.runs_dir(dict(run)) / 'staging' / 'log.txt'
+        view['log'] = log.read_bytes()[:8000].decode('utf-8', 'replace') if log.is_file() else ''
+        return view
+
+    @staticmethod
+    def run_view(run):
+        """What the worker sees: no sandbox id, manifest paths on the host or limits."""
+        return {'run_id': run['run_id'], 'state': run['state'], 'detail': run['detail'], 'exit_code': run['exit_code'],
+                'seconds': run['seconds'], 'published': run['state'] == 'published'}
 
     def command(self, body):
         prompt = body.get('prompt')
@@ -1356,6 +1439,11 @@ class Office:
             if time.monotonic() - last_expire >= 5:
                 last_expire = time.monotonic()
                 self.store.expire_hands()
+                if self.runs:
+                    try:
+                        self.runs.sweep()  # cancelled or taken-back tasks lose their sandbox within seconds
+                    except Exception:
+                        pass  # retried on the next tick; recover() covers a restart
             task = self.store.claim()
             if task:
                 try:
@@ -1920,6 +2008,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(201, office.store.add_handoff(path.split('/')[3], body))
             elif re.fullmatch(r'/api/tasks/[0-9a-f-]{36}/cancel', path):
                 self.send(200, office.store.cancel(path.split('/')[3]))
+            elif re.fullmatch(r'/api/tasks/[0-9a-f-]{36}/repo', path) and office.runs:  # owner side; the worker socket has no such route
+                self.send(200, office.bind_repo(path.split('/')[3], body))
             elif path == '/api/viewer/control' and office.control:
                 self.send(*office.control.operate(self.viewer_id(), body))
             elif path == '/api/viewer/reconcile' and office.control:  # owner side only; the worker socket has no such route
@@ -1969,6 +2059,11 @@ class Handler(BaseHTTPRequestHandler):
             return store.hands_notes(task_id, lease, body.get('events'))
         if path == '/api/worker/complete':
             return store.hands_complete(task_id, lease, body.get('outcome'), body.get('text', ''), body.get('reason', ''))
+        if path in ('/api/worker/run/start', '/api/worker/run/status'):
+            if not self.server.office.runs:
+                raise OfficeError('沙盒沒有開。', 404)
+            office = self.server.office
+            return office.run_start(body) if path.endswith('start') else office.run_status(body)
         raise OfficeError('找不到這個操作。', 404)
 
     def pair(self, body):
@@ -2184,7 +2279,12 @@ def main():
     parser.add_argument('--dev-tcp-local', action='store_true', help='development only: also serve local mode on the TCP port, which any local process can reach')
     parser.add_argument('--worker-socket', type=Path, help='hands worker entry (mode 660 for its group; off unless given)')
     parser.add_argument('--browser-cdp', help='broker mode for new hands tasks: the cat Chrome DevTools endpoint on loopback, e.g. http://127.0.0.1:9222 (legacy unless given)')
+    parser.add_argument('--sandbox', choices=('docker',), help='sandbox runs for hands tasks (tasks/H3-runner-docker-v1.md); off unless given')
+    parser.add_argument('--sandbox-image', help='with --sandbox docker: the image (needs git, timeout, user 10001, /work)')
+    parser.add_argument('--sandbox-network', default='neko-runner', help='with --sandbox docker: a dedicated network whose way back to the host is firewalled')
     args = parser.parse_args()
+    if args.sandbox and not args.sandbox_image:
+        raise SystemExit('--sandbox docker needs --sandbox-image')
     if args.browser_cdp and urlsplit(args.browser_cdp).hostname not in ('127.0.0.1', 'localhost', '::1'):
         raise SystemExit('--browser-cdp must be a loopback address')
     os.umask(0o077)
@@ -2198,9 +2298,16 @@ def main():
     if args.browser_cdp:
         import browser_actions, browser_cdp
         broker = browser_actions.Broker(store, browser_cdp.ChromeBrowser(args.browser_cdp, str(args.data.parent / 'browser-shots')))
+    sandbox = None
+    if args.sandbox == 'docker':
+        import runner_docker
+        try:
+            sandbox = runner_docker.DockerRunner(args.sandbox_image, network=args.sandbox_network)
+        except ValueError as e:
+            raise SystemExit(str(e))
     runtime = args.data.parent / 'runtime'
     office = Office(store, Ollama(args.model, managed=True), CodexAgent(runtime), broker,
-                    {'claude': ClaudeAgent(runtime), 'gemini': GeminiAgent(runtime)})
+                    {'claude': ClaudeAgent(runtime), 'gemini': GeminiAgent(runtime)}, sandbox)
     local_socket = args.local_socket or args.data.parent / 'run' / 'office.sock'
     try:
         server = Server(args.port, office, args.public_origin, local_socket, args.dev_tcp_local, args.worker_socket)
@@ -2216,7 +2323,8 @@ def main():
     signal.signal(signal.SIGINT, stop)
     print(f'Neighbor Office {VERSION} listening on loopback:{server.server_port}' + (f' for {server.public_origin}' if server.public_origin else '')
           + f'; local entry {local_socket}' + (f'; worker entry {args.worker_socket}' if args.worker_socket else '')
-          + ('; dev TCP local mode ON' if args.dev_tcp_local else '') + ('; browser broker ON' if broker else ''), flush=True)
+          + ('; dev TCP local mode ON' if args.dev_tcp_local else '') + ('; browser broker ON' if broker else '')
+          + (f'; sandbox docker ON ({args.sandbox_image})' if sandbox else ''), flush=True)
     try:
         server.serve_forever(poll_interval=0.25)
     finally:

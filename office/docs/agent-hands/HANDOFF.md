@@ -69,6 +69,20 @@ status: D1–D17 已拍板；H3 有第一件真任務證據、仍待完整驗收
 
 ## 進度紀錄
 
+- 2026-10-28｜Claude Code｜Docker runner v1：provider＋辦公室接線（單元測試層）｜完成（Mac 本機自動測試；沒有啟動 Docker、未部署、未 push）
+  - 依 [tasks/H3-runner-docker-v1.md](tasks/H3-runner-docker-v1.md)。兩個 commit：`3e90c1b`（DockerRunner＋patch 放寬）與本則所在的接線 commit。
+  - **`office/runner_docker.py`：** 只呼叫 `docker` 指令。容器用 `docker cp` 拿複本、使用者 10001、`--cap-drop ALL`、`no-new-privileges`、專用網路（拒絕 host／none／bridge）、環境變數只有 HOME／PATH／LANG／CI；不掛主機資料夾、不掛 Docker socket、不用 `--privileged`、不開對外埠。容器名稱由 run_id 決定，create 回應遺失重送不會多一個；啟動失敗就刪掉，刪不掉留給 `recover()` 依標籤找回。指令以參數傳入、不拼進 shell 字串，外面包 `timeout`。任何 docker 失敗都對應到 RunnerUnknown／Gone／Failed，不退回主機。
+  - **`runner.py` 放寬與補強：** 允許二進位 patch；拒絕沒有內容的二進位 diff 與 `.github/workflows/`；資料磁碟剩不到 2GB 不開沙盒；`sweep()`：任務取消、換新一輪或收回（hands_locked）時關掉 run 並刪容器；執行途中被關掉的 run 不會被結果蓋回去；`Checkouts`：辦公室自己的 bare clone＋每件工作一個 `neko/<短碼>` 工作樹，git 不用任何憑證（`credential.helper=` 清空、不提示、不讀使用者設定）。
+  - **`office.py` 接線：** `--sandbox docker --sandbox-image <img> [--sandbox-network neko-runner]`，不加就和以前一樣。owner 路由 `POST /api/tasks/<id>/repo` 綁 repo（沿用 H4 的 `github_tasks`）；worker 路由 `POST /api/worker/run/start`（`{task_id, lease, paths, command}`，帶 repo／branch／base／commit 一律 400；先驗 lease 才 clone）與 `/api/worker/run/status`（不回傳沙盒 id 與主機路徑，附 log 前 8000 bytes）。建沙盒在請求內同步完成；執行、檢查、發布在背景執行緒。辦公室背景迴圈每 5 秒 `sweep()` 一次；重啟時用辦公室的工作樹當發布目標核對。
+  - **測試：** Docker 14 項（假的 docker 指令，記錄參數）、runner 新增 2 項、辦公室層 13 項；突變 12 組（掛主機資料夾、多帶環境變數、允許 workflows、指令拼進 shell、啟動失敗不刪、拿掉磁碟下限、允許 host 網路、worker 可帶 repo、先 clone 才驗 lease、取消被蓋回、收回不清沙盒、回傳沙盒 id）全部抓到。Mac 本機完整回歸 **313 項全部通過、0 略過**（含真 Chrome 7 項）。
+  - **NOT RUN／還沒做（重要）：**
+    - **紅線二的「容器連不回主機、內網、metadata」目前只靠「必須用專用網路」，防火牆規則還沒寫也沒裝。** 在裝好防火牆前不要用 `--sandbox docker` 跑真任務。
+    - 沙盒映像（Dockerfile：git、timeout、使用者 10001、/work）還沒寫。
+    - 真 Docker 測試（Mac Docker Desktop 或 VPS rootless Docker）：NOT RUN，要 YUI 同意。
+    - 貓咪端呼叫 `run/start` 的工具（worker／Codex 這邊）還沒寫，所以目前沒有東西會發起沙盒執行。
+    - 辦公室背景迴圈呼叫 `sweep()` 這件事本身沒有直接測（`sweep()` 有測）；「clone 不用憑證」只測到「連不上就失敗、不提示」，沒有實證不會讀到 keychain。
+    - `deploy.sh` 仍只複製 `office.py`，現在還缺 `runner.py`、`runner_docker.py`、`github_app.py`。
+  - **回退：** 不加 `--sandbox` 就完全不啟用；或 revert 這兩個 commit。容器都有 `neko_run` 標籤；辦公室的 clone 在 `<data>/../checkouts`，可整個刪除。
 - 2026-10-28｜Claude Code｜貓咪 Chrome 的登入規則（YUI 決定）｜只記錄決定，沒有改程式或 VPS
   - **不複製 YUI 瀏覽器的 cookie。** 要讓貓咪用某個網站，由 YUI 自己經「接手」或 VPS 桌面在貓咪的 Chrome 登入，每個網站是獨立、可單獨踢掉的登入。
   - ✅ 只讀、沒有付款能力（新聞、文件、論壇、公開資料）：可以直接登入。

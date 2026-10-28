@@ -18,6 +18,7 @@ import fnmatch
 import hashlib
 import hmac
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -26,7 +27,9 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
-ACTIVE = ('planning', 'running', 'saving')
+import github_app
+
+ACTIVE =('planning', 'running', 'saving')
 TERMINAL = ('published', 'failed', 'rejected', 'cancelled', 'lost', 'interrupted', 'superseded')
 NAMESPACE = uuid.UUID('5f0c8a52-3e7d-4c55-9b0e-6a1e2d7c9f41')  # run ids: one run per task attempt
 DEFAULT_LIMITS = {'seconds': 600, 'output_bytes': 1_000_000, 'artifact_bytes': 4_000_000,
@@ -297,6 +300,57 @@ class GitTarget:
             raise RunnerUnknown('commit did not report success')
 
 
+class Checkouts:
+    """The office's own copy of a task's repository (tasks/H3-runner-docker-v1.md 5.3): one bare clone per
+    repository and one worktree per task on neko/<task short id>, the branch H4 pushes. Inputs are read here
+    at a fixed commit and patches land here, so the office never reads the hands workspace.
+
+    No credential is used: git runs with no credential helper and no prompt, so v1 reaches public or local
+    repositories only; private ones wait for the GitHub App (H4)."""
+
+    def __init__(self, root, remote='https://github.com/{repo}.git'):
+        self.root, self.remote = Path(root), remote
+
+    @staticmethod
+    def git(*args, timeout=300):
+        out = subprocess.run(['git', '-c', 'credential.helper=', *args], capture_output=True, timeout=timeout,
+                             env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'GIT_TERMINAL_PROMPT': '0',
+                                  'HOME': '/nonexistent', 'GIT_CONFIG_NOSYSTEM': '1'})  # no user config, no stored sign-in
+        if out.returncode != 0:
+            raise RunRefused('checkout_failed', '辦公室拿不到這個 repo（v1 只支援公開或本機 repo）。')
+        return out.stdout.decode().strip()
+
+    def bare(self, repo):
+        return self.root / 'repos' / (repo.replace('/', '__') + '.git')
+
+    def worktree(self, task_id):
+        return self.root / 'worktrees' / github_app.branch_for(task_id).split('/', 1)[1]
+
+    def prepare(self, task_id, repo, base):
+        """Clone or fetch, then the task's worktree on its branch. Returns (worktree, branch, source_rev)."""
+        bare, branch, worktree = self.bare(repo), github_app.branch_for(task_id), self.worktree(task_id)
+        if not bare.is_dir():
+            bare.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self.git('clone', '--bare', '--quiet', self.remote.format(repo=repo), str(bare))
+            self.git('-C', str(bare), 'config', 'user.name', 'neko-office')
+            self.git('-C', str(bare), 'config', 'user.email', 'neko-office@invalid')
+        else:
+            self.git('-C', str(bare), 'fetch', '--quiet', 'origin', f'+refs/heads/{base}:refs/heads/{base}')
+        if not worktree.is_dir():
+            worktree.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            has_branch = subprocess.run(['git', '-C', str(bare), 'rev-parse', '--verify', '--quiet', f'refs/heads/{branch}'],
+                                        capture_output=True).returncode == 0
+            if has_branch:  # an earlier attempt of this task: keep building on what it published
+                self.git('-C', str(bare), 'worktree', 'add', '--quiet', str(worktree), branch)
+            else:
+                self.git('-C', str(bare), 'worktree', 'add', '--quiet', '-b', branch, str(worktree), base)
+        return worktree, branch, self.git('-C', str(worktree), 'rev-parse', 'HEAD')
+
+    def target(self, task_id):
+        worktree = self.worktree(task_id)
+        return GitTarget(worktree, github_app.branch_for(task_id)) if worktree.is_dir() else None
+
+
 class RunService:
     def __init__(self, store, runner, clock=time.time):
         self.store, self.runner, self.clock = store, runner, clock
@@ -415,15 +469,18 @@ class RunService:
         self.event(run['task_id'], '沙盒開始執行。')
         try:
             result = self.runner.execute(run['sandbox_id'], command, limits['seconds'])
-        except RunnerGone:
-            self.set(run_id, 'lost', detail='sandbox_gone_during_execute', cleanup='done')
+        except RunnerError as e:
+            if self.closed(run_id):  # sweep() closed it meanwhile (task cancelled or hands taken back): that stands
+                return self.run(run_id)
+            if isinstance(e, RunnerGone):
+                self.set(run_id, 'lost', detail='sandbox_gone_during_execute', cleanup='done')
+            elif isinstance(e, RunnerUnknown):
+                self.set(run_id, 'unknown', detail='execute_unknown')  # never executed again on its own
+            else:
+                self.set(run_id, 'failed', detail='execute_failed')
+                self.cleanup(run_id)
             return self.run(run_id)
-        except RunnerUnknown:
-            self.set(run_id, 'unknown', detail='execute_unknown')  # never executed again on its own
-            return self.run(run_id)
-        except RunnerError:
-            self.set(run_id, 'failed', detail='execute_failed')
-            self.cleanup(run_id)
+        if self.closed(run_id):
             return self.run(run_id)
         self.set(run_id, exit_code=result.get('exit_code'), seconds=result.get('seconds'))
         # Collected whatever the exit code: a failing run's log is what explains it.
@@ -432,6 +489,9 @@ class RunService:
             self.set(run_id, 'failed', detail='time_limit' if result.get('timed_out') else 'nonzero_exit')
         self.cleanup(run_id)
         return self.run(run_id)
+
+    def closed(self, run_id):
+        return self.run(run_id)['state'] in TERMINAL
 
     def collect(self, run_id, then='collected'):
         """Stage log and patch from a sandbox that is still reachable. Staged files are hashed, capped
@@ -553,6 +613,27 @@ class RunService:
                 # Left for a person: whether it took effect is not known, and nothing retries it on its own.
                 'needs_person': sum(r['state'] in ('unknown', 'create_unknown') or r['detail'] == 'publish_unknown' for r in rows),
                 'cleanup_failed': sum(r['cleanup'] == 'failed' for r in rows)}
+
+    def sweep(self):
+        """Called every few seconds by the office: a run whose task was cancelled, moved to a new attempt or
+        lost its hands (收回) is closed and its sandbox removed now, not at the next call or restart.
+        A run being published or whose create is unknown is left to finish_publish() and recover()."""
+        with self.store.connect() as c:
+            locked = c.execute("SELECT 1 FROM settings WHERE key='hands_locked' AND value='1'").fetchone()
+            rows = c.execute("SELECT r.run_id,r.attempt,r.sandbox_id,r.cleanup,t.status,t.attempts FROM runner_runs r "
+                             "LEFT JOIN tasks t ON t.id=r.task_id WHERE r.state NOT IN (%s) AND r.state NOT IN "
+                             "('publishing','create_unknown')" % ','.join('?' * len(TERMINAL)), TERMINAL).fetchall()
+        closed = []
+        for row in rows:
+            moved_on = row['status'] in ACTIVE and row['attempts'] != row['attempt']
+            if row['status'] in ACTIVE and not moved_on and not locked:
+                continue
+            self.set(row['run_id'], 'superseded' if moved_on else 'cancelled',
+                     detail='hands_locked' if locked else ('superseded' if moved_on else 'task_stopped'),
+                     cleanup='pending' if row['sandbox_id'] else row['cleanup'])
+            self.cleanup(row['run_id'])
+            closed.append(row['run_id'])
+        return closed
 
     # -- restart ---------------------------------------------------------------------------
 

@@ -1,7 +1,7 @@
 # 任務：runner 第一個真 provider：本機 Docker（v1 施工單）
 
 - 日期：2026-10-28
-- 狀態：**草稿，等 YUI 看過才動程式**。沒有安裝、沒有部署、沒有啟動 Docker。
+- 狀態：YUI 2026-10-28 同意實作。**單元測試層已完成**（`3e90c1b`、其後的辦公室接線 commit）；沒有安裝、沒有部署、沒有啟動 Docker。第 5.2 節的防火牆、映像、真 Docker 測試尚未做，見 HANDOFF。
 - 前置：runner 已接進 `office.py`（`abc4ff1`，只做啟動復原＋健康狀態）。程式碼見 `office/runner.py`。
 
 ## 1. YUI 的決定（2026-10-28）
