@@ -1,10 +1,7 @@
-"""Sandbox runner skeleton: run agent code somewhere other than the office host, and bring back only a
-log and a patch (施工單 2026-10-28 第四節; serves H3 now and P3/P5 later).
+"""Durable isolated task runs, returning logs and a patch to an Office-owned task branch.
 
-What this module is and is not:
-- One small provider interface (`Runner`) plus `FakeRunner` for tests. No real provider is wired up:
-  E2B (Python SDK) is the first candidate for shareable synthetic data, a restricted local Docker is a
-  separate decision, BoxLite waits for KVM. Nothing here ever falls back to running on the host.
+- Provider interface (`Runner`) plus `FakeRunner` for tests; the real Docker adapter is separate.
+  Nothing here falls back to running project code on the host.
 - Runs belong to an existing hands task and attempt and are guarded by that task's lease and status.
   No new queue, daemon or database: one table in the office SQLite.
 - Persistence is write-ahead: the row is written before every external call, so a restart finds
@@ -27,11 +24,13 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
-import github_app
-
 ACTIVE =('planning', 'running', 'saving')
 TERMINAL = ('published', 'failed', 'rejected', 'cancelled', 'lost', 'interrupted', 'superseded')
 NAMESPACE = uuid.UUID('5f0c8a52-3e7d-4c55-9b0e-6a1e2d7c9f41')  # run ids: one run per task attempt
+
+def branch_for(task_id):
+    return f'neko/{task_id[:8]}'
+
 DEFAULT_LIMITS = {'seconds': 600, 'output_bytes': 1_000_000, 'artifact_bytes': 4_000_000,
                   'input_files': 500, 'input_bytes': 20_000_000, 'budget_usd': 0.10, 'usd_per_second': 0.000046,
                   'min_free_bytes': 2_000_000_000}  # a full disk breaks the office database's writes
@@ -301,12 +300,12 @@ class GitTarget:
 
 
 class Checkouts:
-    """The office's own copy of a task's repository (tasks/H3-runner-docker-v1.md 5.3): one bare clone per
-    repository and one worktree per task on neko/<task short id>, the branch H4 pushes. Inputs are read here
+    """The office's own copy: one bare clone per repository and one worktree per task on
+    neko/<task short id>. Inputs are read here
     at a fixed commit and patches land here, so the office never reads the hands workspace.
 
-    No credential is used: git runs with no credential helper and no prompt, so v1 reaches public or local
-    repositories only; private ones wait for the GitHub App (H4)."""
+    The base implementation reaches public or local repositories without credentials.
+    PrivateCheckouts supplies the owner-configured read-only Deploy Key; no push is performed."""
 
     def __init__(self, root, remote='https://github.com/{repo}.git'):
         self.root, self.remote = Path(root), remote
@@ -324,11 +323,11 @@ class Checkouts:
         return self.root / 'repos' / (repo.replace('/', '__') + '.git')
 
     def worktree(self, task_id):
-        return self.root / 'worktrees' / github_app.branch_for(task_id).split('/', 1)[1]
+        return self.root / 'worktrees' / branch_for(task_id).split('/', 1)[1]
 
     def prepare(self, task_id, repo, base):
         """Clone or fetch, then the task's worktree on its branch. Returns (worktree, branch, source_rev)."""
-        bare, branch, worktree = self.bare(repo), github_app.branch_for(task_id), self.worktree(task_id)
+        bare, branch, worktree = self.bare(repo), branch_for(task_id), self.worktree(task_id)
         if not bare.is_dir():
             bare.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             self.git('clone', '--bare', '--quiet', self.remote.format(repo=repo), str(bare))
@@ -348,7 +347,7 @@ class Checkouts:
 
     def target(self, task_id):
         worktree = self.worktree(task_id)
-        return GitTarget(worktree, github_app.branch_for(task_id)) if worktree.is_dir() else None
+        return GitTarget(worktree, branch_for(task_id)) if worktree.is_dir() else None
 
 
 class RunService:
@@ -521,14 +520,14 @@ class RunService:
         self.event(run['task_id'], f'收回沙盒結果（log {len(log)} bytes、patch {len(patch)} bytes）。')
         return then
 
-    def verify(self, run_id):
+    def verify(self, run_id, allow_empty=False):
         run = self.run(run_id)
         if run['state'] != 'collected' or run['exit_code'] != 0:
             raise RunRefused('wrong_state', '只有正常結束且已收回的結果能檢查。')
         patch = (self.runs_dir(run) / 'staging' / 'result.patch').read_bytes()
         if hashlib.sha256(patch).hexdigest() != run['patch_hash']:
             self.set(run_id, 'rejected', detail='patch_changed')
-        elif not patch.strip():
+        elif not patch.strip() and not allow_empty:
             self.set(run_id, 'rejected', detail='empty_patch')
         elif patch_problems(patch):
             self.set(run_id, 'rejected', detail='patch_' + '_'.join(patch_problems(patch)))
@@ -553,6 +552,10 @@ class RunService:
 
     def finish_publish(self, run_id, target):
         run = self.run(run_id)
+        patch = (self.runs_dir(run) / 'staging' / 'result.patch').read_bytes()
+        if not patch and hashlib.sha256(patch).hexdigest() == run['patch_hash']:
+            self.set(run_id,'published',detail='no_changes')
+            return self.run(run_id)
         try:
             if not target.applied(run_id):
                 patch = (self.runs_dir(run) / 'staging' / 'result.patch').read_bytes()

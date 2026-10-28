@@ -74,15 +74,16 @@ async function refreshDetail() {
   const signature=JSON.stringify(task);if(signature===lastDetail)return;lastDetail=signature;
   const box=$('task-detail');box.replaceChildren();
   box.append(node('h3',task.title),node('p',task.prompt,'prompt-view'));
-  box.append(node('p','執行者：'+({codex:'Codex · 外部 Agent',claude:'Claude · Anthropic',gemini:'Gemini · Google'}[task.executor]||'Gemma · VPS 本機'),'hint'));
+  box.append(node('p','執行者：'+(task.workflow==='collaborate'?'三家協作 · NekoNode 官網':{hands:'貓咪的手',codex:'Codex · 外部 Agent',claude:'Claude · Anthropic',gemini:'Gemini · Google'}[task.executor]||'Gemma · VPS 本機'),'hint'));
   const agentName={claude:'Claude',gemini:'Gemini'}[task.executor]||'Codex';
+  if(task.collaboration?.has_patch){for(const [suffix,label] of [['patch','下載修改 patch'],['test-log','下載測試紀錄']]){const a=node('a',label);a.href='/api/tasks/'+id+'/'+suffix;a.download='';box.append(a);}}
   if(task.parent_id)box.append(node('p','接續自：'+task.parent_id,'hint'));
   if(task.source)box.append(node('p','來源：'+task.source,'hint'));
   box.append(node('span',labels[task.status]||task.status,'badge '+task.status),node('p',task.stage));
   if(['queued','planning','running','saving'].includes(task.status)) {
     const b=node('button','停止這件任務','secondary');b.type='button';b.onclick=async()=>{try{await api('/api/tasks/'+id+'/cancel',{});await refresh();}catch(e){message(e.message,true);}};box.append(b);
   }
-  const continuation=node('button','接續這件工作','secondary');continuation.type='button';continuation.onclick=()=>{parentId=id;$('parent-context').textContent='將附上這件工作的交接：'+task.prompt.slice(0,60);$('parent-context').hidden=false;$('clear-parent').hidden=false;$('executor').value='codex';privacy();$('prompt').focus();$('command-form').scrollIntoView({behavior:'smooth'});};box.append(continuation);
+  const continuation=node('button','接續這件工作','secondary');continuation.type='button';continuation.onclick=()=>{parentId=id;$('parent-context').textContent='將附上這件工作的交接：'+task.prompt.slice(0,60);$('parent-context').hidden=false;$('clear-parent').hidden=false;$('executor').value=task.workflow==='collaborate'?'collaborate':'codex';privacy();$('prompt').focus();$('command-form').scrollIntoView({behavior:'smooth'});};box.append(continuation);
   const active=['queued','planning','running','saving'].includes(task.status);
   const noteLabels={thinking:'思考',message:'回報',tool:'工具'};
   const isPulse=e=>e.status==='running'&&/^(Codex|Claude|Gemini) (處理中：|正在處理，已等待)/.test(e.message);
@@ -257,7 +258,7 @@ $('pair-form').addEventListener('submit',async event=>{
 
 function clearParent(){parentId='';$('parent-context').hidden=true;$('clear-parent').hidden=true;}
 $('clear-parent').onclick=clearParent;
-function privacy(){const company={codex:'OpenAI',claude:'Anthropic',gemini:'Google'}[$('executor').value];$('privacy-hint').textContent=company?'交辦、選定來源與選取的交接／生活紀錄會交給 '+company+' 處理。其他生活紀錄不會自動附加。':'Gemma 在 VPS 處理短文字，合計約千字內；不會上網或自動呼叫外部 Agent。';}
+function privacy(){if($('executor').value==='collaborate'){$('privacy-hint').textContent='Claude 整理方案、Codex 在官網複本實作與測試、Gemini 檢查。交辦、專案內容及選取的交接資料會交給這三家處理；修改與測試不會發布官網。';return;}const company={codex:'OpenAI',claude:'Anthropic',gemini:'Google'}[$('executor').value];$('privacy-hint').textContent=company?'交辦、選定來源與選取的交接／生活紀錄會交給 '+company+' 處理。其他生活紀錄不會自動附加。':'Gemma 在 VPS 處理短文字，合計約千字內；不會上網或自動呼叫外部 Agent。';}
 $('executor').onchange=privacy;
 function showPage(life){$('work-page').hidden=life;$('life-page').hidden=!life;$('show-work').setAttribute('aria-pressed',String(!life));$('show-life').setAttribute('aria-pressed',String(life));window.mobileOffice?.pageChanged(life);}
 $('show-work').onclick=()=>showPage(false);$('show-life').onclick=()=>showPage(true);

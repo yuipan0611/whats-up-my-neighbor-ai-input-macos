@@ -38,7 +38,7 @@ import browser_control  # noqa: E402
 import github_app  # noqa: E402
 import runner  # noqa: E402
 
-VERSION = '0.5.1'
+VERSION = '0.6.0-workbench.1'
 ACTIVE = ('planning', 'running', 'saving')
 # Executors run by an outside agent CLI, with the name the progress text uses.
 AGENT_EXECUTORS = {'codex': 'Codex', 'claude': 'Claude', 'gemini': 'Gemini'}
@@ -159,7 +159,7 @@ class Store:
                                      ('journal_ids', "TEXT NOT NULL DEFAULT '[]'"), ('context_snapshot', "TEXT NOT NULL DEFAULT ''"),
                                      ('attempts', 'INTEGER NOT NULL DEFAULT 0'), ('heartbeat', 'REAL NOT NULL DEFAULT 0'),
                                      ('lease', "TEXT NOT NULL DEFAULT ''"), ('initiator_kind', "TEXT NOT NULL DEFAULT 'person'"),
-                                     ('browser_mode', "TEXT NOT NULL DEFAULT 'legacy'")]:
+                                     ('browser_mode', "TEXT NOT NULL DEFAULT 'legacy'"), ('workflow', "TEXT NOT NULL DEFAULT ''")]:
                 if name not in columns:
                     c.execute(f'ALTER TABLE tasks ADD COLUMN {name} {definition}')
             c.executescript('''
@@ -346,13 +346,15 @@ class Store:
                 raise Cancelled()
             self._change(c, id_, status, message, **fields)
 
-    def submit(self, id_, prompt, source, model, executor='gemma', parent_id='', journal_ids=None, browser_mode='legacy'):
+    def submit(self, id_, prompt, source, model, executor='gemma', parent_id='', journal_ids=None, browser_mode='legacy', workflow=''):
         if not isinstance(id_, str) or str(uuid.UUID(id_)) != id_:
             raise OfficeError('任務編號格式不正確。')
         if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= 5000:
             raise OfficeError('請輸入 1 至 5,000 字的交辦內容。')
         if executor not in ('gemma', *AGENT_EXECUTORS, 'hands') or not isinstance(parent_id, str):
             raise OfficeError('執行者或接續任務不正確。')
+        if workflow not in ('', 'collaborate') or (workflow and executor != 'hands'):
+            raise OfficeError('協作方式不正確。')
         journal_ids = journal_ids if journal_ids is not None else []
         if not isinstance(journal_ids, list) or len(journal_ids) > 10 or not all(isinstance(i, str) for i in journal_ids) or len(set(journal_ids)) != len(journal_ids):
             raise OfficeError('每次最多選取十筆不同的生活紀錄。')
@@ -361,7 +363,7 @@ class Store:
             row = c.execute('SELECT * FROM tasks WHERE id=?', (id_,)).fetchone()
             if row:
                 if any((row['prompt'] != prompt.strip(), row['source'] != source, row['executor'] != executor,
-                        row['parent_id'] != parent_id, row['journal_ids'] != encoded_ids)):
+                        row['parent_id'] != parent_id, row['journal_ids'] != encoded_ids, row['workflow'] != workflow)):
                     raise OfficeError('這個任務編號已用於其他內容。', 409)
                 return dict(row)
             if c.execute("SELECT count(*) FROM tasks WHERE status='queued'").fetchone()[0] >= 20:
@@ -388,6 +390,7 @@ class Store:
                       (id_, prompt.strip(), source, 'queued', '已收到，等待處理。', '新交辦', t, t, model, snapshot, executor, parent_id, encoded_ids, context_text,
                        browser_mode if executor == 'hands' else 'legacy'))
             c.execute('INSERT INTO events(task_id,at,status,message) VALUES(?,?,?,?)', (id_, t, 'queued', '交辦已保存到 VPS。'))
+            c.execute('UPDATE tasks SET workflow=? WHERE id=?', (workflow,id_))
         return self.get(id_)
 
     def get(self, id_):
@@ -398,9 +401,15 @@ class Store:
             task = dict(row)
             del task['lease']  # only the worker that claimed this attempt holds it
             task['events'] = [dict(e) for e in c.execute('SELECT * FROM events WHERE task_id=? ORDER BY seq', (id_,))]
+            if task.get('workflow') == 'collaborate' and c.execute("SELECT 1 FROM sqlite_master WHERE name='workbench_tasks'").fetchone():
+                row=c.execute('SELECT phase,state,outputs FROM workbench_tasks WHERE task_id=? AND attempt=?',(id_,task['attempts'])).fetchone()
+                run=c.execute('SELECT run_id FROM runner_runs WHERE task_id=? AND attempt=?',(id_,task['attempts'])).fetchone()
+                task['collaboration']={'phase':row['phase'] if row else '', 'state':row['state'] if row else 'waiting',
+                                       'steps':json.loads(row['outputs']) if row else {},
+                                       'has_patch':bool(run and (self.root/'tasks'/id_/'runs'/run['run_id']/'staging'/'result.patch').is_file())}
             return task
 
-    TASK_LIST = 'SELECT id,prompt,source,status,stage,title,created,updated,model,executor,parent_id FROM tasks ORDER BY created DESC,rowid DESC LIMIT 100'
+    TASK_LIST = 'SELECT id,prompt,source,status,stage,title,created,updated,model,executor,parent_id,workflow FROM tasks ORDER BY created DESC,rowid DESC LIMIT 100'
 
     def list(self):
         with self.connect() as c:
@@ -436,7 +445,7 @@ class Store:
 
     HANDS_LEASE = 120
     HANDS_ATTEMPTS = 3
-    HANDS_FIELDS = ('id', 'prompt', 'source', 'source_snapshot', 'context_snapshot', 'parent_id', 'attempts', 'lease', 'browser_mode', 'created')
+    HANDS_FIELDS = ('id', 'prompt', 'source', 'source_snapshot', 'context_snapshot', 'parent_id', 'attempts', 'lease', 'browser_mode', 'created', 'workflow')
     HANDS_TEXT_LIMIT = 150000
 
     def hands_locked(self):
@@ -540,10 +549,12 @@ class Store:
         """A silent worker gives its task back to the queue; after HANDS_ATTEMPTS tries the user is told."""
         t = time.time() if t is None else t
         with self.connect() as c:
-            rows = c.execute("SELECT id,attempts FROM tasks WHERE executor='hands' AND status IN ('planning','running','saving') AND heartbeat<?",
+            rows = c.execute("SELECT id,attempts,workflow FROM tasks WHERE executor='hands' AND status IN ('planning','running','saving') AND heartbeat<?",
                              (t - self.HANDS_LEASE,)).fetchall()
             for row in rows:
-                if row['attempts'] < self.HANDS_ATTEMPTS:
+                if row['workflow'] == 'collaborate':
+                    self._change(c,row['id'],'interrupted','協作執行者連線中斷，結果需要核對；不會自動重跑。')
+                elif row['attempts'] < self.HANDS_ATTEMPTS:
                     self._change(c, row['id'], 'queued', '連線中斷了，貓咪等一下會自己重試。')
                 else:
                     self._change(c, row['id'], 'interrupted', f'連續 {self.HANDS_ATTEMPTS} 次連不上，先停下來了；做到一半的步驟都還在，可以再交辦一次。')
@@ -1297,7 +1308,7 @@ class GeminiAgent(CliAgent):
 
 
 class Office:
-    def __init__(self, store, model, agent=None, broker=None, providers=None, sandbox=None, checkouts=None):
+    def __init__(self, store, model, agent=None, broker=None, providers=None, sandbox=None, checkouts=None, workbench=None):
         self.store, self.model, self.agent = store, model, agent
         self.agents = {'codex': agent, **(providers or {})}  # executor -> agent CLI; agent stays Codex
         self.broker = broker  # a browser_actions.Broker only where broker mode is switched on; legacy otherwise
@@ -1307,14 +1318,18 @@ class Office:
             self.control.recover()
         self.stopping = threading.Event()
         self.store.recover()
+        if workbench and sandbox:
+            raise ValueError('Choose either the collaboration workbench or the legacy sandbox configuration')
+        self.workbench = workbench
+        self.legacy_sandbox = bool(sandbox)
         # Sandbox runs only where a runner.Runner provider is given (--sandbox docker); off otherwise.
-        self.runs = runner.RunService(store, sandbox) if sandbox else None
+        self.runs = workbench.runs if workbench else (runner.RunService(store, sandbox) if sandbox else None)
         self.checkouts = (checkouts or runner.Checkouts(store.root.parent / 'checkouts')) if sandbox else None
         self.repos = github_app.GitHubPush(store, None) if sandbox else None  # only bind() is used until H4 is wired
         self.run_threads = {}
         self.clock = time.monotonic
         self.sandbox_check = {'reachable': None, 'at': None}  # what a sandbox container could reach, last measured
-        if self.runs:
+        if sandbox:
             # After store.recover(): hands tasks keep their lease across a restart, so a live task's run stays live.
             # Recovery only removes or settles what exists, so it runs even when the self-check fails.
             self.runs.recover(target_for=lambda run: self.checkouts.target(run['task_id']))
@@ -1324,6 +1339,15 @@ class Office:
     def start(self):
         self.thread = threading.Thread(target=self.worker, name='office-worker', daemon=True)
         self.thread.start()
+        if self.workbench:
+            threading.Thread(target=self.sweep_workbench,name='workbench-cleanup',daemon=True).start()
+
+    def sweep_workbench(self):
+        while not self.stopping.wait(1):
+            try:
+                self.workbench.sweep()
+            except Exception:
+                pass  # persisted cleanup state is retried; no task is executed here
 
     # -- sandbox runs (tasks/H3-runner-docker-v1.md) ------------------------------------------
 
@@ -1440,10 +1464,15 @@ class Office:
         id_ = body.get('id')
         try:
             executor = body.get('executor', 'codex' if self.agent else 'gemma')
+            workflow = ''
+            if executor == 'collaborate':
+                if not self.workbench:
+                    raise OfficeError('三家協作尚未設定，這件沒有送出。',409)
+                executor,workflow = 'hands','collaborate'
             agent = self.agents.get(executor) if isinstance(executor, str) else None
             model = 'hands' if executor == 'hands' else (agent.model if agent else self.model.model)
             task = self.store.submit(id_, prompt, source, model, executor, body.get('parent_id', ''), body.get('journal_ids', []),
-                                     'broker' if self.broker else 'legacy')  # fixed per task; switching needs a new task
+                                     browser_mode='broker' if self.broker and not workflow else 'legacy', workflow=workflow)  # fixed per task; switching needs a new task
         except (ValueError, TypeError, AttributeError):
             raise OfficeError('任務編號格式不正確。')
         return {'task': task, 'message': '交辦已保存，貓咪會依序處理。'}
@@ -1933,7 +1962,8 @@ class Handler(BaseHTTPRequestHandler):
                                'provider': provider, 'providers': providers, 'paused': office.store.paused(),
                                'external_connected': provider['authenticated'] and bool(provider['last_success']),
                                'worker_running': bool(office.thread and office.thread.is_alive()),
-                               'sandbox': {**office.runs.summary(), 'reachable': office.sandbox_check['reachable']}
+                               'workbench': {'enabled': bool(office.workbench)},
+                               'sandbox': {**office.runs.summary(), 'reachable': office.workbench.reachable if office.workbench else office.sandbox_check['reachable']}
                                           if office.runs else {'enabled': False}})
             elif path == '/api/tasks':
                 tasks, latest, paused = office.store.snapshot()
@@ -1962,6 +1992,14 @@ class Handler(BaseHTTPRequestHandler):
                 office.store.get(path.split('/')[3])  # 404 for an unknown task
                 with office.store.connect() as c:
                     self.send(200, browser_audit.task_events(c, path.split('/')[3], after, limit))
+            elif re.fullmatch(r'/api/tasks/[0-9a-f-]{36}/(patch|test-log)', path) and office.workbench:
+                task = office.store.get(path.split('/')[3])
+                run = office.workbench.get_run(task)
+                filename = 'result.patch' if path.endswith('/patch') else 'log.txt'
+                patch = office.workbench.runs.runs_dir(run)/'staging'/filename
+                if not patch.is_file():
+                    raise OfficeError('這件工作還沒有可下載的 patch。',404)
+                self.send(200,patch.read_bytes(),'text/plain; charset=utf-8',headers={'Content-Disposition':'attachment; filename="'+filename+'"'})
             elif re.fullmatch(r'/api/tasks/[0-9a-f-]{36}(/download)?', path):
                 task = office.store.get(path.split('/')[3])
                 if path.endswith('/download'):
@@ -2062,6 +2100,14 @@ class Handler(BaseHTTPRequestHandler):
             if not control:
                 raise OfficeError('瀏覽器 broker 模式沒有開。', 404)
             return control.ack(body)
+        if path.startswith('/api/worker/workbench/') and self.server.office.workbench:
+            import runner
+            try:
+                return self.server.office.workbench.call(path.rsplit('/',1)[-1],body)
+            except runner.RunRefused as e:
+                raise OfficeError(str(e),409,{'reason_code':e.reason})
+            except runner.RunnerError:
+                raise OfficeError('Docker 沒有回報完整結果；任務已保留，請核對狀態。',503)
         if path == '/api/worker/claim':
             if control and not control.claimable():  # a person holds the Chrome: not even the next task starts
                 return {'task': None, 'paused': store.paused(), 'locked': store.hands_locked(), 'held': True}
@@ -2080,7 +2126,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/worker/complete':
             return store.hands_complete(task_id, lease, body.get('outcome'), body.get('text', ''), body.get('reason', ''))
         if path in ('/api/worker/run/start', '/api/worker/run/status'):
-            if not self.server.office.runs:
+            if not self.server.office.legacy_sandbox:
                 raise OfficeError('沙盒沒有開。', 404)
             office = self.server.office
             return office.run_start(body) if path.endswith('start') else office.run_status(body)
@@ -2302,6 +2348,7 @@ def main():
     parser.add_argument('--sandbox', choices=('docker',), help='sandbox runs for hands tasks (tasks/H3-runner-docker-v1.md); off unless given')
     parser.add_argument('--sandbox-image', help='with --sandbox docker: the image (needs git, timeout, user 10001, /work)')
     parser.add_argument('--sandbox-network', default='neko-runner', help='with --sandbox docker: a dedicated network whose way back to the host is firewalled')
+    parser.add_argument('--workbench-config',type=Path,help='owner-installed project and Docker configuration')
     args = parser.parse_args()
     if args.sandbox and not args.sandbox_image:
         raise SystemExit('--sandbox docker needs --sandbox-image')
@@ -2325,9 +2372,13 @@ def main():
             sandbox = runner_docker.DockerRunner(args.sandbox_image, network=args.sandbox_network)
         except ValueError as e:
             raise SystemExit(str(e))
+    workbench = None
+    if args.workbench_config:
+        from workbench_control import Workbench
+        workbench = Workbench(store,json.loads(args.workbench_config.read_text()))
     runtime = args.data.parent / 'runtime'
     office = Office(store, Ollama(args.model, managed=True), CodexAgent(runtime), broker,
-                    {'claude': ClaudeAgent(runtime), 'gemini': GeminiAgent(runtime)}, sandbox)
+                    {'claude': ClaudeAgent(runtime), 'gemini': GeminiAgent(runtime)}, sandbox, workbench=workbench)
     local_socket = args.local_socket or args.data.parent / 'run' / 'office.sock'
     try:
         server = Server(args.port, office, args.public_origin, local_socket, args.dev_tcp_local, args.worker_socket)

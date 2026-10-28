@@ -53,7 +53,7 @@ class Office:
         self.socket_path = str(socket_path)
 
     def post(self, path, body):
-        conn = UnixConnection(self.socket_path)
+        conn = UnixConnection(self.socket_path, timeout=360 if path.endswith(('/prepare','/open_run')) else 15)
         try:
             conn.request('POST', path, json.dumps(body, ensure_ascii=False).encode('utf-8'), {'Content-Type': 'application/json'})
             response = conn.getresponse()
@@ -191,6 +191,10 @@ class Worker:
     # -- one task --------------------------------------------------------------------------
 
     def handle(self, task):
+        if task.get('workflow') == 'collaborate':
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from team_worker import Team
+            return Team(self).handle(task)
         self.prune()
         lease, task_id = task['lease'], task['id']
         workspace = self.workspace_root / task_id / f"attempt-{task['attempts']}"

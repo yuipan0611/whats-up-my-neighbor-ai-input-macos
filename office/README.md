@@ -1,5 +1,7 @@
 # 貓咪辦公室第二版
 
+三家遠端工作台：新增「三家協作 · NekoNode 官網」，由 Claude → Codex／Docker → Gemini 依序處理。VS Code 是查看與接手入口；安裝、限制、本人登入及回復方式見 [工作台文件](docs/WORKBENCH.md)，實際驗收狀態見 [驗收紀錄](../reports/workbench/VERIFICATION.md)。三家完整實機驗收必須另有本人登入成功證據，不能用模擬測試代替。
+
 VPS 常駐的獨立原型：自然語言交辦、進度與成果保存、工作交接、生活原話紀錄。正式語音 App 未替換；Mac 可透過獨立的瀏覽器入口開啟。
 
 **開發規劃更新（2026-10-26）：** 瀏覽器動作控管、操作紀錄與接手流程已納入 [貓咪的手 PRD](docs/agent-hands/PRD.md)；Claude 從 [交接文件](docs/agent-hands/CLAUDE-HANDOFF-2026-10-26.md) 接續。G0–G5 尚未實作，本 README 的既有執行者說明不代表新控管已上線。
