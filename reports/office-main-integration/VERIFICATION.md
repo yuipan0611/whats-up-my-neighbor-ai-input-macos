@@ -47,4 +47,3 @@
 - Browser dispatch revalidates task status, lease, attempt and unresolved outcomes after waiting for the dispatch gate. Four queue-race regressions cover cancellation, lease reassignment, attempt changes and a preceding unknown result; none reaches the browser.
 - Docker input archives retain executable bits, strip special permissions and keep sandbox ownership. The regression extracts and directly executes a script from the generated archive.
 - Targeted local validation: browser actions 28/28, browser control 34/34, Docker adapter 20/20, legacy deployment 2/2. The updated full CI must pass before merge; earlier green results do not cover these fixes.
-
