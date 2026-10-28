@@ -2,6 +2,8 @@
 
 VPS 常駐的獨立原型：自然語言交辦、進度與成果保存、工作交接、生活原話紀錄。正式語音 App 未替換；Mac 可透過獨立的瀏覽器入口開啟。
 
+**開發規劃更新（2026-10-26）：** 瀏覽器動作控管、操作紀錄與接手流程已納入 [貓咪的手 PRD](docs/agent-hands/PRD.md)；Claude 從 [交接文件](docs/agent-hands/CLAUDE-HANDOFF-2026-10-26.md) 接續。G0–G5 尚未實作，本 README 的既有執行者說明不代表新控管已上線。
+
 ## 使用
 
 1. 執行 `office/open-office.command`。它使用既有 `neighbor-vps` SSH 別名，確認 HTTP 服務後才在 Mac 瀏覽器顯示辦公室。
@@ -12,7 +14,7 @@ VPS 常駐的獨立原型：自然語言交辦、進度與成果保存、工作�
 
 手機聊天介面的 `+` 可選 TXT／MD、PNG／JPEG／WebP 與 PDF。文字檔維持 48KB 上限；圖片與 PDF 各 8MB，PDF 最多 8 頁。手機瀏覽器會把 PDF 每頁轉為圖片，與原始 PDF 一起上傳；Codex 讀取頁面圖片，並在本次交辦保留不可變的附件快照。圖片與 PDF 目前只能交給 Codex，Gemma 僅處理文字。附件選取後在送出時才上傳 VPS；送出給 Codex 後，明確選取的附件會隨交辦傳給 OpenAI。Luna／Sol／Astra、Claude、Gemini 只顯示規劃位置，標示尚未接通且不可選。
 
-也可使用 `office/open-office.command` 開啟 Mac 瀏覽器，或 VPS 桌面的「貓咪辦公室」。只有一條 18421 通道即可；預覽退出僅停止自己建立的 SSH 程序。
+Mac 用 `office/open-office.command` 開啟瀏覽器，只需要一條 18421 通道；預覽退出時只停止自己建立的 SSH 程序。VPS 桌面上的「貓咪辦公室」捷徑從 0.4.0 起不能用，原因見下方「本機入口」。
 
 ## 執行者
 
@@ -39,15 +41,29 @@ VPS `~/neighbor-office/data/`，目錄權限 700，服務檔案預設 600：
 
 `install_codex.py` 安裝官方固定 CLI、code-mode host 與 bwrap 發行檔，逐一核對 SHA256。第一次在 VPS 的獨立 CODEX_HOME 執行 Codex 登入，由本人完成：可使用裝置碼，若帳號未啟用則改一般瀏覽器 OAuth＋SSH loopback callback。登入檔留 VPS，不放 Git、報告或匯出。
 
-`deploy.sh` 僅供舊版 SSH 通道服務使用；偵測到手機公網版時會停止，避免覆蓋其服務設定。Gemma 的開機啟動保持停用。office 僅監聽 `127.0.0.1:8421`，由 Caddy 對外提供 HTTPS／WSS；Gemma 使用時僅監聽 `127.0.0.1:11434`。
+`deploy.sh` 僅供舊版 SSH 通道服務使用；偵測到手機公網版時會停止，避免覆蓋其服務設定。Gemma 的開機啟動保持停用。office 的 TCP 僅監聽 `127.0.0.1:8421`，只給 Caddy 對外提供 HTTPS／WSS（公網模式）；本機模式另走私有 socket（見下方）。Gemma 使用時僅監聽 `127.0.0.1:11434`。
 
 離線測試：`python3 -I -m unittest discover -s office/tests -v`。
+部署後檢查（從 Mac）：`python3 -I office/verify_public.py --expect-version <版本>`，共 27 項：公網、短暫測試裝置的配對與撤銷、本機 socket、Mac 通道。測試裝置會在結束前撤銷，輸出不含配對碼、cookie 或 token。
 真實服務驗證：`python3 office/verify_v2.py --report reports/office-v2/codex-live.json`；Gemma 加 `--provider gemma`。會新增明確標示的合成紀錄，不能將其視為真實生活事件。詳細通過與未驗收項目見 `reports/office-v2/VERIFICATION.md`。
 
 HTTP 維持 Host／Origin／頁面 token 檢查，以純文字顯示內容，不執行模型 HTML。資料庫遷移前的備份在 VPS `~/neighbor-office/backups/office-v2-20261021T124049Z/`，包含當時 SQLite、app 與兩份使用者服務設定。
 
+## 本機入口（0.4.0 起）
+
+本機模式（不用配對就能讀寫全部任務和生活紀錄）只開在私有 Unix socket：`~/neighbor-office/run/office.sock`。socket 權限 600、資料夾權限 700，只有服務使用者打得開。
+
+- **Mac：** `open-office.command` 把 Mac 的 `127.0.0.1:18421` 用 SSH 轉送到這個 socket（SSH 以服務使用者身分登入）。
+- **TCP `127.0.0.1:8421`：** 只認公網模式，必須帶配對 cookie。VPS 上任何程式送「本機 Host」過去都會拿到 421。原因是貓咪的手（另一個 Linux 使用者）也連得到 loopback，見 `docs/agent-hands/PRD.md` 5.8。
+- **`--local-socket`：** 可以改 socket 路徑。路徑上限 100 bytes，資料夾必須只有自己能進入。
+- **啟動規則：** 啟動時會換掉當機留下的舊 socket；如果 socket 還有服務在聽，就拒絕啟動。不是 socket 的檔案一律不刪。
+- **`--dev-tcp-local`：** 只限單人使用的開發機。它讓 TCP 也提供本機模式，**不可在 VPS 使用**。
+- **`--worker-socket`（0.5.0 起）：** 開啟「手」（`executor: hands`）專用的 worker 入口。權限 660，給 worker 的群組使用，預設不開。它只回答 hands 任務本身；契約見 `docs/agent-hands/PRD.md` 9.1。
+- **收回開關：** `office.py hands-lock on|off|status`。
+- **在 VPS 上直接呼叫本機 API：** `curl --unix-socket ~/neighbor-office/run/office.sock -H 'Host: 127.0.0.1:18421' http://127.0.0.1:18421/api/health`。`verify_live.py` 已改走這個 socket。
+
 ## 手機 Chrome 直連
 
-`https://office.nekonode.cloud` 已部署，手機先用 VPS 產生的一次性碼配對，再透過 cookie 存取辦公室。配對碼可從 Mac 執行 `office/pair-iphone.command` 取得，只顯示在本機 Terminal，10 分鐘內有效。WebSocket 只傳即時進度，交辦仍走 HTTP；手機斷線後由 SQLite 的事件序號補回。辦公室維持只監聽 `127.0.0.1:8421`。
+`https://office.nekonode.cloud` 已部署，手機先用 VPS 產生的一次性碼配對，再透過 cookie 存取辦公室。配對碼可從 Mac 執行 `office/pair-iphone.command` 取得，只顯示在本機 Terminal，10 分鐘內有效。WebSocket 只傳即時進度，交辦仍走 HTTP；手機斷線後由 SQLite 的事件序號補回。辦公室的 TCP 維持只監聽 `127.0.0.1:8421`。
 
 設計與 API 契約見 [手機 PRD](docs/mobile/PRD.md)，部署紀錄與驗收範圍見 [部署檢查單](docs/mobile/DEPLOY.md)。iPhone Chrome 已開啟配對頁、配對並交辦測試任務；使用者確認可直接看到繁體中文成果，鎖屏超過五分鐘後仍能查看完成成果與進度。手動斷網重送及撤銷這台 iPhone 尚未實測。

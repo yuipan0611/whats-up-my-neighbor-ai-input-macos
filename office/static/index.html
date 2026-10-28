@@ -44,7 +44,7 @@
 <section class="compose" aria-labelledby="compose-title"><h2 id="compose-title">今天交給貓咪什麼事？</h2>
 <form id="command-form"><label for="prompt">用自己的話交代</label><textarea id="prompt" rows="5" maxlength="5000" placeholder="例如：幫我把這份筆記整理成三個重點，保留日期與待辦。" required></textarea>
 <p id="parent-context" class="hint" hidden></p><button id="clear-parent" type="button" class="secondary" hidden>取消接續</button>
-<div class="source-row"><label for="executor">交給誰處理</label><select id="executor"><option value="codex">Codex · 外部 Agent</option><option value="gemma">Gemma · VPS 本機（選配）</option></select></div>
+<div class="source-row"><label for="executor">交給誰處理</label><select id="executor"><option value="codex">Codex · 外部 Agent</option><option value="claude">Claude · Anthropic</option><option value="gemini">Gemini · Google</option><option value="gemma">Gemma · VPS 本機（選配）</option></select></div>
 <div class="source-row"><label for="source">來源文字檔</label><select id="source"><option value="">直接處理上面貼的內容</option></select><label class="upload-label" for="upload">放入文字檔</label><input id="upload" type="file" accept=".txt,.md,text/plain,text/markdown"></div>
 <div class="actions"><button id="submit" type="submit">交給貓咪</button><button id="pause" type="button" class="secondary">先停一下</button><button id="resume" type="button" class="secondary">繼續工作</button></div>
 <details><summary>選取生活紀錄供這次工作使用 <span id="context-count"></span></summary><div id="journal-context"></div></details>
