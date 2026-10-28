@@ -16,6 +16,18 @@ struct DesktopPetInteractionTests {
         var model = DesktopPetModel(seed: 42)
         model.setReleased(true, now: 0, world: world)
         let initial = model.origin
+        var transfer = DesktopPetModel(seed: 43)
+        transfer.setReleased(true, now: 0, world: world)
+        let saved = transfer.origin
+        transfer.relocateForTransfer(to: CGPoint(x: 600, y: 150), now: 0.1, world: world)
+        expect(transfer.origin == CGPoint(x: 600, y: 150), "transfer can place the original cat at the VPS edge")
+        transfer.arriveFromTransfer(at: saved, now: 1, world: world)
+        expect(transfer.origin == saved && transfer.isSettling &&
+               DesktopPetLift.sourceImageIndex(for: transfer.lift.spriteFrame) == 19,
+               "return changes location immediately and begins the approved held drawing")
+        transfer.tick(now: 1.41, world: world)
+        expect(!transfer.isSettling && DesktopPetLift.sourceImageIndex(for: transfer.lift.spriteFrame) == 35,
+               "return stops on the accepted seated drawing")
         for step in 1...20 {
             world.cursor = CGPoint(x: CGFloat(step * 43), y: CGFloat(step * 29))
             model.tick(now: Double(step) / 4, world: world)
@@ -199,6 +211,48 @@ struct DesktopPetInteractionTests {
                "native window mouse-up starts the release animation")
         controller.setReleased(false)
         controller.dispose()
+
+        var transferNow: Double = 30
+        let sameCat = DesktopPetController(resources: resources, automaticallyTicks: false, world: { world },
+                                           clock: { transferNow }, pressedButtons: { 1 })
+        var hostedEvents: [Bool] = []
+        var remoteFrames = 0
+        sameCat.onRemoteHostedChange = { hostedEvents.append($0) }
+        sameCat.onRemoteFrame = { _, _, _ in remoteFrames += 1 }
+        sameCat.setReleased(true)
+        let homeBeforeVPS = sameCat.model.origin
+        let firstGrip = CGPoint(x: homeBeforeVPS.x + 55, y: homeBeforeVPS.y + 60)
+        sameCat.pointerDown(at: firstGrip)
+        transferNow += 0.1
+        sameCat.pointerDragged(to: CGPoint(x: firstGrip.x - 100, y: firstGrip.y + 60))
+        sameCat.pointerUp(at: CGPoint(x: 700, y: 400))
+        expect(sameCat.parkInVPS() && sameCat.remoteHosted && !sameCat.testPanel.isVisible,
+               "existing cat is hidden locally after entering VPS, without another cat panel")
+        expect(sameCat.model.origin == homeBeforeVPS && remoteFrames > 0 && hostedEvents == [true],
+               "VPS retains the original home position and receives the same model's animation")
+        transferNow += 0.5
+        sameCat.refresh()
+        let remoteArtworkRect = CGRect(x: 600, y: 350, width: 208, height: 192)
+        let remoteGrip = CGPoint(x: 700, y: 440)
+        sameCat.beginVPSDrag(at: remoteGrip, from: remoteArtworkRect)
+        expect(!sameCat.remoteHosted && sameCat.testPanel.isVisible && sameCat.testPanel.frame.size == CGSize(width: 208, height: 192),
+               "dragging out reuses the one original desktop cat panel")
+        transferNow += 0.1
+        sameCat.pointerDragged(to: CGPoint(x: 300, y: 400))
+        sameCat.pointerUp(at: CGPoint(x: 300, y: 400))
+        expect(!sameCat.remoteHosted && sameCat.model.frame.midX < remoteArtworkRect.minX,
+               "releasing outside VPS leaves the original cat on the local desktop")
+        sameCat.pointerDown(at: CGPoint(x: sameCat.model.frame.midX, y: sameCat.model.frame.midY))
+        transferNow += 0.1
+        sameCat.pointerDragged(to: CGPoint(x: 690, y: 420))
+        sameCat.pointerUp(at: CGPoint(x: 690, y: 420))
+        expect(sameCat.parkInVPS() && sameCat.remoteHosted, "the same cat can enter VPS again")
+        transferNow += 0.5
+        sameCat.returnFromVPS()
+        expect(!sameCat.remoteHosted && sameCat.testPanel.isVisible && sameCat.model.isSettling &&
+               DesktopPetLift.sourceImageIndex(for: sameCat.model.lift.spriteFrame) == 19,
+               "return button switches the original cat home immediately, then lands")
+        sameCat.dispose()
 
         // Exercise a real screen callback as well as deterministic model time.
         // No synthetic OS mouse events are posted; button state is a fixture.

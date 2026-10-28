@@ -9,6 +9,9 @@ struct VPSDesktopView: View {
             HStack(spacing: 8) {
                 Text("VPS 電腦").font(.system(size: 13, weight: .semibold))
                 Spacer()
+                if panel.catInside && !panel.collapsed {
+                    Button("叫牠回家") { panel.returnCat?() }.accessibilityLabel("叫貓咪回本機")
+                }
                 if connection.connected && !panel.collapsed {
                     Button(connection.controlling ? "結束接手" : "接手操作") { connection.toggleControl() }
                         .accessibilityLabel(connection.controlling ? "結束接手" : "接手操作")
@@ -35,6 +38,7 @@ struct VPSDesktopView: View {
                         }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(hex: 0xFAF8F9))
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
+
             }
         }.background(Color.white).preferredColorScheme(.light).ignoresSafeArea()
         .alert("確定中斷 VPS 連線？", isPresented: $connection.confirmDisconnect) {
@@ -48,7 +52,10 @@ struct VPSDesktopView: View {
 
 final class VPSDesktopPanel: ObservableObject {
     @Published var collapsed = false
+    @Published var catInside = false
+    @Published var dropHovered = false
     var toggle: (() -> Void)?
+    var returnCat: (() -> Void)?
 }
 
 private extension Color {

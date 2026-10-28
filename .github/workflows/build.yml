@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -52,7 +52,7 @@ jobs:
     # after a trusted push to main or this implementation branch and publishes
     # no release/tag/feed. The PR job above remains entirely secret-free.
     if: github.event_name == 'push' && github.repository == 'yuipan0611/whats-up-my-neighbor-ai-input-macos' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/neko-cicd-updates')
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5

@@ -39,8 +39,17 @@ final class DesktopPetController {
         }
     }
     var onReleasedChange: ((Bool) -> Void)?
+    var onDragMoved: ((CGPoint) -> Void)?
+    var onDragReleased: ((CGPoint) -> Void)?
+    var onDragCancelled: (() -> Void)?
+    var onRemoteHostedChange: ((Bool) -> Void)?
+    var onRemoteFrame: ((DesktopPetModel, Bool, CatAppearance) -> Void)?
     var isBusy: () -> Bool = { NSApp.modalWindow != nil }
     private(set) var model = DesktopPetModel()
+    private(set) var appearance: CatAppearance
+    private(set) var remoteHosted = false
+    private var homeOrigin: CGPoint?
+    private var pressOrigin: CGPoint?
     private let panel: DesktopPetPanel
     private let artwork: DesktopPetView
     private let reader = DesktopPetDesktopReader()
@@ -72,6 +81,7 @@ final class DesktopPetController {
         self.presentation = presentation
         self.clock = clock
         self.pressedButtons = pressedButtons
+        self.appearance = appearance
         injectedWorld = world
         artwork = DesktopPetView(resources: resources, appearance: appearance)
         panel = DesktopPetPanel(contentRect: CGRect(origin: .zero, size: DesktopPetView.panelSize),
@@ -109,6 +119,7 @@ final class DesktopPetController {
     /// An explicit coat choice also brings a recalled pet onto the desktop.
     func show(appearance: CatAppearance) {
         guard !disposed else { return }
+        self.appearance = appearance
         artwork.setAppearance(appearance)
         if model.released { refresh() }
         else { setReleased(true) }
@@ -117,7 +128,13 @@ final class DesktopPetController {
     func setReleased(_ value: Bool) {
         guard !disposed else { return }
         let now = clock()
+        if !value && remoteHosted {
+            remoteHosted = false
+            onRemoteHostedChange?(false)
+        }
+        let cancelledDrag = !value && model.isDragging
         model.setReleased(value, now: now, world: world(now: now))
+        if cancelledDrag { onDragCancelled?() }
         if !value { reader.cancel(); snapshot = .init() }
         refresh(now: now)
         onReleasedChange?(value)
@@ -125,6 +142,7 @@ final class DesktopPetController {
 
     func pointerDown(at point: CGPoint) {
         guard !disposed else { return }
+        pressOrigin = model.origin
         deliveringPointer = true
         defer { deliveringPointer = false }
         let now = clock()
@@ -137,15 +155,63 @@ final class DesktopPetController {
         deliveringPointer = true
         defer { deliveringPointer = false }
         let now = clock()
+        let wasDragging = model.isDragging
         model.pointerDragged(to: point, now: now, world: world(now: now))
+        if !wasDragging && model.isDragging { panel.orderFrontRegardless() }
+        refresh(now: now)
+        if model.isDragging { onDragMoved?(point) }
+    }
+
+    func pointerUp(at point: CGPoint? = nil) {
+        guard !disposed else { return }
+        let now = clock()
+        let wasDragging = model.isDragging
+        let environment = world(now: now)
+        model.pointerUp(now: now, world: environment)
+        if wasDragging {
+            if environment.hidden { onDragCancelled?() }
+            else { onDragReleased?(point ?? environment.cursor) }
+        }
         refresh(now: now)
     }
 
-    func pointerUp() {
-        guard !disposed else { return }
+    /// The VPS draws this same model while its desktop panel is hidden.
+    @discardableResult func parkInVPS(preservingHome: Bool = false) -> Bool {
+        guard !disposed, model.released, !remoteHosted else { return false }
+        if !preservingHome { homeOrigin = pressOrigin ?? model.origin }
         let now = clock()
-        model.pointerUp(now: now, world: world(now: now))
+        if let homeOrigin { model.relocateForTransfer(to: homeOrigin, now: now, world: world(now: now)) }
+        remoteHosted = true
+        onRemoteHostedChange?(true)
         refresh(now: now)
+        return true
+    }
+
+    func beginVPSDrag(at point: CGPoint, from screenRect: CGRect) {
+        guard remoteHosted, !disposed else { return }
+        let now = clock()
+        remoteHosted = false
+        onRemoteHostedChange?(false)
+        model.relocateForTransfer(to: CGPoint(x: screenRect.minX - DesktopPetView.panelOffset.x,
+                                               y: screenRect.minY - DesktopPetView.panelOffset.y),
+                                  now: now, world: world(now: now))
+        refresh(now: now)
+        pointerDown(at: point)
+    }
+
+    func returnFromVPS() {
+        guard remoteHosted, !disposed else { return }
+        let now = clock()
+        remoteHosted = false
+        model.arriveFromTransfer(at: homeOrigin ?? model.origin, now: now, world: world(now: now))
+        onRemoteHostedChange?(false)
+        refresh(now: now)
+    }
+
+    func cancelVPSDrag() {
+        guard !remoteHosted, model.isPressed, !disposed else { return }
+        model.cancelPointer(now: clock())
+        _ = parkInVPS(preservingHome: true)
     }
 
     func pet() {
@@ -158,14 +224,32 @@ final class DesktopPetController {
         guard !disposed else { return }
         let now = suppliedNow ?? clock()
         let environment = world(now: now)
+        let wasDragging = model.isDragging
+        if remoteHosted {
+            var parkedWorld = environment
+            parkedWorld.idleSeconds = 0
+            parkedWorld.perches = []
+            model.tick(now: now, world: parkedWorld)
+            panel.ignoresMouseEvents = true
+            if panel.isVisible { panel.orderOut(nil) }
+            if #available(macOS 14.0, *) { (displayPulse as? DesktopPetDisplayPulse)?.stop(); displayPulse = nil }
+            onRemoteFrame?(model, parkedWorld.reduceMotion, appearance)
+            schedule(every: model.isSettling ? 1 / 60 : 1)
+            return
+        }
         // 遺失 mouseUp 事件的自我修復：
         // 在浮動視窗中，若使用者在螢幕外或快速拖拽時釋放滑鼠，AppKit 的 mouseUp 有微小機率被系統遺失。
         // 若系統實體滑鼠左鍵已釋放（bit 0 為 0），但模型仍處於 isPressed，
         // 立即主動合成 pointerUp，使貓咪平穩著地，避免永久卡在抓起懸空狀態。
-        if !deliveringPointer, model.isPressed, pressedButtons() & 1 == 0 {
-            model.pointerUp(now: now, world: environment)
+        if !deliveringPointer, model.isPressed, pressedButtons() & 1 == 0, !environment.hidden {
+            // The display link can observe button-up before AppKit delivers mouseUp.
+            // Finish the controller-level release too, including a pending VPS drop.
+            // pointerUp clears the pressed state before callbacks; a late event is inert.
+            pointerUp(at: environment.cursor)
+            return
         }
         model.tick(now: now, world: environment)
+        if wasDragging && !model.isDragging { onDragCancelled?() }
         if model.visible {
             // The login agent uses open -gj. Match the recording HUD's
             // nonactivating presentation instead of leaving a hidden app's
@@ -214,7 +298,7 @@ final class DesktopPetController {
         // 3. 特殊邊界條件：
         //    - model.isPressed（拖拽中）：必須保持 false，避免游標快速甩動暫時脫離圖案時遺失 drag 與 mouseUp。
         //    - isBusy()（錄音中、選單開啟或 Modal 存在）：必須強制設為 true，全面讓出滑鼠事件，避免干擾核心操作。
-        guard model.visible, !disposed, suspended.isEmpty, !isBusy() else {
+        guard model.visible, !remoteHosted, !disposed, suspended.isEmpty, !isBusy() else {
             panel.ignoresMouseEvents = true; return
         }
         if model.isPressed { panel.ignoresMouseEvents = false; return }
@@ -238,6 +322,8 @@ final class DesktopPetController {
         panel.orderOut(nil)
         panel.close()
         onReleasedChange = nil
+        onDragMoved = nil; onDragReleased = nil; onDragCancelled = nil
+        onRemoteHostedChange = nil; onRemoteFrame = nil
         isBusy = { true }
     }
 
