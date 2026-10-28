@@ -5,10 +5,12 @@ arguments and answers the way docker does. What these tests prove is what the of
 to do; whether a real container behaves that way is NOT RUN until a real Docker test is approved."""
 import io
 import json
+from pathlib import Path
 import socket
 import subprocess
 import sys
 import tarfile
+import tempfile
 import unittest
 
 from test_runner import RunnerBase, PATCH, CANARY, git, rn
@@ -54,6 +56,24 @@ class FakeDocker:
 
 
 class FlagTests(unittest.TestCase):
+    def test_archive_keeps_scripts_executable_and_strips_special_permissions(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for name, mode in [('check.sh', 0o755), ('special.sh', 0o4755), ('data.txt', 0o644)]:
+                file = root / name
+                file.write_text('#!/bin/sh\nprintf passed\\n\n')
+                file.chmod(mode)
+            data = rd.DockerRunner.archive(root, [{'path': name} for name in ('check.sh', 'special.sh', 'data.txt')])
+            extracted = root / 'sandbox'
+            extracted.mkdir()
+            with tarfile.open(fileobj=io.BytesIO(data)) as archive:
+                self.assertEqual([archive.getmember('work/' + name).mode for name in ('check.sh', 'special.sh', 'data.txt')],
+                                 [0o755, 0o755, 0o644])
+                archive.extractall(extracted, filter='data')
+            run = subprocess.run(['./check.sh'], cwd=extracted / 'work', capture_output=True)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertIn(b'passed', run.stdout)
+
     def test_container_flags_hold_both_red_lines(self):
         args = rd.DockerRunner('neko-runner:v1').create_args('r1')
         joined = ' '.join(args)

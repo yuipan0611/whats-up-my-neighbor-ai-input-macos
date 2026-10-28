@@ -175,9 +175,11 @@ class DockerRunner(runner.Runner):
                 info.type, info.mode, info.uid, info.gid, info.mtime = tarfile.DIRTYPE, 0o755, UID, UID, 0
                 tar.addfile(info)
             for entry in manifest:
-                data = (Path(root) / entry['path']).read_bytes()
+                source = Path(root) / entry['path']
+                data = source.read_bytes()
                 info = tarfile.TarInfo(f"work/{entry['path']}")
-                info.size, info.mode, info.uid, info.gid, info.mtime = len(data), 0o644, UID, UID, 0
+                mode = 0o644 | (source.stat().st_mode & 0o111)
+                info.size, info.mode, info.uid, info.gid, info.mtime = len(data), mode, UID, UID, 0
                 tar.addfile(info, io.BytesIO(data))
         return buffer.getvalue()
 

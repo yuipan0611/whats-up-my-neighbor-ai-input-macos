@@ -225,10 +225,15 @@ class Broker:
     def dispatch(self, action_id, task, tool, args, target, epoch):
         with self.gate:
             with self.store.connect() as c:  # control may have changed while we waited for the gate
-                session = c.execute('SELECT state,control_epoch FROM browser_sessions WHERE id=?', (audit.SESSION,)).fetchone()
-                stopped = c.execute("SELECT 1 FROM settings WHERE key IN ('paused','hands_locked') AND value='1'").fetchone()
+                current = self.task(c, task['id'], task['lease'])
+                session = c.execute('SELECT state,control_epoch,blocked FROM browser_sessions WHERE id=?', (audit.SESSION,)).fetchone()
+                reconcile = session['blocked'] or audit.pending_reconcile(c)
+            if isinstance(current, tuple) or current['attempts'] != task['attempts']:
+                return self.finish(action_id, task, 'not_dispatched', 'stale_lease', 'allow', {}, 409)
+            if reconcile:
+                return self.finish(action_id, task, 'not_dispatched', 'reconcile_pending', 'allow', {}, 503)
             observing = session['state'] == 'resuming' and tool == 'take_snapshot'  # the re-observation before handing back (G4)
-            if (session['state'] != 'agent_running' and not observing) or session['control_epoch'] != epoch or stopped:
+            if (session['state'] != 'agent_running' and not observing) or session['control_epoch'] != epoch:
                 return self.finish(action_id, task, 'not_dispatched', 'held_before_dispatch', 'allow', {}, 409)
             # The page is checked here, outside any database transaction and right before acting on it.
             if target and self.browser.generation(target['tab_id']) != target['generation']:

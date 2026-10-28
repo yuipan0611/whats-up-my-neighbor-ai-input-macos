@@ -41,3 +41,10 @@
 這次是來源與主線整合。VPS 目前沿用先前已驗證的 `0.6.0-workbench.1`；沒有切換尚未實機啟用的 viewer、broker 或追蹤服務。先前 Codex／Docker／公網實機證據保留在 [工作台驗收](../workbench/VERIFICATION.md)。本人登入及三家同一件任務驗收依使用者要求延後，不能將合併或 mock 視為成功登入。
 
 官網沒有推送、合併或發布；Mac 的版本／build／發行檔沒有改動。
+# PR review fixes
+
+- Legacy deployment now exports the complete committed Office source, including package and test helpers. Untracked account data is excluded; uncommitted Office changes stop deployment. A simulated SSH transfer proves the exported entry point starts and its deployment-helper regression test runs.
+- Browser dispatch revalidates task status, lease, attempt and unresolved outcomes after waiting for the dispatch gate. Four queue-race regressions cover cancellation, lease reassignment, attempt changes and a preceding unknown result; none reaches the browser.
+- Docker input archives retain executable bits, strip special permissions and keep sandbox ownership. The regression extracts and directly executes a script from the generated archive.
+- Targeted local validation: browser actions 28/28, browser control 34/34, Docker adapter 20/20, legacy deployment 2/2. The updated full CI must pass before merge; earlier green results do not cover these fixes.
+

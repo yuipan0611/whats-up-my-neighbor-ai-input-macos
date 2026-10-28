@@ -269,6 +269,49 @@ class FailureTests(BrokerBase):
 
 
 class RaceTests(BrokerBase):
+    def queued_action(self, invalidate, expected=(409, 'stale_lease')):
+        result, action = {}, str(uuid.uuid4())
+        worker = threading.Thread(target=lambda: result.setdefault('r', self.act(
+            'navigate', {'url': 'https://example.test/docs'}, action_id=action)))
+        try:
+            with self.broker.gate:
+                worker.start()
+                deadline = time.monotonic() + 5
+                while True:
+                    with self.store.connect() as c:
+                        recorded = c.execute('SELECT 1 FROM browser_actions WHERE action_id=?', (action,)).fetchone()
+                    if recorded:
+                        break
+                    self.assertLess(time.monotonic(), deadline, 'action never reached the dispatch queue')
+                    time.sleep(0.01)
+                invalidate()
+        finally:
+            worker.join(5)
+        self.assertFalse(worker.is_alive())
+        status, body = result['r']
+        self.assertEqual((status, body['reason_code']), expected)
+        self.assertEqual(body['outcome'], 'not_dispatched')
+        self.assertEqual(self.browser.calls, [])
+        self.assertEqual(self.audit(action)[-1]['outcome'], 'not_dispatched')
+
+    def test_cancel_after_acceptance_prevents_queued_navigation(self):
+        self.queued_action(lambda: self.store.cancel(self.task['id']))
+
+    def test_reassigned_lease_prevents_queued_navigation(self):
+        def reassign():
+            with self.store.connect() as c:
+                c.execute("UPDATE tasks SET lease='new-lease',attempts=attempts+1 WHERE id=?", (self.task['id'],))
+        self.queued_action(reassign)
+
+    def test_changed_attempt_with_same_lease_prevents_queued_navigation(self):
+        def reassign():
+            with self.store.connect() as c:
+                c.execute('UPDATE tasks SET attempts=attempts+1 WHERE id=?', (self.task['id'],))
+        self.queued_action(reassign)
+
+    def test_unknown_previous_result_blocks_already_queued_navigation(self):
+        self.queued_action(lambda: self.broker.block('reconcile_pending'), (503, 'reconcile_pending'))
+
     def test_take_waits_for_an_action_in_flight(self):
         self.browser.gate = threading.Event()
         result = {}
