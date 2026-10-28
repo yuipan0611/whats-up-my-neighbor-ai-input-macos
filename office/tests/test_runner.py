@@ -393,7 +393,7 @@ class OfficeWiringTests(RunnerBase):
         self.assertNotIn('execute', self.methods())
         self.assertIn(self.store.get(self.task['id'])['status'], app.ACTIVE)  # the hands task keeps going
         self.assertEqual(self.health(office), {'enabled': True, 'provider': 'fake', 'open': 0, 'needs_person': 0,
-                                               'cleanup_failed': 0})
+                                               'cleanup_failed': 0, 'reachable': None})  # FakeRunner has nothing to probe
 
     def test_health_counts_what_is_left_for_a_person(self):
         run = self.service.execute(self.start()['run_id'], self.lease, ['make'])

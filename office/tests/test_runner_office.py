@@ -168,6 +168,57 @@ class SweepTests(OfficeRunBase):
         self.assertEqual(git(target.worktree, 'rev-list', '--count', self.branch()), '2')  # applied once
 
 
+class CheckedRunner(rn.FakeRunner):
+    """FakeRunner with the self-check DockerRunner has: reachable is what the probe container could reach."""
+
+    def __init__(self, reachable):
+        super().__init__()
+        self.reachable, self.checks = reachable, 0
+
+    def self_check(self):
+        self.checks += 1
+        return list(self.reachable)
+
+
+class SelfCheckTests(OfficeRunBase):
+    def office_with(self, reachable):
+        self.fake = CheckedRunner(reachable)
+        self.office = app.Office(self.store, FakeModel(), sandbox=self.fake, checkouts=self.checkouts)
+        self.bind()
+
+    def test_a_sandbox_that_reaches_the_host_is_never_started(self):
+        self.office_with(['host_loopback'])
+        self.assertEqual(self.office.sandbox_check['reachable'], ['host_loopback'])  # measured at start
+        self.assertEqual(self.refused(self.request(), 409), 'sandbox_unsafe')
+        self.assertFalse((self.root / 'checkouts').exists())
+        self.assertEqual([c for c in self.fake.calls if c[0] == 'create'], [])
+
+    def test_a_passed_check_lasts_ten_minutes_then_is_measured_again(self):
+        self.office_with([])
+        now = [1000.0]
+        self.office.clock = lambda: now[0]
+        self.office.sandbox_check['at'] = now[0]
+        self.office.run_start(self.request())
+        self.assertEqual(self.fake.checks, 1)  # only the start-up check
+        now[0] += 601
+        self.fake.reachable = ['network_gateway']  # e.g. the firewall rules were lost in a reboot
+        for thread in self.office.run_threads.values():
+            thread.join(10)
+        self.assertEqual(self.office.run_status({'task_id': self.task['id'], 'lease': self.lease})['state'], 'published')
+        self.store.cancel(self.task['id'])
+        task = self.office.command({'id': str(uuid.uuid4()), 'prompt': '合成任務：第二件', 'executor': 'hands'})['task']
+        lease = self.store.claim_hands()['lease']
+        self.office.bind_repo(task['id'], {'repo': REPO})
+        with self.assertRaises(app.OfficeError) as e:
+            self.office.run_start({**self.request(), 'task_id': task['id'], 'lease': lease})
+        self.assertEqual((e.exception.extra['reason_code'], self.fake.checks), ('sandbox_unsafe', 2))
+
+    def test_a_fixed_firewall_is_noticed_at_the_next_request(self):
+        self.office_with(['host_address'])
+        self.fake.reachable = []
+        self.assertEqual(self.office.run_start(self.request())['state'], 'ready')
+
+
 class RouteTests(OfficeRunBase):
     def setUp(self):
         super().setUp()

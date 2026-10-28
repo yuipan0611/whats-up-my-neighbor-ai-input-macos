@@ -7,12 +7,15 @@ YUI's two red lines decide what is fixed here; everything else is loosened:
   the inputs already passed runner.select_inputs, which leaves out keys and sign-ins.
 Network at run time is allowed (outbound). Blocking the way back to the host, private ranges and
 cloud metadata is the host firewall's job on the named network; it is set up outside this module.
+self_check() measures that before the office lets any task run here (Docker Desktop on a Mac fails it).
 
-The image has to provide: git, coreutils `timeout`, `sleep`, `sh`, a user 10001 and a /work folder.
+The image has to provide: git, coreutils `timeout`, `sleep`, `sh`, python3, a user 10001 and a /work folder.
 Any docker failure maps to RunnerUnknown, RunnerGone or RunnerFailed; nothing ever falls back to the host.
 Python standard library only."""
 from __future__ import annotations
 import io
+import json
+import socket
 import subprocess
 import tarfile
 import time
@@ -26,6 +29,24 @@ LOG = '/tmp/neko-run.log'
 ENV = {'HOME': '/tmp', 'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'CI': '1'}
 TIMED_OUT = 124  # coreutils timeout: the command ran out of time
 GONE = ('no such container', 'no such object', 'is not running', 'is paused')
+# Runs inside the probe container: one TCP connect per target, all at once. Prints one answer per target.
+PROBE = r'''
+import errno, json, socket, sys, threading
+targets, timeout = json.loads(sys.argv[1]), float(sys.argv[2])
+answers = ['blocked'] * len(targets)
+def knock(i, host, port):
+    try:
+        socket.create_connection((host, port), timeout=timeout).close()
+        answers[i] = 'connected'
+    except (ConnectionRefusedError, ConnectionResetError):
+        answers[i] = 'refused'  # something on the other side answered: the way is open
+    except OSError:
+        pass  # timeout, unreachable, no such name: blocked
+threads = [threading.Thread(target=knock, args=(i, h, p)) for i, (h, p) in enumerate(targets)]
+[t.start() for t in threads]
+[t.join() for t in threads]
+print(json.dumps(answers))
+'''
 
 
 class DockerRunner(runner.Runner):
@@ -60,15 +81,64 @@ class DockerRunner(runner.Runner):
     def container(run_id):
         return f'neko-run-{run_id}'
 
-    def create_args(self, run_id):
-        """Every flag the container starts with. Nothing here mounts, shares or grants from the host."""
-        args = ['create', '--name', self.container(run_id), '--label', f'neko_run={run_id}',
-                '--user', f'{UID}:{UID}', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+    def confined(self):
+        """The flags every container of ours runs with. Nothing here mounts, shares or grants from the host."""
+        args = ['--user', f'{UID}:{UID}', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
                 '--pids-limit', str(self.pids), '--memory', self.memory, '--cpus', self.cpus,
                 '--network', self.network, '--workdir', WORKDIR]
         for key, value in ENV.items():
             args += ['--env', f'{key}={value}']
-        return args + [self.image, 'sleep', 'infinity']
+        return args
+
+    def create_args(self, run_id):
+        return ['create', '--name', self.container(run_id), '--label', f'neko_run={run_id}', *self.confined(),
+                self.image, 'sleep', 'infinity']
+
+    # -- self-check ------------------------------------------------------------------------
+
+    def probe_targets(self, port):
+        """Where a sandbox must not get an answer from: the host's loopback (Docker Desktop forwards it as
+        host.docker.internal), the network's gateway (the host itself), the host's own address, cloud metadata."""
+        targets = [('host_loopback', 'host.docker.internal', port)]
+        try:
+            out = self.call('network', 'inspect', self.network, '--format', '{{range .IPAM.Config}}{{.Gateway}} {{end}}')
+            for gateway in out.stdout.decode().split():
+                targets += [('network_gateway', gateway, port), ('network_gateway_ssh', gateway, 22)]
+        except runner.RunnerError:
+            pass  # the probe container below fails on a missing network too, which fails the check
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(('192.0.2.1', 9))  # UDP connect sends nothing; it only picks the outgoing address
+                address = s.getsockname()[0]
+            if not address.startswith('127.'):
+                targets.append(('host_address', address, port))
+        except OSError:
+            pass
+        return targets + [('cloud_metadata', '169.254.169.254', 80)]
+
+    def self_check(self, timeout=2):
+        """Before any task runs on this network: can a container reach back? Any answer, a connection or a
+        refusal, means the way is open; only silence or 'unreachable' counts as blocked. Returns the names
+        of what was reachable; a probe that cannot run counts as unsafe."""
+        canary = socket.socket()
+        canary.bind(('127.0.0.1', 0))  # a port that answers on the host's loopback only
+        canary.listen(8)
+        try:
+            targets = self.probe_targets(canary.getsockname()[1])
+            out = self.run([self.docker, 'run', '--rm', '--label', 'neko_probe=1', *self.confined(),
+                            '--add-host', 'host.docker.internal:host-gateway', self.image,
+                            'python3', '-c', PROBE, json.dumps([t[1:] for t in targets]), str(timeout)],
+                           input=None, capture_output=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            return ['self_check_failed']
+        finally:
+            canary.close()
+        try:
+            answers = json.loads(out.stdout.decode())
+            assert out.returncode == 0 and isinstance(answers, list) and len(answers) == len(targets)
+        except (ValueError, AssertionError):
+            return ['self_check_failed']
+        return sorted({name for (name, _, _), answer in zip(targets, answers) if answer != 'blocked'})
 
     # -- runner.Runner ---------------------------------------------------------------------
 

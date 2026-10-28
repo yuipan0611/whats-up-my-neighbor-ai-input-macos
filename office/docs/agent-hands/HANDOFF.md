@@ -69,6 +69,15 @@ status: D1–D17 已拍板；H3 有第一件真任務證據、仍待完整驗收
 
 ## 進度紀錄
 
+- 2026-10-28｜Claude Code｜沙盒自我檢查：連得回主機就不開沙盒｜完成（Mac 本機自動測試＋Mac 真 Docker；未碰 VPS、未部署、未 push）
+  - YUI 同意加上。`DockerRunner.self_check()`：開一個和沙盒同樣限制的探測容器（`--rm`，標籤 `neko_probe`），同時試連 5 個目標：主機 loopback（`host.docker.internal`，Linux 上以 `host-gateway` 對應）、沙盒網路閘道（辦公室臨時開的金絲雀埠與 22 埠）、主機自己的對外位址、雲端 metadata `169.254.169.254:80`。**有任何回應（連上或被拒絕）都算連得到**；只有逾時、unreachable、查不到名稱才算擋住。探測跑不起來也算不安全。
+  - 辦公室：啟動時檢查一次；每次開沙盒前，上次通過已超過 10 分鐘就重查（防火牆可能在重開機後消失）；上次沒通過就每次都重查，修好防火牆後下一次請求就會通過。沒通過時 `run/start` 回 409 `sandbox_unsafe`、不 clone、不建容器；`/api/health` 的 `sandbox.reachable` 列出連得到的目標（沒量過是 `null`）；啟動時印 `SANDBOX REFUSED: ...`。辦公室其他功能照常。
+  - 防火牆規則（給 VPS 用）要用 DROP 或 `icmp-admin-prohibited` 拒絕；若用 TCP reset 拒絕，自我檢查會當成「連得到」而不放行。容器連主機自己的位址走的是 INPUT 鏈，只在 DOCKER-USER（FORWARD）加規則擋不到。
+  - 測試：Docker 單元新增 5 項＋探測腳本 1 項（用本機 Python 驗證：有服務在聽算連上、沒在聽算被拒絕、TEST-NET 位址與不存在的名稱算擋住）；辦公室層新增 3 項；突變 6 組（被拒絕算擋住、探測失敗算通過、開沙盒前不檢查、檢查永不過期、拿掉 host-gateway、啟動不檢查）全部抓到。
+  - **Mac 真 Docker：9 項全過**（原 8 項＋自我檢查）。Mac 上 5 個目標全部判定連得到（0.8 秒），辦公室拒絕開沙盒，沒有留下任何容器。和上一則量測不同的是 metadata 這次有回應（推測是 Docker Desktop 的網路層代答），依規則一樣算連得到。功能測試在 Mac 上是明確略過自我檢查才跑的。
+  - 完整回歸 330 項通過、9 項略過（真 Docker 測試）。
+  - Docker Desktop 這輪第一次重開時虛擬機沒起來（後端一直連不到 192.168.65.7），完整關掉再開就正常；測試後已關回去。
+  - **還沒做：** VPS 防火牆與在 VPS 上跑同一份自我檢查（`NEKO_DOCKER_TEST=1 NEKO_DOCKER_EXPECT_ISOLATED=1`），要 YUI 同意；`deploy.sh` 仍缺新模組。
 - 2026-10-28｜Claude Code｜Docker runner：Mac 真 Docker 測試＋連線量測｜功能測試通過；**量到紅線二的洞**（Mac 本機 Docker Desktop 29.6.1；未碰 VPS、未部署、未 push）
   - YUI 同意在 Mac 啟動 Docker Desktop 跑真測試。新增 `office/sandbox/Dockerfile`（`python:3.12-slim-bookworm`＋git、使用者 10001、`/work`；建出來的映像 `sha256:6167ff59…`，約 75MB）與 `office/tests/test_runner_docker_real.py`（**預設略過**，`NEKO_DOCKER_TEST=1` 且 Docker 可用才跑）。
   - **真 Docker 8 項全部通過，連跑兩次**：完整流程經辦公室發布到 `neko/<短碼>`，原 repo 不動，跑完沒有留下容器；容器沒有掛載、非特權、`CapDrop=ALL`、`no-new-privileges`、使用者 10001、沒有對外埠、看不到 Docker socket；辦公室環境變數裡的金絲雀密鑰不在容器內；`/work` 只有指定的檔案；主機上的金絲雀檔案在容器裡找不到；逾時 3 秒會停止並刪除容器；失敗的指令保留 log、不發布；指令文字不會被當成 shell 執行；可以連外網（pypi.org）；取消後 `sweep()` 會刪掉活著的容器；create 回應遺失時，重啟會依標籤找回並刪除。

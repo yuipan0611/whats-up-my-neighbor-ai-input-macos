@@ -4,7 +4,10 @@ No Docker daemon is started or needed: every docker call goes to FakeDocker, whi
 arguments and answers the way docker does. What these tests prove is what the office asks docker
 to do; whether a real container behaves that way is NOT RUN until a real Docker test is approved."""
 import io
+import json
+import socket
 import subprocess
+import sys
 import tarfile
 import unittest
 
@@ -140,6 +143,69 @@ class CallTests(unittest.TestCase):
     def test_destroying_a_gone_container_is_fine(self):
         self.docker.answers['rm'] = FakeDocker.done(b'', 1, b'Error: No such container: c1')
         self.runner.destroy('c1')
+
+
+class SelfCheckTests(unittest.TestCase):
+    def setUp(self):
+        self.docker = FakeDocker()
+        self.runner = rd.DockerRunner('img', network='neko-runner', run=self.docker)
+
+    def probe(self, answers):
+        self.docker.answers['network'] = FakeDocker.done(b'172.18.0.1 ')
+        self.docker.answers['run'] = FakeDocker.done(json.dumps(answers).encode()) if isinstance(answers, list) else answers
+        return self.runner.self_check()
+
+    def targets(self):
+        argv = next(c for c in self.docker.calls if c[1] == 'run')
+        return [tuple(t) for t in json.loads(argv[argv.index(rd.PROBE) + 1])]
+
+    def test_all_blocked_passes(self):
+        self.assertEqual(self.probe(['blocked'] * 5), [])
+        self.docker.answers['network'] = FakeDocker.done(b'172.18.0.1 ')
+        names = [t[0] for t in self.runner.probe_targets(1234)]
+        self.assertEqual(names[:3] + names[-1:], ['host_loopback', 'network_gateway', 'network_gateway_ssh', 'cloud_metadata'])
+
+    def test_any_answer_even_a_refusal_fails(self):
+        self.assertEqual(self.probe(['refused', 'blocked', 'blocked', 'blocked', 'blocked']), ['host_loopback'])
+        self.assertEqual(self.probe(['blocked', 'connected', 'blocked', 'blocked', 'blocked']), ['network_gateway'])
+
+    def test_a_probe_that_cannot_run_counts_as_unsafe(self):
+        for answer in (FakeDocker.done(b'', 125, b'Unable to find image'), FakeDocker.done(b'not json'),
+                       FakeDocker.done(b'["blocked"]'), FileNotFoundError(), subprocess.TimeoutExpired('docker', 60)):
+            with self.subTest(answer=repr(answer)[:40]):
+                self.assertEqual(self.probe(answer), ['self_check_failed'])
+
+    def test_the_probe_container_is_confined_like_a_sandbox(self):
+        self.probe(['blocked'] * 5)
+        argv = next(c for c in self.docker.calls if c[1] == 'run')
+        joined = ' '.join(argv)
+        for needed in ('--rm', '--cap-drop ALL', '--network neko-runner', '--user 10001:10001',
+                       '--add-host host.docker.internal:host-gateway'):
+            self.assertIn(needed, joined)
+        for never in ('-v', '--volume', '--mount', '--privileged'):
+            self.assertNotIn(never, argv)
+        hosts = [t[0] for t in self.targets()]
+        self.assertEqual(hosts[:3], ['host.docker.internal', '172.18.0.1', '172.18.0.1'])
+        self.assertIn('169.254.169.254', hosts)
+
+
+class ProbeScriptTests(unittest.TestCase):
+    """The script that runs inside the probe container, run here with this Python against local addresses."""
+
+    def answers(self, targets, timeout='0.5'):
+        out = subprocess.run([sys.executable, '-I', '-c', rd.PROBE, json.dumps(targets), timeout],
+                             capture_output=True, text=True, timeout=30, check=True)
+        return json.loads(out.stdout)
+
+    def test_listening_closed_and_silent(self):
+        listening = socket.socket(); listening.bind(('127.0.0.1', 0)); listening.listen(1)
+        closed = socket.socket(); closed.bind(('127.0.0.1', 0)); closed_port = closed.getsockname()[1]; closed.close()
+        try:
+            got = self.answers([['127.0.0.1', listening.getsockname()[1]], ['127.0.0.1', closed_port],
+                                ['192.0.2.1', 80], ['no-such-host.invalid', 80]])
+        finally:
+            listening.close()
+        self.assertEqual(got, ['connected', 'refused', 'blocked', 'blocked'])
 
 
 class ServiceTests(RunnerBase):

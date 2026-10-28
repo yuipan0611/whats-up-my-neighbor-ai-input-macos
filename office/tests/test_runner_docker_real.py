@@ -64,6 +64,8 @@ class RealDockerTests(unittest.TestCase):
         (self.root / 'host-canary.txt').write_text('host file, never visible inside\n')
         self.store = app.Store(self.root / 'data')
         self.docker = rd.DockerRunner(IMAGE, network=NETWORK)
+        # Docker Desktop fails the self-check (test_self_check_on_this_host); the functional tests run on it anyway.
+        self.docker.self_check = lambda timeout=2: []
         self.checkouts = rn.Checkouts(self.root / 'checkouts', remote=str(self.root / 'remotes') + '/{repo}')
         self.office = app.Office(self.store, FakeModel(), sandbox=self.docker, checkouts=self.checkouts)
         self.task = self.office.command({'id': str(uuid.uuid4()), 'prompt': '合成任務：改 README', 'executor': 'hands'})['task']
@@ -153,6 +155,23 @@ class RealDockerTests(unittest.TestCase):
         self.store.cancel(self.task['id'])
         self.office.runs.sweep()
         self.assertEqual(self.containers(run['run_id']), [])
+
+    def test_self_check_on_this_host(self):
+        reachable = rd.DockerRunner(IMAGE, network=NETWORK).self_check()
+        desktop = 'docker desktop' in docker('info', '--format', '{{.OperatingSystem}}').stdout.lower()
+        if desktop:
+            self.assertIn('host_loopback', reachable)  # measured 2026-10-28: Docker Desktop forwards the Mac's loopback
+            office = app.Office(self.store, FakeModel(), sandbox=rd.DockerRunner(IMAGE, network=NETWORK),
+                                checkouts=self.checkouts)
+            with self.assertRaises(app.OfficeError) as e:
+                office.run_start({'task_id': self.task['id'], 'lease': self.lease, 'paths': ['README.md'], 'command': ['true']})
+            self.assertEqual(e.exception.extra['reason_code'], 'sandbox_unsafe')
+            self.assertEqual(docker('ps', '-aq', '--filter', 'label=neko_run').stdout.split(), [])
+        elif os.environ.get('NEKO_DOCKER_EXPECT_ISOLATED') == '1':
+            self.assertEqual(reachable, [])  # a host whose firewall is in place
+        else:
+            self.skipTest(f'not Docker Desktop; reachable={reachable}; set NEKO_DOCKER_EXPECT_ISOLATED=1 to require none')
+        self.assertEqual(docker('ps', '-aq', '--filter', 'label=neko_probe').stdout.split(), [])  # --rm left nothing
 
     def test_restart_finds_and_removes_a_container_whose_create_answer_was_lost(self):
         worktree, _, rev = self.checkouts.prepare(self.task['id'], REPO, 'main')

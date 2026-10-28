@@ -1312,9 +1312,13 @@ class Office:
         self.checkouts = (checkouts or runner.Checkouts(store.root.parent / 'checkouts')) if sandbox else None
         self.repos = github_app.GitHubPush(store, None) if sandbox else None  # only bind() is used until H4 is wired
         self.run_threads = {}
+        self.clock = time.monotonic
+        self.sandbox_check = {'reachable': None, 'at': None}  # what a sandbox container could reach, last measured
         if self.runs:
             # After store.recover(): hands tasks keep their lease across a restart, so a live task's run stays live.
+            # Recovery only removes or settles what exists, so it runs even when the self-check fails.
             self.runs.recover(target_for=lambda run: self.checkouts.target(run['task_id']))
+            self.sandbox_safe()
         self.thread = None
 
     def start(self):
@@ -1332,6 +1336,19 @@ class Office:
         except github_app.PushRefused as e:
             raise OfficeError(str(e), e.status, {'reason_code': e.reason})
         return {'task_id': task_id, 'repo': body['repo'], 'base': body.get('base', 'main')}
+
+    SANDBOX_CHECK_SECONDS = 600  # a firewall can vanish with a reboot, so a passed check does not last
+
+    def sandbox_safe(self):
+        """True when a sandbox container cannot reach back to the host, other private addresses or cloud metadata.
+        Measured at start and again before a new sandbox once the last result is older than ten minutes."""
+        check = getattr(self.runs.runner, 'self_check', None)
+        if check is None:
+            return True  # a provider with nothing on this host to reach back to (FakeRunner in tests)
+        last = self.sandbox_check
+        if last['at'] is None or self.clock() - last['at'] >= self.SANDBOX_CHECK_SECONDS or last['reachable']:
+            self.sandbox_check = {'reachable': check(), 'at': self.clock()}
+        return not self.sandbox_check['reachable']
 
     RUN_KEYS = {'task_id', 'lease', 'paths', 'command'}
 
@@ -1353,6 +1370,8 @@ class Office:
                 raise runner.RunRefused('unknown_task', '找不到這件工作。')
             # Checked before anything is cloned: an old attempt or a stopped task gets nothing.
             self.runs.guard({'task_id': task_id, 'attempt': task['attempts']}, lease)
+            if not self.sandbox_safe():
+                raise runner.RunRefused('sandbox_unsafe', '沙盒連得回主機，先修好防火牆；這次沒有開沙盒。')
             if bound is None:
                 raise runner.RunRefused('no_repo', '這件工作沒有設定 repo。')
             worktree, _, source_rev = self.checkouts.prepare(task_id, bound['repo'], bound['base'])
@@ -1914,7 +1933,8 @@ class Handler(BaseHTTPRequestHandler):
                                'provider': provider, 'providers': providers, 'paused': office.store.paused(),
                                'external_connected': provider['authenticated'] and bool(provider['last_success']),
                                'worker_running': bool(office.thread and office.thread.is_alive()),
-                               'sandbox': office.runs.summary() if office.runs else {'enabled': False}})
+                               'sandbox': {**office.runs.summary(), 'reachable': office.sandbox_check['reachable']}
+                                          if office.runs else {'enabled': False}})
             elif path == '/api/tasks':
                 tasks, latest, paused = office.store.snapshot()
                 self.send(200, {'tasks': tasks, 'paused': paused, 'latest_seq': latest})
@@ -2325,6 +2345,9 @@ def main():
           + f'; local entry {local_socket}' + (f'; worker entry {args.worker_socket}' if args.worker_socket else '')
           + ('; dev TCP local mode ON' if args.dev_tcp_local else '') + ('; browser broker ON' if broker else '')
           + (f'; sandbox docker ON ({args.sandbox_image})' if sandbox else ''), flush=True)
+    if sandbox and office.sandbox_check['reachable']:
+        print('SANDBOX REFUSED: a container on ' + args.sandbox_network + ' can reach '
+              + ', '.join(office.sandbox_check['reachable']) + '; no task gets a sandbox until the firewall blocks it', flush=True)
     try:
         server.serve_forever(poll_interval=0.25)
     finally:
