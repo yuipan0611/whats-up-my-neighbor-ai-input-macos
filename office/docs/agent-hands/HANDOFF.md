@@ -69,6 +69,12 @@ status: D1–D17 已拍板；H3 有第一件真任務證據、仍待完整驗收
 
 ## 進度紀錄
 
+- 2026-10-28｜Claude Code｜貓咪 Chrome 的登入規則（YUI 決定）｜只記錄決定，沒有改程式或 VPS
+  - **不複製 YUI 瀏覽器的 cookie。** 要讓貓咪用某個網站，由 YUI 自己經「接手」或 VPS 桌面在貓咪的 Chrome 登入，每個網站是獨立、可單獨踢掉的登入。
+  - ✅ 只讀、沒有付款能力（新聞、文件、論壇、公開資料）：可以直接登入。
+  - ⚠️ 能寫入但不涉及錢（GitHub、Notion）：用貓咪專用帳號、只給必要權限，不用 YUI 主帳號；**登入這一級之前，要先依 PRD 5.2 拆出 `neko-runner`**，否則貓咪跑的程式讀得到這些登入（D13）。
+  - ❌ 不登入：存了卡或能付款的網站（購物、PayPal、銀行、券商、交易所、prop firm）、YUI 的主 Google 帳號、主信箱、Apple ID。
+  - 尚未做（等 YUI 說要做）：把 Chrome 管理政策（關同步、不存密碼／卡／地址）加進 `hands/setup-h3.sh`；「貓咪已登入網站清單」範本；`neko-runner` 拆分。
 - 2026-10-28｜Claude Code｜runner 第一個真 provider（本機 Docker）施工單｜草稿，等 YUI 看過（沒有程式、沒有安裝、沒有啟動 Docker）
   - YUI 決定：輸入用辦公室自己的 clone（固定 commit）；provider 先用本機 Docker；**只守兩條紅線：檔案改壞、刷卡**，其他放寬，執行時可連外網（先前「執行時斷網」草案作廢）。
   - 施工單：[tasks/H3-runner-docker-v1.md](tasks/H3-runner-docker-v1.md)。
