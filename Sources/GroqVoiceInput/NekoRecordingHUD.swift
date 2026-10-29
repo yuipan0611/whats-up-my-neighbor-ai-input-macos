@@ -122,6 +122,15 @@ final class NekoRecordingView: NSView {
         statusLabel.layer?.cornerRadius = 8
         statusLabel.layer?.masksToBounds = true
         detailLabel.isHidden = true
+        detailLabel.frame = NSRect(x: 6, y: 110, width: 172, height: 32)
+        detailLabel.font = .systemFont(ofSize: 10)
+        detailLabel.textColor = NekoAppearance.ink
+        detailLabel.maximumNumberOfLines = 2
+        detailLabel.lineBreakMode = .byWordWrapping
+        detailLabel.wantsLayer = true
+        detailLabel.layer?.backgroundColor = NekoAppearance.background.withAlphaComponent(0.96).cgColor
+        detailLabel.layer?.cornerRadius = 8
+        detailLabel.layer?.masksToBounds = true
         introductionLabel.frame = NSRect(x: 6, y: 88, width: 172, height: 20)
         introductionLabel.font = .systemFont(ofSize: 11, weight: .medium)
         introductionLabel.textColor = NekoAppearance.ink
@@ -160,6 +169,7 @@ final class NekoRecordingView: NSView {
     func update(state: DictationState) {
         startButton.isHidden = true
         introductionLabel.isHidden = true
+        detailLabel.isHidden = true
         setFrameSize(NSSize(width: 184, height: 112))
         startButton.frame.origin.y = 87
         statusLabel.isHidden = state == .recording
@@ -185,9 +195,11 @@ final class NekoRecordingView: NSView {
         needsDisplay = true
     }
 
-    func showMessage(_ message: String, detail: String) {
+    func showMessage(_ message: String, detail: String, showsDetail: Bool = false) {
         statusLabel.stringValue = message
         detailLabel.stringValue = detail
+        detailLabel.isHidden = !showsDetail
+        setFrameSize(NSSize(width: 184, height: showsDetail ? 146 : 112))
     }
 
     func configurePreview(shortcut: String, showIntroduction: Bool) {
@@ -315,14 +327,14 @@ final class NekoRecordingHUD {
         view.updateMeter(decibels: decibels, elapsed: Date().timeIntervalSince(startedAt))
     }
 
-    func showResult(_ message: String, detail: String) {
+    func showResult(_ message: String, detail: String, showsDetail: Bool = false, duration: TimeInterval = 1.5) {
         dismissResult?.cancel()
         view.update(state: .idle)
-        view.showMessage(message, detail: detail)
+        view.showMessage(message, detail: detail, showsDetail: showsDetail)
         present()
         let task = DispatchWorkItem { [weak self] in self?.hide() }
         dismissResult = task
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: task)
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: task)
     }
 
     func showIntroductionIfNeeded(shortcut: String) {

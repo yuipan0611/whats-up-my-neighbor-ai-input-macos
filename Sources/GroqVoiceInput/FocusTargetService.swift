@@ -96,11 +96,12 @@ final class FocusTargetService {
     /// Local dictation permits five minutes of recording plus transcription time.
     /// Relay callers explicitly retain their existing five-minute lifetime.
     func captureTarget(
-        ttl: TimeInterval = 600, policy: FocusTargetPolicy = .remoteStrict
+        ttl: TimeInterval = 600, policy: FocusTargetPolicy = .remoteStrict,
+        beginDiagnosticCapture: Bool = true
     ) throws -> FocusTarget {
         let trusted = environment.isAccessibilityTrusted()
         PasteDiagnostics.shared.record(.init(tag: .capture, trusted: trusted,
-                                              localPolicy: policy == .localDictation), beginCapture: true)
+                                              localPolicy: policy == .localDictation), beginCapture: beginDiagnosticCapture)
         guard trusted else {
             PasteDiagnostics.shared.record(.init(tag: .captureResult, accepted: false, failure: .accessibilityDenied))
             throw FocusTargetError.accessibilityDenied

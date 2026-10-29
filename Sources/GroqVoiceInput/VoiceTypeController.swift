@@ -70,6 +70,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     }()
     private var dictationTarget: FocusTarget?
     private var targetCaptureFailure: FocusTargetError?
+    private let dictationFocusTrace = DictationFocusTrace()
     private lazy var dictation = DictationCoordinator(
         recorder: micRecorder,
         transcriber: GroqDictationTranscriber(
@@ -319,7 +320,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     private func configureDictation() {
         nekoHUD.onCancel = { [weak self] in self?.dictation.cancel() }
         nekoHUD.onFinish = { [weak self] in self?.finishDictation(method: .hudButton) }
-        nekoHUD.onStart = { [weak self] in self?.toggleRecording() }
+        nekoHUD.onStart = { [weak self] in self?.toggleRecording(stopMethod: .hudButton) }
         dictation.onStateChange = { [weak self] state in self?.renderDictationState(state) }
         dictation.onError = { [weak self] message in self?.showError(message) }
         dictation.consumeTranscript = { [weak self] text in self?.consumeCatGreeting(text) ?? false }
@@ -769,13 +770,18 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     // 3. 在啟動錄音的「同一瞬間」立即快照目前的焦點文字輸入框（captureTarget），避免使用者在錄音期間切換視窗。
     private func finishDictation(method: PasteDiagnostics.StopMethod) {
         guard dictation.state == .recording else { return }
+        dictationFocusTrace.checkpoint(.beforeStop)
         PasteDiagnostics.shared.record(.init(tag: .recordingStop, stopMethod: method))
         dictation.stop()
     }
 
     func toggleRecording(useAlternateMode: Bool = false, stopMethod: PasteDiagnostics.StopMethod = .shortcut) {
+        let starting = dictation.canStart
+        if starting { dictationFocusTrace.begin(method: stopMethod) }
+        defer { if starting && dictation.canStart { dictationFocusTrace.end() } }
         clipboardPasteGesture.cancelPending()
         clipboardPicker.dismiss()
+        if starting { dictationFocusTrace.checkpoint(.afterControls) }
         if PasteDiagnostics.shared.isEnabled {
             var event = PasteDiagnostics.Event(tag: .toggle)
             event.canStart = dictation.canStart
@@ -800,7 +806,8 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         correctionMonitor.stop(reason: "錄音中；完成貼上後才開始觀察修正。")
         dictationTarget = nil
         targetCaptureFailure = nil
-        do { dictationTarget = try focusTargets.captureTarget(ttl: 600, policy: .localDictation) }
+        do { dictationTarget = try focusTargets.captureTarget(ttl: 600, policy: .localDictation,
+                                                            beginDiagnosticCapture: !dictationFocusTrace.isActive) }
         catch let error as FocusTargetError { targetCaptureFailure = error }
         catch { targetCaptureFailure = .noEditableTarget }
         let snapshot = DictationSettings(
@@ -834,12 +841,15 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         statusMenu.cancelMenuItem.isEnabled = state != .idle
         switch state {
         case .idle:
+            dictationFocusTrace.end()
             dictationTarget = nil
             targetCaptureFailure = nil
             resetStatus()
         case .starting:
+            dictationFocusTrace.checkpoint(.starting)
             statusMenu.updateIcon(.processing, description: "準備錄音")
         case .recording:
+            dictationFocusTrace.checkpoint(.recording)
             statusMenu.updateIcon(.recording, description: "正在錄音")
             NSSound(named: "Tink")?.play()
             let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
@@ -907,6 +917,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     }
 
     private func insertDictationText(_ text: String) -> Bool {
+        dictationFocusTrace.checkpoint(.beforeDelivery)
         let result = textInsertion.insert(text, target: dictationTarget, captureFailure: targetCaptureFailure)
         switch result {
         case .pasteEventPosted:
@@ -917,22 +928,23 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             NSSound(named: "Glass")?.play()
             return true
         case .copiedOnly(let reason):
-            nekoHUD.showResult("文字已複製", detail: "請回到輸入框手動貼上")
             vocabularyLearning.report("本次只複製，未驗證貼入範圍，因此不會自動學習；可手動新增詞條。")
             let message: String
             switch reason {
             case .accessibilityDenied:
-                message = "文字已複製到剪貼簿，但尚未取得「輔助使用」權限，請手動貼上。"
+                message = "請到系統設定允許輔助使用，之後可自動貼上。"
             case .noEditableTarget, .noTarget:
-                message = "文字已複製到剪貼簿。開始錄音時未找到可驗證的輸入框，請先貼上這次文字；下次先點一下要輸入的位置再錄音。"
+                message = "開始錄音時未鎖定輸入框，請點選要貼上的位置。"
             case .targetChanged:
-                message = "文字已複製到剪貼簿。錄音期間的 App 或輸入框已改變，請在需要的位置手動貼上。"
+                message = "錄音期間輸入位置已改變，請在需要的位置貼上。"
             case .targetExpired:
-                message = "文字已複製到剪貼簿。這次輸入位置已逾時，請手動貼上。"
+                message = "這次輸入位置已逾時，請點選要貼上的位置。"
             case .eventUnavailable:
-                message = "文字已複製到剪貼簿，但系統未能建立貼上按鍵，請手動貼上。"
+                message = "系統未能建立貼上按鍵，請手動貼上。"
             }
-            DispatchQueue.main.async { [weak self] in self?.showError(message) }
+            // Copy-only recovery must not activate this app: the modal error
+            // stole the destination's keyboard focus and forced another click.
+            nekoHUD.showResult("已複製，請按 ⌘V", detail: message, showsDetail: true, duration: 6)
             return true
         case .copyFailed:
             return false

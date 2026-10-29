@@ -69,6 +69,15 @@ struct NekoHUDTests {
         let visibleLabels = {
             view.subviews.compactMap { $0 as? NSTextField }.filter { !$0.isHidden }
         }
+        view.update(state: .idle)
+        view.showMessage("已複製，請按 ⌘V", detail: "請點選要貼上的位置。", showsDetail: true)
+        precondition(visibleLabels().map(\.stringValue).contains("請點選要貼上的位置。"),
+                     "Copy-only recovery must explain what to do inside the nonactivating HUD")
+        precondition(view.bounds.height == 146)
+        precondition(visibleLabels().allSatisfy { view.bounds.contains($0.frame) && !$0.isSelectable })
+        view.update(state: .recording)
+        precondition(visibleLabels().isEmpty && view.bounds.height == 112,
+                     "The next recording must remove the recovery hint and restore the compact cat")
         view.configurePreview(shortcut: "⌥↑", showIntroduction: false)
         precondition(visibleStartButtons().isEmpty && visibleLabels().isEmpty,
                      "Ordinary previews must show only the cat, without a start button or replacement hint")

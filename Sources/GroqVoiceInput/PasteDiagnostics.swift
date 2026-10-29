@@ -15,6 +15,7 @@ final class PasteDiagnostics {
         case snapshotFrontmost = "snapshot.frontmost"
         case focusSystemQuery = "focus.system.query"
         case focusApplicationQuery = "focus.application.query"
+        case focusCheckpoint = "focus.checkpoint"
         case snapshotIdentity = "snapshot.identity"
         case snapshotCapabilities = "snapshot.capabilities"
         case validation = "validation"
@@ -31,6 +32,8 @@ final class PasteDiagnostics {
     }
 
     enum StopMethod: String, Codable { case shortcut, hudButton, menu }
+    enum FocusPhase: String, Codable { case beforeControls, afterControls, starting, recording, beforeStop, beforeDelivery }
+    enum FocusSource: String, Codable { case system, application }
 
     enum Failure: String, Codable {
         case accessibilityDenied, noEditableTarget, targetChanged, targetExpired
@@ -81,6 +84,10 @@ final class PasteDiagnostics {
     struct Event: Codable {
         let tag: Tag
         var stopMethod: StopMethod? = nil
+        var startMethod: StopMethod? = nil
+        var focusPhase: FocusPhase? = nil
+        var focusSource: FocusSource? = nil
+        var focused: Bool? = nil
         var trusted: Bool? = nil
         var localPolicy: Bool? = nil
         var canStart: Bool? = nil
@@ -143,7 +150,7 @@ final class PasteDiagnostics {
     }
 
     private struct Report: Codable {
-        var schemaVersion = 2
+        var schemaVersion = 3
         let events: [Event]
         let lastFailure: [Event]?
     }
@@ -163,7 +170,7 @@ final class PasteDiagnostics {
                size.intValue <= 65_536,
                let data = try? Data(contentsOf: url),
                let report = try? JSONDecoder().decode(Report.self, from: data),
-               report.schemaVersion == 2, let failure = report.lastFailure,
+               (2...3).contains(report.schemaVersion), let failure = report.lastFailure,
                failure.last?.tag == .insertionResult, failure.last?.failure != nil {
                 lastFailure = Array(failure.suffix(40))
             }
