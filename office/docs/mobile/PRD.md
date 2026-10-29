@@ -19,7 +19,7 @@ YUI 人在外面時，用 iPhone Chrome 打開貓咪辦公室交辦工作。關�
 - **D1 = N2**：公網 HTTPS/WSS。
 - **D2 = W**：WebSocket。
 - **D3 = VPS CLI**：用 `office.py pair` 產生配對碼。
-- **D4 = 暫不做通知。**
+- **D4 = 暫不做通知。**（2026-10-23 由 `docs/agent-hands/PRD.md` 的 D11 取代：工作會停下來等使用者登入或點頭，改用 Telegram 只送「有 1 件等你」，不送內容。）
 
 N1（Tailscale）與 S（SSE）保留在下文，作為日後替代方案的紀錄。**若第 5–7 節的細節與第 13 節衝突，以第 13 節「API 契約 v1」為準。**
 

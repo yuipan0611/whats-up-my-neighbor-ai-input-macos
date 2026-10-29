@@ -1,6 +1,9 @@
+import http.client
+import http.server
 import importlib.util
 import json
 from pathlib import Path
+import socket
 import sys
 import tempfile
 import subprocess
@@ -14,10 +17,39 @@ import uuid
 spec = importlib.util.spec_from_file_location('office_app', Path(__file__).parents[1] / 'office.py')
 app = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(app)
+LOCAL_HOST = '127.0.0.1:18421'
+
+
+class UnixHTTPConnection(http.client.HTTPConnection):
+    """HTTP over the office's private socket, as the Mac's SSH tunnel delivers it."""
+    def __init__(self, socket_path, timeout=5):
+        super().__init__('127.0.0.1', 18421, timeout=timeout)
+        self.socket_path = str(socket_path)
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(self.socket_path)
+
+
+def local_request(socket_path, path, body=None, headers=None, method=None):
+    conn = UnixHTTPConnection(socket_path)
+    try:
+        try:
+            conn.request(method or ('GET' if body is None else 'POST'), path, body, headers or {})
+        except BrokenPipeError:
+            # A rejected large upload may receive its HTTP error before sendall finishes.
+            # Still require a valid response below; an absent/wrong response remains a test failure.
+            pass
+        response = conn.getresponse()
+        return response.status, response.read(), response.headers
+    finally:
+        conn.close()
 
 
 class FakeModel:
     model = 'test-model'
+    def health(self):
+        return {'ready':True,'name':self.model,'digest':'fake'}
     def __init__(self, action='write', result='測試成果', question='', source='', hook=None, truncated=False):
         self.action, self.result, self.question, self.source = action, result, question, source
         self.hook, self.truncated = hook, truncated
@@ -185,26 +217,96 @@ class OfficeTests(unittest.TestCase):
         self.assertEqual(e.exception.code,413)
 
 
+class FakeOllama(http.server.ThreadingHTTPServer):
+    """Loopback stand-in for Ollama: a chat with no messages only loads; any other chat loads first if needed."""
+    def __init__(self, load_delay):
+        self.load_delay, self.loaded, self.requests = load_delay, False, []
+        super().__init__(('127.0.0.1', 0), FakeOllamaHandler)
+        threading.Thread(target=self.serve_forever, daemon=True).start()
+    def close(self):
+        self.shutdown(); self.server_close()
+
+
+class FakeOllamaHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        self.server.requests.append(body)
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/x-ndjson')
+        if not body['messages']:
+            time.sleep(self.server.load_delay)
+            try:
+                self.end_headers()
+                self.wfile.write(json.dumps({'model': body['model'], 'done': True, 'done_reason': 'load'}).encode())
+                self.server.loaded = True
+            except OSError:
+                pass
+            return
+        if not self.server.loaded:
+            time.sleep(self.server.load_delay)
+        self.end_headers()
+        for line in ({'message': {'content': '已完成'}, 'done': False},
+                     {'message': {'content': ''}, 'done': True, 'done_reason': 'stop', 'eval_count': 2}):
+            self.wfile.write((json.dumps(line, ensure_ascii=False) + '\n').encode())
+
+
+class OllamaLoadTests(unittest.TestCase):
+    def model(self, load_delay, load_seconds=5):
+        server = FakeOllama(load_delay)
+        self.addCleanup(server.close)
+        model = app.Ollama('gemma3:4b', f'http://127.0.0.1:{server.server_address[1]}')
+        model.LOAD_SECONDS, model.READ_SECONDS = load_seconds, 0.3
+        return model, server
+    def test_cold_load_longer_than_read_timeout_completes(self):
+        model, server = self.model(load_delay=1.0)
+        text, metrics = model.generate('系統', '交辦', lambda: None, lambda n: None)
+        self.assertEqual(text, '已完成')
+        self.assertGreaterEqual(metrics['load_seconds'], 1.0)
+        load, chat = server.requests
+        self.assertEqual(load['messages'], [])
+        # Matching runner options keep Ollama from reloading the model for the real chat.
+        self.assertEqual({k: chat['options'][k] for k in load['options']}, load['options'])
+        self.assertEqual(load['keep_alive'], chat['keep_alive'])
+    def test_warm_model_loads_instantly(self):
+        model, server = self.model(load_delay=0)
+        server.loaded = True
+        _, metrics = model.generate('系統', '交辦', lambda: None, lambda n: None)
+        self.assertLess(metrics['load_seconds'], 0.3)
+    def test_cancel_during_load_stops_without_chatting(self):
+        model, server = self.model(load_delay=2.0)
+        started = time.monotonic()
+        def check():
+            if time.monotonic() - started > 0.3:
+                raise app.Cancelled()
+        with self.assertRaises(app.Cancelled):
+            model.generate('系統', '交辦', check, lambda n: None)
+        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertEqual(len(server.requests), 1)
+    def test_load_past_its_limit_fails_clearly(self):
+        model, server = self.model(load_delay=2.0, load_seconds=0.5)
+        with self.assertRaises(app.OfficeError) as e:
+            model.generate('系統', '交辦', lambda: None, lambda n: None)
+        self.assertIn('Gemma 模型載入失敗', str(e.exception))
+        self.assertEqual(len(server.requests), 1)
+
+
 class HTTPTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory()
         self.store=app.Store(Path(self.temp.name)/'data')
         self.office=app.Office(self.store,FakeModel())
-        self.server=app.Server(0,self.office)
+        self.socket_path=Path(self.temp.name)/'run/office.sock'
+        self.server=app.Server(0,self.office,local_socket=self.socket_path)
         self.thread=threading.Thread(target=self.server.serve_forever,daemon=True)
         self.thread.start()
-        self.url='http://127.0.0.1:'+str(self.server.server_port)
     def tearDown(self):
         self.server.shutdown();self.server.server_close();self.thread.join()
         self.temp.cleanup()
     def request(self,path,body=None,headers=None):
-        req=urllib.request.Request(self.url+path,None if body is None else json.dumps(body).encode(),headers or {})
-        try:
-            with urllib.request.urlopen(req,timeout=2) as r:
-                return r.status,r.read(),dict(r.headers)
-        except urllib.error.HTTPError as e:
-            with e:
-                return e.code,e.read(),dict(e.headers)
+        code,data,headers=local_request(self.socket_path,path,None if body is None else json.dumps(body).encode(),headers)
+        return code,data,dict(headers)
     def test_cross_origin_and_rebinding_rejected(self):
         self.assertEqual(self.request('/api/tasks',headers={'Host':'evil.example'})[0],421)
         self.assertEqual(self.request('/api/tasks',headers={'Origin':'https://evil.example'})[0],403)

@@ -15,7 +15,7 @@ import unittest
 import urllib.error
 import urllib.request
 import uuid
-from test_office import app, FakeModel
+from test_office import app, FakeModel, LOCAL_HOST, local_request
 
 PUBLIC_HOST = 'office.test.example'
 PUBLIC = 'https://' + PUBLIC_HOST
@@ -27,9 +27,16 @@ def uid():
 
 
 class WS:
-    """Minimal RFC 6455 client: masked frames out, unmasked frames in."""
-    def __init__(self, port, path, headers):
-        self.sock = socket.create_connection(('127.0.0.1', port), timeout=5)
+    """Minimal RFC 6455 client: masked frames out, unmasked frames in.
+
+    `address` is a TCP port (public mode) or the private socket path (local mode)."""
+    def __init__(self, address, path, headers):
+        if isinstance(address, int):
+            self.sock = socket.create_connection(('127.0.0.1', address), timeout=5)
+        else:
+            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.sock.settimeout(5)
+            self.sock.connect(str(address))
         self.key = base64.b64encode(os.urandom(16)).decode()
         lines = [f'GET {path} HTTP/1.1', 'Upgrade: websocket', 'Connection: Upgrade',
                  f'Sec-WebSocket-Key: {self.key}', 'Sec-WebSocket-Version: 13']
@@ -100,12 +107,13 @@ class Base(unittest.TestCase):
         self.data = Path(self.temp.name) / 'data'
         self.store = app.Store(self.data)
         self.office = app.Office(self.store, FakeModel())
-        self.server = app.Server(0, self.office, PUBLIC)
+        self.socket_path = Path(self.temp.name) / 'run' / 'office.sock'
+        self.server = app.Server(0, self.office, PUBLIC, self.socket_path)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.port = self.server.server_port
         self.url = f'http://127.0.0.1:{self.port}'
-        self.local = {'Host': f'127.0.0.1:{self.port}'}
+        self.local = {'Host': LOCAL_HOST}
         self.sockets = []
 
     def tearDown(self):
@@ -115,8 +123,13 @@ class Base(unittest.TestCase):
         self.temp.cleanup()
 
     def request(self, path, body=None, headers=None, method=None):
+        """No Host, or the tunnel's Host, means the Mac's private socket; anything else is TCP."""
         data = None if body is None else json.dumps(body).encode()
-        req = urllib.request.Request(self.url + path, data, headers or {}, method=method)
+        headers = headers or {}
+        if headers.get('Host', LOCAL_HOST) == LOCAL_HOST:
+            status, raw, response_headers = local_request(self.socket_path, path, data, {**headers, 'Host': LOCAL_HOST}, method)
+            return status, json_or_bytes(raw), response_headers
+        req = urllib.request.Request(self.url + path, data, headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=5) as r:
                 return r.status, json_or_bytes(r.read()), r.headers
@@ -144,7 +157,8 @@ class Base(unittest.TestCase):
         return cookie, body
 
     def ws(self, path='/api/ws?after=0', headers=None):
-        ws = WS(self.port, path, headers if headers is not None else {'Host': f'127.0.0.1:{self.port}'})
+        headers = headers if headers is not None else dict(self.local)
+        ws = WS(self.socket_path if headers.get('Host') == LOCAL_HOST else self.port, path, headers)
         self.sockets.append(ws)
         return ws
 
@@ -199,7 +213,9 @@ class SyncTests(Base):
 class BoundaryTests(Base):
     def test_modes(self):
         self.assertEqual(self.request('/api/bootstrap', headers=self.local)[0], 200)
-        self.assertEqual(self.request('/api/tasks', headers={'Host': f'127.0.0.1:{self.port}', 'X-Forwarded-For': '1.2.3.4'})[0], 421)
+        forwarded = {**self.local, 'X-Forwarded-For': '1.2.3.4'}
+        self.assertEqual(local_request(self.socket_path, '/api/tasks', headers=forwarded)[0], 421)
+        self.assertEqual(self.request('/api/tasks', headers={'Host': f'127.0.0.1:{self.port}'})[0], 421)
         self.assertEqual(self.request('/api/tasks', headers={'Host': 'other.example'})[0], 421)
         status, _, headers = self.request('/', headers=self.public())
         self.assertEqual(status, 200)
@@ -417,11 +433,13 @@ class WebSocketTests(Base):
         self.assertEqual(self.public_ws(cookie).status, 101)
         status, _, headers = self.request('/api/ws', headers=self.local)
         self.assertEqual((status, headers['Upgrade']), (426, 'websocket'))
-        bad = WS(self.port, '/api/ws', {**self.local})
+        bad = WS(self.socket_path, '/api/ws', {**self.local})
         self.sockets.append(bad)
         bad.sock.close()
-        raw = socket.create_connection(('127.0.0.1', self.port), timeout=5)
-        raw.sendall(f'GET /api/ws HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: short\r\nSec-WebSocket-Version: 13\r\n\r\n'.encode())
+        raw = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        raw.settimeout(5)
+        raw.connect(str(self.socket_path))
+        raw.sendall(f'GET /api/ws HTTP/1.1\r\nHost: {LOCAL_HOST}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: short\r\nSec-WebSocket-Version: 13\r\n\r\n'.encode())
         self.assertIn(b' 400 ', raw.recv(200)); raw.close()
 
     def test_revoke_closes_socket_with_4401(self):

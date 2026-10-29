@@ -2,7 +2,9 @@
 
 狀態（2026-10-22）：公網 HTTPS／WSS 已部署。iPhone Chrome 開啟配對頁無憑證警告，已配對、交辦，並在鎖屏超過五分鐘後確認仍能看到完成成果與進度。手動斷網重送、撤銷這台 iPhone 尚未實測；自動測試已涵蓋重送與短暫測試裝置撤銷。詳細證據見 `reports/office-mobile/PUBLIC-DEPLOYMENT-2026-10-22.md`。
 
-目前版本：`current` 指向 `releases/public-20261022-5f9c559`（main `5f9c559`，含手機聊天介面與附件），上一版是 `releases/public-20261022-fix3`。上面的 iPhone 驗收是在上一版完成的；新版只跑過 VPS 測試與公網 HTTPS／WSS 檢查，新介面與附件還沒在 iPhone 驗收。部署紀錄見 `reports/office-mobile/DEPLOY-5f9c559-2026-10-22.md`。
+目前版本（2026-10-23 14:10 UTC 起）：`current` 指向 `releases/public-20261023-f74a50a`，也就是 office 0.5.1（分支 `claude/agent-hands-prd` 的 `f74a50a`，**尚未合併 main**）。上一版是 `releases/public-20261023-11a383a`（0.5.0）。release 從這一版起多放 `hands/`，讓 worker 測試也能在 VPS 上跑；服務不使用它，worker 實際裝在 `/opt/neko-hands`。部署紀錄見 `reports/agent-hands/DEPLOY-0.5.1-2026-10-23.md`。每次部署後，從 Mac 執行 `python3 -I office/verify_public.py --expect-version <版本>`，共 27 項。
+
+上面的 iPhone 驗收是在 `fix3` 完成的；5f9c559 起的新聊天介面與附件，還沒在 iPhone 驗收。
 
 ## 架構
 
@@ -10,7 +12,11 @@
 iPhone Chrome
   → https://office.nekonode.cloud / wss://office.nekonode.cloud/api/ws
   → Caddy :443
-  → 127.0.0.1:8421（neighbor-office.service）
+  → 127.0.0.1:8421（neighbor-office.service，只認公網模式）
+
+Mac（open-office.command）
+  → SSH 轉送 127.0.0.1:18421
+  → ~/neighbor-office/run/office.sock（本機模式；0.4.0 起，權限 600）
 ```
 
 Caddy 設定範本在 `office/services/Caddyfile.public.example`。Caddy 的 `reverse_proxy` 會處理 WebSocket 升級；office 仍只監聽 VPS 本機位址。主網域 `nekonode.cloud` 不變。
@@ -33,6 +39,39 @@ YUI 已同意部署 `office.nekonode.cloud`。本次使用 Hostinger DNS 與 VPS
 4. UFW 只開放 22／80／443；8421 維持 loopback。公開端已驗證 HTTPS 憑證、HTTP 轉 HTTPS、匿名 API 拒絕與 WSS 連線／撤銷。每次更新都重跑這些檢查。
 5. 若更新失敗，將 `current` 指回上個版本並重啟服務；必要時使用上述備份還原資料。不要刪除使用中的資料目錄。
 6. 2026-10-22 更新到 main `5f9c559`：切換前的備份在 `~/neighbor-office/backups/pre-5f9c559-20261022T070121Z`，回復時把 `current` 指回 `releases/public-20261022-fix3`。服務是使用者層級的 unit，重啟要用 `systemctl --user restart neighbor-office.service`。
+7. **0.4.0（本機入口改為私有 socket）：2026-10-23 07:48 UTC 經 YUI 同意後部署**
+   - **備份：** `~/neighbor-office/backups/pre-52108bd-20261023T074835Z`。
+   - **檢查：** `verify_public.py` 27 項全過。
+   - **回復：** `ln -sfn releases/public-20261022-5f9c559 current.new && mv -T current.new current`，再重啟。
+8. **0.5.0（worker API、hands 執行者、收回開關；開啟 worker 入口）：2026-10-23 13:39 UTC 經 YUI 同意後部署**
+   - **服務設定：** user unit 的 ExecStart 加上 `--worker-socket /srv/neko-office/worker.sock`。範本 `services/neighbor-office-public.service.example` 已同步。
+   - **前提：** H1 建好的 `/srv/neko-office`，neighbor:neko，權限 2750。
+   - **備份：** `~/neighbor-office/backups/pre-11a383a-20261023T133923Z`（含部署前的 unit 檔）。
+   - **檢查：**
+     - `verify_public.py` 27 項全過。
+     - `worker.sock` 為 `srw-rw---- neighbor:neko`。
+     - neko-hands 能 claim；碰擁有者的路徑一律 404。
+     - 其他使用者連不上 worker socket。
+   - **回復：**
+     1. `ln -sfn releases/public-20261023-52108bd current.new && mv -T current.new current`。
+     2. 把 unit 換回備份裡的版本。
+     3. `systemctl --user daemon-reload`，再重啟。
+     - 資料表多出的欄位不影響 0.4.0。
+9. **0.5.1（hands 任務提早停下時，也顯示原因）：2026-10-23 14:10 UTC 經 YUI 同意後部署**
+   - **備份：** `backups/pre-f74a50a-20261023T141025Z`。
+   - **檢查：** VPS 上 114 項測試通過（含 10 項 worker 測試）；`verify_public.py` 27 項全過；worker 在辦公室重啟後照常運作。
+   - **回復：** `current` 指回 `releases/public-20261023-11a383a`，再重啟。
+   - **release 打包：** 從這一版起，`git archive` 要包含 `office/hands`。上一次沒包到時，VPS 上的 worker 測試匯入失敗，所以重新打包。
+   - **服務設定不用改：** socket 預設放在 `--data` 旁邊的 `run/office.sock`。
+   - **切換後檢查：**
+     - `stat -c '%A %U' ~/neighbor-office/run/office.sock` 應為 `srw------- neighbor`。
+     - VPS 上 `curl -H 'Host: 127.0.0.1:8421' http://127.0.0.1:8421/api/bootstrap` 應回 **421**。
+     - 用 `curl --unix-socket` 連 socket 應回 200。
+     - Mac 用新版 `open-office.command` 能開啟辦公室。
+     - 再跑一次上方的公網檢查。
+   - **Mac 舊通道：** 舊版 `open-office.command`（直接轉送到 8421）在切換後會拿到 421。新版會自動判斷：VPS 有 socket 就轉送到 socket，沒有就沿用 8421，所以 Mac 和 VPS 不用同時更新。
+   - **VPS 桌面捷徑：** `~/Desktop/neighbor-office.desktop` 用的是 TCP 本機模式，切換後會失效，這是刻意的。H1 會把桌面交給貓咪的手（neko-hands）；那個桌面上的瀏覽器永遠不能進辦公室，也永遠不和辦公室配對。
+   - **回復：** 把 `current` 指回 `releases/public-20261022-5f9c559` 並重啟。舊版不會用到 socket；`run/` 目錄留著也沒有影響。
 
 ## iPhone 配對
 

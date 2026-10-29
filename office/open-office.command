@@ -7,6 +7,11 @@ if /usr/bin/curl -fsS --max-time 2 http://127.0.0.1:18421/api/health 2>/dev/null
   echo '已沿用現有的貓咪辦公室連線。'
   exit 0
 fi
+# Since office 0.4.0, local mode is only on its private Unix socket: any process on
+# the VPS can reach the loopback port. An older service without the socket keeps the port.
+TARGET=$(/usr/bin/ssh -o BatchMode=yes -o StrictHostKeyChecking=yes neighbor-vps \
+  'sock="$HOME/neighbor-office/run/office.sock"; if [ -S "$sock" ]; then printf %s "$sock"; else printf %s 127.0.0.1:8421; fi') \
+  || { echo '無法連到 VPS，請檢查 SSH 別名 neighbor-vps。'; exit 1; }
 SSH_PID=''
 cleanup() {
   if [[ -n "$SSH_PID" ]]; then
@@ -15,7 +20,7 @@ cleanup() {
   fi
 }
 trap cleanup EXIT INT TERM
-/usr/bin/ssh -N -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -L 127.0.0.1:18421:127.0.0.1:8421 neighbor-vps &
+/usr/bin/ssh -N -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -L "127.0.0.1:18421:$TARGET" neighbor-vps &
 SSH_PID=$!
 for attempt in {1..20}; do
   kill -0 "$SSH_PID" 2>/dev/null || { echo '連線未建立，可能已有另一個辦公室入口開著。'; exit 1; }

@@ -1,24 +1,35 @@
 """End-to-end acceptance using synthetic Chinese notes and a real local model."""
+import http.client
+import io
 import json
 from pathlib import Path
+import socket
 import subprocess
 import time
 import urllib.error
-import urllib.request
 import uuid
 
-BASE='http://127.0.0.1:8421'
+SOCKET=Path.home()/'neighbor-office/run/office.sock'
 ROOT=Path.home()/'neighbor-office/data'
 report={'started_at':time.time(),'checks':[],'tasks':{}}
 token=''
-def get(path):
-    with urllib.request.urlopen(BASE+path,timeout=10) as r:return json.load(r)
+class LocalConnection(http.client.HTTPConnection):
+    """Local mode lives on the private socket since 0.4.0; loopback TCP no longer serves it."""
+    def connect(self):
+        self.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);self.sock.settimeout(self.timeout);self.sock.connect(str(SOCKET))
+def call(method,path,body=None,headers=None):
+    c=LocalConnection('127.0.0.1',18421,timeout=10)
+    try:
+        c.request(method,path,body,headers or {});r=c.getresponse();data=r.read()
+    finally:c.close()
+    if r.status>=400:raise urllib.error.HTTPError(path,r.status,r.reason,r.headers,io.BytesIO(data))
+    return json.loads(data)
+def get(path):return call('GET',path)
 def auth():
     global token
     token=get('/api/bootstrap')['token']
 def post(path,body):
-    req=urllib.request.Request(BASE+path,json.dumps(body,ensure_ascii=False).encode(),{'Content-Type':'application/json','X-Office-Token':token})
-    with urllib.request.urlopen(req,timeout=10) as r:return json.load(r)
+    return call('POST',path,json.dumps(body,ensure_ascii=False).encode(),{'Content-Type':'application/json','X-Office-Token':token})
 def submit(prompt,source=''):
     body={'id':str(uuid.uuid4()),'prompt':prompt,'source':source,'executor':'gemma'}
     post('/api/command',body)

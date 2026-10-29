@@ -1,0 +1,55 @@
+# Optional, isolated trace viewers. Select either profile; the office sends the
+# same OTLP payload and changes only its collector endpoint.
+# Digests verified from Docker Hub tag metadata on 2026-10-24.
+name: nekonode-observability-lab
+
+services:
+  phoenix:
+    profiles: [phoenix]
+    image: arizephoenix/phoenix:20.26.0@sha256:095f498723ec1fa3b55592af83d5a1e3bf026ba15a4a44e325f20dfdbb71452a
+    ports:
+      - "127.0.0.1:${PHOENIX_LAB_PORT:-6006}:6006"
+    environment:
+      PHOENIX_HOST: "0.0.0.0"
+      PHOENIX_PORT: "6006"
+      PHOENIX_WORKING_DIR: /data
+      PHOENIX_DISABLE_AGENT_ASSISTANT: "true"
+      PHOENIX_ENABLE_MCP_SERVER: "false"
+      PHOENIX_ALLOW_EXTERNAL_RESOURCES: "false"
+      PHOENIX_TELEMETRY_ENABLED: "false"
+      PHOENIX_ENABLE_PROMETHEUS: "false"
+    volumes:
+      - phoenix-data:/data
+    networks: [lab]
+    healthcheck:
+      # The pinned distroless image has Python but no shell/curl/wget.
+      test: ["CMD", "/usr/bin/python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6006/readyz', timeout=2).read()"]
+      interval: 5s
+      timeout: 3s
+      start_period: 60s
+      retries: 12
+
+  jaeger:
+    profiles: [jaeger]
+    image: jaegertracing/jaeger:2.22.0@sha256:836b967b5abcf1f7758066aa6b348619267a2f1459f72d472840570f9bd88a17
+    command: ["--config=/etc/jaeger/lab.yaml"]
+    ports:
+      - "127.0.0.1:${JAEGER_LAB_UI_PORT:-16686}:16686"
+      - "127.0.0.1:${JAEGER_LAB_OTLP_PORT:-4318}:4318"
+    environment:
+      # Wildcard binding is only inside this project's container network.
+      JAEGER_LAB_HOST: "0.0.0.0"
+    volumes:
+      - ./jaeger.yaml:/etc/jaeger/lab.yaml:ro
+    networks: [lab]
+    # Deliberately ephemeral memory storage. A volume cannot make it durable.
+
+networks:
+  lab:
+    # A standard bridge supports the host's published loopback ports.
+    # This controls inbound exposure; it is not an outbound firewall.
+    driver: bridge
+
+volumes:
+  # Diagnostic data only; never mount the office task database here.
+  phoenix-data:
