@@ -1,0 +1,109 @@
+{
+  "$defs": {
+    "Ping": {
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {
+          "const": "nekochat",
+          "title": "Protocol",
+          "type": "string"
+        },
+        "version": {
+          "const": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "id": {
+          "not": {
+            "pattern": "[^A-Za-z0-9_-]"
+          },
+          "pattern": "^[A-Za-z0-9_-]{1,64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "ping",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocol",
+        "version",
+        "id",
+        "kind"
+      ],
+      "title": "Ping",
+      "type": "object"
+    },
+    "Send": {
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {
+          "const": "nekochat",
+          "title": "Protocol",
+          "type": "string"
+        },
+        "version": {
+          "const": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "id": {
+          "not": {
+            "pattern": "[^A-Za-z0-9_-]"
+          },
+          "pattern": "^[A-Za-z0-9_-]{1,64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "chat.send",
+          "title": "Kind",
+          "type": "string"
+        },
+        "to": {
+          "not": {
+            "pattern": "[^a-z0-9_-]"
+          },
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$",
+          "title": "To",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocol",
+        "version",
+        "id",
+        "kind",
+        "to",
+        "text"
+      ],
+      "title": "Send",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "chat.send": "#/$defs/Send",
+      "ping": "#/$defs/Ping"
+    },
+    "propertyName": "kind"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/Send"
+    },
+    {
+      "$ref": "#/$defs/Ping"
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
