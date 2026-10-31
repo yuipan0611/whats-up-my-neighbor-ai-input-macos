@@ -1,0 +1,6 @@
+# Machine-specific paths, fingerprints and disposable maintenance fixtures.
+*.json
+*.log
+tmp/
+local_cleanup.py
+test_local_cleanup.py

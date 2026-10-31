@@ -7,7 +7,7 @@ final class UpdateDiagnostics {
         case launch, apiKeyAccess, microphoneAuthorized, accessibilityAllowed
         case recordingHotKey, clipboardHotKey, clipboardPasteGesture, updaterStarted, updateDetected
         case notificationPermission, notificationQueued, manualCheck, sessionFinished
-        case relaunchDeferred, relaunchStarted
+        case relaunchDeferred, relaunchStarted, oldBackupCleanup
     }
     struct Entry: Codable {
         let time: TimeInterval

@@ -44,6 +44,7 @@ final class AppUpdateController: NSObject, SPUUpdaterDelegate, SPUStandardUserDr
     func start() {
         UNUserNotificationCenter.current().delegate = self
         controller.startUpdater()
+        OldAppBackupCleanup.schedule()
         UpdateDiagnostics.shared.record(.updaterStarted)
         automaticCheckItem?.state = controller.updater.automaticallyChecksForUpdates ? .on : .off
         // A launch check is asynchronous, quiet on network errors, and still
