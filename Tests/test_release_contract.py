@@ -38,6 +38,7 @@ def make_test_app(app, marker, version=None):
     if version:
         info["CFBundleShortVersionString"], info["CFBundleVersion"] = version
     (app / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
+    shutil.copy(ROOT / "Resources/OldAppCleanup.zsh", app / "Contents/Resources/OldAppCleanup.zsh")
     (app / "Contents/Resources/version-marker").write_bytes(marker)
     subprocess.run(["codesign", "--force", "--sign", "-", "--requirements", '=designated => identifier "tw.panh.FreeVoiceType"', str(app)], check=True, capture_output=True)
 
@@ -337,6 +338,48 @@ else: sys.exit(99)
                 self.assertEqual(tree_snapshot(previous), historic)
                 self.assertEqual(list(target.parent.glob(".neighbor-update.*")), [previous])
                 self.assertFalse((target.parent / ".neighbor-install.lock").exists())
+
+    def test_post_sparkle_launch_uses_shared_cleanup_and_respects_install_lock(self):
+        probe = ROOT / "build/OldAppBackupCleanupProbe"
+        self.assertTrue(probe.is_file(), "Run scripts/test-updates.sh to build the native launch probe")
+        with tempfile.TemporaryDirectory(prefix="neko-startup-cleanup-", suffix=".noindex") as directory:
+            base = Path(directory).resolve()
+            profile = base / "profile"
+            target = profile / "Applications/AI語音輸入.app"
+            make_test_app(target, b"updated-by-sparkle")
+            stage = target.parent / ".neighbor-update.historic"
+            make_test_app(stage / "Previous.app", b"old")
+            os.utime(stage, (1, 1))
+            unknown = target.parent / ".neighbor-update.unknown"
+            make_test_app(unknown / "Previous.app", b"keep")
+            (unknown / "unknown.txt").write_text("keep")
+            os.utime(unknown, (1, 1))
+            before = tree_snapshot(target)
+            protected = tree_snapshot(unknown)
+            environment = dict(os.environ, HOME=str(profile))
+            lock = target.parent / ".neighbor-install.lock"
+            lock.mkdir()
+            result = subprocess.run([str(probe), str(target)], env=environment)
+            self.assertEqual(result.returncode, 75)
+            self.assertTrue(stage.exists())
+            self.assertTrue(lock.exists())
+            lock.rmdir()
+            result = subprocess.run([str(probe), str(target)], env=environment)
+            self.assertEqual(result.returncode, 0)
+            self.assertFalse(stage.exists())
+            self.assertFalse(lock.exists())
+            self.assertEqual(tree_snapshot(target), before)
+            self.assertEqual(tree_snapshot(unknown), protected)
+            # A downloaded or development App cannot clean its surrounding folder.
+            preview = base / "download/AI語音輸入.app"
+            make_test_app(preview, b"preview")
+            result = subprocess.run([str(probe), str(preview)], env=environment)
+            self.assertEqual(result.returncode, 65)
+            # A modified installed bundle fails signature validation before cleanup.
+            (target / "Contents/Resources/version-marker").write_bytes(b"tampered")
+            result = subprocess.run([str(probe), str(target)], env=environment)
+            self.assertEqual(result.returncode, 65)
+            self.assertEqual(tree_snapshot(unknown), protected)
 
     def test_installer_preserves_unrelated_target_and_symlink(self):
         for kind in ("file", "other-app", "symlink"):

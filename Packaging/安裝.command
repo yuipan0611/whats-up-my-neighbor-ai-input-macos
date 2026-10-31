@@ -34,6 +34,7 @@ version_of() {
   print -r -- "${short:-未知版本}（build ${build:-?}）"
 }
 [[ -d "$SOURCE_APP" ]] || fail '請保留解壓縮後的資料夾結構，再重新執行安裝.command。'
+[[ -f "$SOURCE_APP/Contents/Resources/OldAppCleanup.zsh" ]] || fail '安裝包缺少舊版清理工具。'
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$SOURCE_APP/Contents/Info.plist")" == "$LABEL" ]] || fail '安裝包的 App 身分不符。'
 codesign --verify --deep --strict "$SOURCE_APP" || fail '安裝包簽章驗證失敗。'
 
@@ -151,41 +152,9 @@ if ! rm -rf "$STAGE"; then
   print -u2 -r -- "新版已安裝，舊版暫存清理失敗，殘留位置：$STAGE"
 fi
 
-# Migrate only completed legacy stages containing exactly one signed owned app.
-# New/Failed/marker/unknown entries are deliberately retained. The age gate also
-# protects unmarked stages from old installers that do not use our lock yet.
-for backup in "$INSTALL_DIR"/.neighbor-update.*(N); do
-  [[ "$backup" != "$STAGE" && -d "$backup" && ! -L "$backup" ]] || continue
-  entries=("$backup"/*(DN))
-  if (( ${#entries} != 1 )) || [[ "${entries[1]}" != "$backup/Previous.app" || -L "$backup/Previous.app" || ! -d "$backup/Previous.app" ]]; then
-    print -r -- "略過未確認或進行中的暫存：$backup"
-    continue
-  fi
-  if ! modified="$(stat -f %m "$backup")"; then
-    print -u2 -r -- "無法檢查備份，已保留：$backup"
-    continue
-  fi
-  if (( $(date +%s) - modified < 86400 )); then
-    print -r -- "略過近期暫存：$backup"
-    continue
-  fi
-  if [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$backup/Previous.app/Contents/Info.plist" 2>/dev/null || true)" != "$LABEL" ]] || ! codesign --verify --deep --strict "$backup/Previous.app" 2>/dev/null; then
-    print -r -- "略過身分無法確認的備份：$backup"
-    continue
-  fi
-  # lsof on macOS can emit matching PIDs and still exit 1 (partial results).
-  # Only an empty result with the normal no-match status permits deletion.
-  if users="$(/usr/sbin/lsof -t +D "$backup" 2>&1)"; then query_status=0; else query_status=$?; fi
-  if [[ -n "$users" ]] || (( query_status != 1 )); then
-    print -r -- "略過正在使用或無法確認使用狀態的備份：$backup"
-    continue
-  fi
-  if rm -rf "$backup/Previous.app" && rmdir "$backup"; then
-    print -r -- "已清除舊版備份：$backup"
-  else
-    print -u2 -r -- "舊版備份清理失敗，殘留位置：$backup"
-  fi
-done
+# Use the same signed resource as the App's post-update launch cleanup.
+source "$TARGET_APP/Contents/Resources/OldAppCleanup.zsh"
+prune_completed_app_backups "$INSTALL_DIR" "$STAGE" || print -u2 '新版已安裝；部分舊版備份未能清除，請查看上述殘留路徑。'
 print -r -- "Installed: $TARGET_APP"
 if [[ -z "$OLD_VERSION" ]]; then
   print -r -- "安裝類型：全新安裝 $NEW_VERSION"

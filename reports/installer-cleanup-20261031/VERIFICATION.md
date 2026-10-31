@@ -28,3 +28,7 @@ Prepared `inventory.json` before removal, with each path, type, logical size, de
 - Before/after digests matched for the running installed App, LaunchAgent, preferences, cat settings and clipboard history. No Keychain contents were exported, and no credential, TCC or user-data deletion commands were run.
 - Git status snapshots of all workspace repositories matched across cleanup. Sources, Git, previews, history and report snapshots were retained.
 - The existing installed App remains 1.4.9/build 1016 at its established Application Support location, with strict signature verification passing and its original process still running.
+
+## Release follow-up (owner authorized)
+
+The owner subsequently requested PR, green checks, merge to main and public release. Version 1.4.10/build 1017 adds a background post-launch cleanup entry point so Sparkle users receive the same migration, not just ZIP/curl users. The signed `Resources/OldAppCleanup.zsh` is shared with the installer. It validates standard installation location and the current bundle signature, acquires the same install lock, and leaves downloads/previews/worktrees untouched. Background launch retries a held install lock and records only an opt-in success flag. Native Swift-to-shell disposable-profile integration plus installer/feed contract tests pass (22 tests). Public CI and release results will be recorded separately after publication.
