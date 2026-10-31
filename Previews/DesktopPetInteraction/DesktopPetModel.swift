@@ -385,13 +385,10 @@ struct DesktopPetModel {
             let eased = progress * progress * (3 - 2 * progress)
             origin = CGPoint(x: move.from.x + (move.to.x - move.from.x) * eased,
                              y: move.from.y + (move.to.y - move.from.y) * eased)
-            if abs(move.to.y - move.from.y) > 3 {
-                origin.y += sin(progress * .pi) * min(45, area.height * 0.08)
-            }
             origin = Self.clamp(origin, to: area)
-            walkDistance = abs(origin.x - move.from.x)
+            walkDistance = distance(origin, move.from)
             if progress >= 1 {
-                origin = move.to
+                origin = Self.clamp(move.to, to: area)
                 perchID = move.perch
                 journey = nil
                 setPose(cycle % 3 == 0 ? .curious : .standing, now: now, duration: 2.2)
@@ -419,11 +416,18 @@ struct DesktopPetModel {
             return area.contains(CGRect(origin: point, size: Self.size)) &&
                 perch.id != perchID && distance(perch.frame.center, world.cursor) > 100
         }
-        let selected = !candidates.isEmpty && cycle % 2 == 1
+        let selected = !candidates.isEmpty && cycle % 2 == 1 && cycle % 3 != 0
             ? candidates[Int(random() * Double(candidates.count)) % candidates.count] : nil
-        let target = selected.map { CGPoint(x: $0.frame.midX - Self.size.width / 2,
+        var target = selected.map { CGPoint(x: $0.frame.midX - Self.size.width / 2,
                                            y: $0.frame.maxY - Self.feetInset) }
-            ?? CGPoint(x: area.minX + CGFloat(random()) * (area.width - Self.size.width), y: area.minY)
+            ?? CGPoint(x: area.minX + CGFloat(random()) * (area.width - Self.size.width),
+                       y: area.minY + CGFloat(random()) * (area.height - Self.size.height))
+        // Every third uninterrupted journey visits the next corner.
+        if cycle % 3 == 0 {
+            let corner = (cycle / 3 - 1) % 4
+            target = CGPoint(x: (corner & 1) == 0 ? area.minX : area.maxX - Self.size.width,
+                             y: (corner & 2) == 0 ? area.minY : area.maxY - Self.size.height)
+        }
         let destination = Self.clamp(target, to: area)
         facingLeft = destination.x < origin.x
         walkDistance = 0
