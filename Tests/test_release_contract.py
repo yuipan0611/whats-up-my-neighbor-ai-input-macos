@@ -219,12 +219,10 @@ else: sys.exit(99)
             current = f'{info["CFBundleShortVersionString"]}（build {info["CFBundleVersion"]}）'
             # Agents and people need to tell an update from a fresh install.
             self.assertIn(f"安裝類型：更新 1.0.0（build 1000） → {current}", result.stdout)
-            self.assertIn("可以把舊版備份資料夾丟到垃圾桶", result.stdout)
+            self.assertNotIn("Previous app backup:", result.stdout)
             self.assertEqual((old_app / "Contents/Resources/version-marker").read_bytes(), b"new")
             self.assertFalse((profile / "Applications/AI語音輸入.app").exists())
-            backups = list(old_app.parent.glob(".neighbor-update.*/Previous.app/Contents/Resources/version-marker"))
-            self.assertEqual(len(backups), 1)
-            self.assertEqual(backups[0].read_bytes(), b"old")
+            self.assertEqual(list(old_app.parent.glob(".neighbor-update.*")), [])
             for relative, data in preserved.items():
                 self.assertEqual((profile / relative).read_bytes(), data, relative)
             # A corrupted replacement must fail before touching the working app.
@@ -234,6 +232,164 @@ else: sys.exit(99)
             self.assertEqual((old_app / "Contents/Resources/version-marker").read_bytes(), b"new")
             for relative, data in preserved.items():
                 self.assertEqual((profile / relative).read_bytes(), data, relative)
+
+    def test_repeated_installs_prune_completed_backups_but_preserve_boundaries(self):
+        with tempfile.TemporaryDirectory(prefix="neko-prune-test-", suffix=".noindex") as directory:
+            base = Path(directory)
+            profile, package = base / "profile", base / "package"
+            package.mkdir()
+            installer = package / "安裝.command"
+            shutil.copy(ROOT / "Packaging/安裝.command", installer)
+            make_test_app(package / "AI語音輸入.app", b"new")
+            target = profile / "Applications/AI語音輸入.app"
+            make_test_app(target, b"old", ("1.0.0", "1000"))
+            parent = target.parent
+            completed = parent / ".neighbor-update.complete"
+            make_test_app(completed / "Previous.app", b"old")
+            os.utime(completed, (1, 1))
+            # Stages with a marker, a new/failed app or extra/unknown files stay.
+            for name in ("active", "unknown", "new", "failed", "recent", "other", "symlink", "busy"):
+                stage = parent / f".neighbor-update.{name}"
+                if name == "other":
+                    make_other_app(stage / "Previous.app")
+                elif name == "symlink":
+                    stage.mkdir()
+                    (stage / "Previous.app").symlink_to(target, target_is_directory=True)
+                else:
+                    make_test_app(stage / "Previous.app", name.encode())
+                if name == "active": (stage / ".installing").write_text(str(os.getpid()))
+                if name == "unknown": (stage / "keep.txt").write_text("unknown")
+                if name in ("new", "failed"):
+                    make_test_app(stage / ("New.app" if name == "new" else "Failed.app"), b"incomplete")
+                if name != "recent": os.utime(stage, (1, 1))
+            (parent / ".neighbor-update.link").symlink_to(completed, target_is_directory=True)
+            protected = {p.name: tree_snapshot(p) for p in parent.glob(".neighbor-update.*")
+                         if p.name not in (completed.name, ".neighbor-update.link", ".neighbor-update.symlink")}
+            busy = open(parent / ".neighbor-update.busy/Previous.app/Contents/Resources/version-marker", "rb")
+            self.addCleanup(busy.close)
+            environment = dict(os.environ, NEKO_INSTALL_TEST_PROFILE=str(profile))
+            for attempt in range(3):
+                if attempt == 2:
+                    shutil.rmtree(package / "AI語音輸入.app")
+                    make_test_app(package / "AI語音輸入.app", b"new", ("1.5.0", "1017"))
+                result = subprocess.run(["zsh", str(installer)], env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(completed.exists())
+                self.assertTrue((parent / ".neighbor-update.link").is_symlink())
+                self.assertTrue((parent / ".neighbor-update.symlink/Previous.app").is_symlink())
+                for name, snapshot in protected.items(): self.assertEqual(tree_snapshot(parent / name), snapshot)
+                self.assertEqual((target / "Contents/Resources/version-marker").read_bytes(), b"new")
+                self.assertFalse((parent / ".neighbor-install.lock").exists())
+                self.assertEqual(len(list(parent.glob(".neighbor-update.*"))), 9)
+                if attempt == 1: self.assertIn("重新安裝同一版", result.stdout)
+                if attempt == 2: self.assertIn("→ 1.5.0（build 1017）", result.stdout)
+
+    def test_installer_failures_restore_app_and_leave_backups_untouched(self):
+        for phase in ("copy", "replace", "final-signature", "identity", "launch", "first-launch"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory(prefix="neko-rollback-test-") as directory:
+                base = Path(directory)
+                profile, package = base / "profile", base / "package"
+                package.mkdir()
+                installer = package / "安裝.command"
+                shutil.copy(ROOT / "Packaging/安裝.command", installer)
+                make_test_app(package / "AI語音輸入.app", b"new")
+                target = profile / "Applications/AI語音輸入.app"
+                if phase != "first-launch": make_test_app(target, b"old", ("1.0.0", "1000"))
+                previous = target.parent / ".neighbor-update.complete"
+                make_test_app(previous / "Previous.app", b"historic")
+                os.utime(previous, (1, 1))
+                agent = profile / "Library/LaunchAgents/tw.panh.FreeVoiceType.plist"
+                agent_before = None
+                if phase in ("final-signature", "launch"):
+                    agent.parent.mkdir(parents=True)
+                    agent_before = plistlib.dumps({"Label": "tw.panh.FreeVoiceType", "ProgramArguments": ["/usr/bin/open", "-gj", str(target)], "RunAtLoad": False})
+                    agent.write_bytes(agent_before)
+                sentinel = profile / "Library/Application Support/AI語音輸入/ClipboardHistory/manifest.json"
+                sentinel.parent.mkdir(parents=True)
+                sentinel.write_bytes(b"private-sentinel")
+                before = tree_snapshot(target) if target.exists() else None
+                historic = tree_snapshot(previous)
+                log = base / "tools.log"
+                make_tool_stubs(base / "bin", log, failing=("open",) if "launch" in phase else ())
+                # Fail the actual transaction operation, with all app launching,
+                # termination and login operations replaced by logging stubs.
+                if phase in ("copy", "replace", "final-signature", "identity"):
+                    tool = {"copy": "ditto", "replace": "mv"}.get(phase, "codesign")
+                    if phase == "replace": test = 'case "$1" in */New.app) exit 1;; esac'
+                    elif phase == "identity": test = 'case "$*" in *--test-requirement*) exit 1;; esac'
+                    else: test = 'for last; do :; done; [ "$last" != "$FAIL_TARGET" ] || exit 1'
+                    if phase == "copy": body = 'exit 1'
+                    elif phase == "replace": body = test + '\nexec /bin/mv "$@"'
+                    else: body = test + '\nexec /usr/bin/codesign "$@"'
+                    stub = base / "bin" / tool
+                    stub.write_text('#!/bin/sh\n' + body + '\n')
+                    stub.chmod(0o755)
+                environment = dict(os.environ, HOME=str(profile), NEKO_INSTALL_NO_DIALOG="1",
+                                   PATH=f"{base / 'bin'}:{os.environ['PATH']}", FAIL_TARGET=str(target))
+                environment.pop("NEKO_INSTALL_TEST_PROFILE", None)
+                result = subprocess.run(["zsh", str(installer)], env=environment, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                if before is None: self.assertFalse(target.exists())
+                else: self.assertEqual(tree_snapshot(target), before)
+                if agent_before is None: self.assertFalse(agent.exists())
+                else: self.assertEqual(agent.read_bytes(), agent_before)
+                self.assertEqual(sentinel.read_bytes(), b"private-sentinel")
+                self.assertEqual(tree_snapshot(previous), historic)
+                self.assertEqual(list(target.parent.glob(".neighbor-update.*")), [previous])
+                self.assertFalse((target.parent / ".neighbor-install.lock").exists())
+
+    def test_installer_preserves_unrelated_target_and_symlink(self):
+        for kind in ("file", "other-app", "symlink"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory(prefix="neko-target-guard-") as directory:
+                base = Path(directory)
+                package, profile = base / "package", base / "profile"
+                package.mkdir()
+                installer = package / "安裝.command"
+                shutil.copy(ROOT / "Packaging/安裝.command", installer)
+                make_test_app(package / "AI語音輸入.app", b"new")
+                target = profile / "Applications/AI語音輸入.app"
+                target.parent.mkdir(parents=True)
+                if kind == "file": target.write_bytes(b"unrelated-file")
+                elif kind == "other-app": make_other_app(target)
+                else:
+                    external = base / "external.app"
+                    make_test_app(external, b"external")
+                    target.symlink_to(external, target_is_directory=True)
+                before = tree_snapshot(profile)
+                result = subprocess.run(["zsh", str(installer)], env=dict(os.environ, NEKO_INSTALL_TEST_PROFILE=str(profile)), capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(tree_snapshot(profile), before)
+                self.assertFalse(list(target.parent.glob(".neighbor-update.*")))
+                if kind == "symlink": self.assertTrue(target.is_symlink())
+
+    def test_installer_lock_and_cleanup_failure_are_explicit(self):
+        with tempfile.TemporaryDirectory(prefix="neko-install-lock-") as directory:
+            base = Path(directory)
+            profile, package = base / "profile", base / "package"
+            package.mkdir()
+            installer = package / "安裝.command"
+            shutil.copy(ROOT / "Packaging/安裝.command", installer)
+            make_test_app(package / "AI語音輸入.app", b"new")
+            target = profile / "Applications/AI語音輸入.app"
+            make_test_app(target, b"old")
+            lock = target.parent / ".neighbor-install.lock"
+            lock.mkdir()
+            (lock / "pid").write_text(str(os.getpid()))
+            environment = dict(os.environ, NEKO_INSTALL_TEST_PROFILE=str(profile))
+            result = subprocess.run(["zsh", str(installer)], env=environment, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(lock.exists())
+            self.assertEqual((target / "Contents/Resources/version-marker").read_bytes(), b"old")
+            shutil.rmtree(lock)
+            tools = base / "bin"
+            tools.mkdir()
+            (tools / "rm").write_text('#!/bin/sh\ncase "$*" in *-rf*) exit 1;; esac\nexec /bin/rm "$@"\n')
+            (tools / "rm").chmod(0o755)
+            result = subprocess.run(["zsh", str(installer)], env=dict(environment, PATH=f"{tools}:{os.environ['PATH']}"), capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("清理失敗，殘留位置", result.stderr)
+            self.assertEqual((target / "Contents/Resources/version-marker").read_bytes(), b"new")
+            self.assertEqual(len(list(target.parent.glob(".neighbor-update.*/Previous.app"))), 1)
 
     def test_install_and_uninstall_dialogs_never_block_unattended_runs(self):
         for name, count in (("安裝.command", 2), ("移除.command", 1)):
@@ -285,11 +441,14 @@ else: sys.exit(99)
                 path.write_bytes(data)
             home_before = tree_snapshot(home)
             environment = dict(os.environ, HOME=str(home), PATH=f"{base / 'bin'}:{os.environ['PATH']}")
-            # The installer updates the early-version location in place and keeps a backup.
+            # The installer updates the early-version location and removes its backup.
             result = subprocess.run(["zsh", str(package / "安裝.command")], env=dict(environment, NEKO_INSTALL_TEST_PROFILE=str(profile)), capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual((legacy_app / "Contents/Resources/version-marker").read_bytes(), b"new")
-            backup = next(legacy_app.parent.glob(".neighbor-update.*"))
+            self.assertEqual(list(legacy_app.parent.glob(".neighbor-update.*")), [])
+            # Uninstall still preserves historical/recovery leftovers it does not own.
+            backup = legacy_app.parent / ".neighbor-update.legacy"
+            make_test_app(backup / "Previous.app", b"historic")
 
             uninstall = ["zsh", str(package / "移除.command")]
             environment["NEKO_UNINSTALL_TEST_PROFILE"] = str(profile)
@@ -301,7 +460,7 @@ else: sys.exit(99)
             self.assertEqual((other_app / "Contents/Resources/version-marker").read_bytes(), b"other")
             self.assertIn(f"略過（Bundle ID 不是 tw.panh.FreeVoiceType）：{other_app}", result.stdout)
             # Backups stay until the user decides; the output says where they are.
-            self.assertEqual((backup / "Previous.app/Contents/Resources/version-marker").read_bytes(), b"old")
+            self.assertEqual((backup / "Previous.app/Contents/Resources/version-marker").read_bytes(), b"historic")
             self.assertIn(f"保留（需要時請手動刪除）：{backup}", result.stdout)
             self.assertIn(f"保留（需要時請手動刪除）：{legacy_app.parent / 'ClipboardHistory'}", result.stdout)
             for relative, data in preserved.items():

@@ -190,7 +190,7 @@ AI 應該完成檢查、下載、校驗、解壓縮、安裝與驗證；使用�
 curl -fsSL https://github.com/yuipan0611/whats-up-my-neighbor-ai-input-macos/releases/latest/download/install.sh | zsh
 ```
 
-這行指令會下載最新版安裝包，用腳本裡寫死的 SHA-256 核對，再執行安裝包裡同一支 `安裝.command`：沿用原本的安裝位置、檢查簽章身分、保留舊版備份，裝完自動開啟 App。不需要輸入 Mac 密碼，不重簽 App，也不改系統安全設定。用 `curl` 下載的檔案本來就不帶 macOS 隔離標記（quarantine），所以這條路線不會出現「仍要打開」的安全確認。
+這行指令會下載最新版安裝包，用腳本裡寫死的 SHA-256 核對，再執行安裝包裡同一支 `安裝.command`：沿用原本的安裝位置、檢查簽章身分，安裝失敗時還原原版，成功後清除舊版暫存並開啟 App。不需要輸入 Mac 密碼，不重簽 App，也不改系統安全設定。用 `curl` 下載的檔案本來就不帶 macOS 隔離標記（quarantine），所以這條路線不會出現「仍要打開」的安全確認。
 
 想先看內容再執行，可以分三步：
 
@@ -264,11 +264,11 @@ security find-generic-password -s tw.panh.FreeVoiceType.groq -a api-key >/dev/nu
 
 ### 舊版備份
 
-每次安裝或更新，舊版 App 會移到安裝位置旁的隱藏資料夾 `.neighbor-update.<隨機字元>/Previous.app`，安裝工具不會自動刪除，次數多了會占用不少空間。確認新版正常後，可以把這些資料夾丟到垃圾桶。用上一段的 `APP` 列出它們：
+安裝工具會先驗證新版，暫存原版，再沿用原位置替換。最終簽章驗證成功且 macOS 接受啟動要求後，會清除本次舊版暫存；替換、驗證或啟動要求失敗時會還原原版。啟動要求成功不代表已完成所有功能驗收。
 
-```bash
-ls -d "$(dirname "$APP")"/.neighbor-update.*
-```
+成功安裝後，也會清除安裝位置旁已超過一天、內容只有本產品有效簽章 `Previous.app` 的 `.neighbor-update.*` 舊備份。符號連結、近期暫存、進行中更新、含未知內容或身分無法確認的資料夾會保留並列出位置；清理失敗會顯示殘留路徑，不影響已成功安裝的新版。下載或解壓縮 ZIP 本身不會清理其他檔案。
+
+同一安裝位置一次只允許一個安裝程序。若程序被強制終止而留下 `.neighbor-install.lock`，先確認沒有其他安裝程序正在執行，再檢查暫存與原版是否完整；保留其中的復原檔案，處理完畢後才移除鎖定資料夾重試。
 
 ## 建立 Groq API Key
 
@@ -456,7 +456,7 @@ Mac 在執行前與貼上後都會重新確認焦點。若 App、視窗或輸入
 
 - `~/Library/Application Support/AI語音輸入/ClipboardHistory/`（剪貼簿歷史）
 - 貓咪設定資料夾 `~/Library/Application Support/tw.panh.FreeVoiceType/`（`cat.config.json` 與自訂圖片）：也可以在移除前從小黑貓選單「開啟貓咪設定資料夾…」打開
-- 安裝工具留下的舊版備份：App 所在資料夾裡以 `.neighbor-update.` 開頭的資料夾，例如 `~/Library/Application Support/AI語音輸入/.neighbor-update.*`。名稱以點開頭，Finder 預設隱藏，按 `Command + Shift + .` 可以顯示
+- 舊安裝器或中斷安裝留下、未被安全清除的備份：App 所在資料夾裡以 `.neighbor-update.` 開頭的資料夾，例如 `~/Library/Application Support/AI語音輸入/.neighbor-update.*`。名稱以點開頭，Finder 預設隱藏，按 `Command + Shift + .` 可以顯示
 
 由 AI 或腳本執行時，可以用 `NEKO_INSTALL_NO_DIALOG=1 zsh 移除.command` 略過最後的視窗；不設定時，視窗也會在 2 分鐘後自動關閉。
 
