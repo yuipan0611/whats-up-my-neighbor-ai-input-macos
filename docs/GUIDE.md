@@ -285,7 +285,7 @@ App 不會把 Key 寫入設定檔、Repo 或日誌，只會保存在這台 Mac �
 
 ## Groq 免費方案限制 / Groq Free Tier Limits
 
-本專案固定使用 Groq `whisper-large-v3` 進行語音轉文字。以下是截至 **2026-07-15**，[Groq 官方 Rate Limits](https://console.groq.com/docs/rate-limits) 公開的 Free Plan 限制：
+本專案固定使用 Groq `whisper-large-v3` 進行語音轉文字。以下是截至 **2026-11-01**，[Groq 官方 Rate Limits](https://console.groq.com/docs/rate-limits) 公開的 Free Plan 限制：
 
 | 限制 | 數值 |
 |---|---:|
