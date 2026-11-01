@@ -117,6 +117,10 @@ What's up my neighbor 是輕量的原生 macOS 選單列語音輸入 App。在�
 
 完整說明見 [PRIVACY.md](PRIVACY.md)。
 
+## NekoChat Windows Lite（開發中）
+
+同一儲存庫新增 C#/.NET WPF Lite MVP：桌面貓咪、好友文字聊天與語音輸入。見 [Windows 試用／建置指南](windows-lite/README.md)、[獨立 LAN／VPS Relay](nekochat/relay/README.md) 與 [驗證紀錄](nekochat/docs/VALIDATION.md)。目前 macOS App 尚未接入聊天協議；此功能不含 AI Agent 或遠端控制。
+
 ## 文件
 
 | 想做什麼 | 看這裡 |

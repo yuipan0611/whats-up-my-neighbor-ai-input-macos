@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+ <PropertyGroup>
+  <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework>
+  <UseWPF>true</UseWPF><EnableWindowsTargeting>true</EnableWindowsTargeting>
+  <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  <AssemblyName>NekoChat-Setup-win-x64</AssemblyName><ApplicationManifest>../NekoChat.Windows/app.manifest</ApplicationManifest>
+ </PropertyGroup>
+ <ItemGroup>
+  <ProjectReference Include="../NekoChat.Core/NekoChat.Core.csproj"/>
+  <EmbeddedResource Include="$(PackagePayload)" LogicalName="payload.zip" Condition="'$(PackagePayload)' != ''"/>
+  <EmbeddedResource Include="$(PackageChecksum)" LogicalName="payload.sha256" Condition="'$(PackageChecksum)' != ''"/>
+ </ItemGroup>
+</Project>

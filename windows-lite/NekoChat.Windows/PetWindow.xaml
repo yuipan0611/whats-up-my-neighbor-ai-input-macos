@@ -1,0 +1,11 @@
+<Window x:Class="NekoChat.Windows.PetWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ Width="280" Height="310" WindowStyle="None" AllowsTransparency="True" Background="Transparent" Topmost="True" ShowInTaskbar="False" ShowActivated="False" ResizeMode="NoResize" Title="NekoChat 桌面貓咪">
+ <Grid>
+  <Grid.RowDefinitions><RowDefinition Height="110"/><RowDefinition Height="200"/></Grid.RowDefinitions>
+  <Button x:Name="Bubble" Grid.Row="0" VerticalAlignment="Bottom" Visibility="Collapsed" Background="#FFFFFAF5" BorderBrush="#FFD4C7BE" BorderThickness="1" Padding="12" Click="BubbleClick" AutomationProperties.Name="收到的訊息，點擊回覆">
+   <Button.Template><ControlTemplate TargetType="Button"><Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="16" Padding="12"><ContentPresenter/></Border></ControlTemplate></Button.Template>
+   <TextBlock x:Name="BubbleText" TextWrapping="Wrap" MaxHeight="82" TextTrimming="CharacterEllipsis" Foreground="#292828"/>
+  </Button>
+  <Image x:Name="Cat" Grid.Row="1" Width="190" Height="190" Stretch="Uniform" Cursor="Hand" MouseLeftButtonDown="CatDown" MouseMove="CatMove" MouseLeftButtonUp="CatUp" AutomationProperties.Name="桌面貓咪，拖曳移動，右鍵選單"/>
+ </Grid>
+</Window>
