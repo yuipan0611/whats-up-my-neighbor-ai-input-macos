@@ -11,6 +11,40 @@ struct PreviewTests {
             checks += 1
             precondition(condition(), message)
         }
+
+        // The desktop is a two-dimensional roaming area, including negative
+        // monitor origins and a narrow display that permits only vertical travel.
+        for roamArea in [CGRect(x: -1800, y: -200, width: 1800, height: 1100),
+                         CGRect(x: 0, y: 0, width: 128, height: 728)] {
+            var roaming = DesktopPetModel(seed: 42)
+            let roamWorld = DesktopPetWorld(areas: [roamArea], idleSeconds: 30)
+            roaming.setReleased(true, now: 0, world: roamWorld)
+            var corners = Set<Int>(), diagonal = false, vertical = false
+            for tick in 0...24000 {
+                let before = roaming.origin
+                let beforeDistance = roaming.walkDistance
+                let beforePose = roaming.pose
+                roaming.tick(now: Double(tick) / 4, world: roamWorld)
+                expect(roamArea.insetBy(dx: -0.001, dy: -0.001).contains(roaming.frame), "2D roaming stays on its actual monitor")
+                let dx = roaming.origin.x - before.x, dy = roaming.origin.y - before.y
+                vertical = vertical || abs(dy) > 0.01
+                diagonal = diagonal || (abs(dx) > 0.01 && abs(dy) > 0.01)
+                if beforePose == .walking && roaming.pose == .walking {
+                    expect(abs(roaming.walkDistance - beforeDistance - hypot(dx, dy)) < 0.001,
+                           "diagonal and vertical gait use actual two-dimensional travel")
+                }
+                if !roaming.isTravelling {
+                    for corner in 0..<4 {
+                        let target = CGPoint(x: (corner & 1) == 0 ? roamArea.minX : roamArea.maxX - DesktopPetModel.size.width,
+                                             y: (corner & 2) == 0 ? roamArea.minY : roamArea.maxY - DesktopPetModel.size.height)
+                        if hypot(roaming.origin.x - target.x, roaming.origin.y - target.y) < 0.001 { corners.insert(corner) }
+                    }
+                }
+            }
+            expect(vertical && (roamArea.width == DesktopPetModel.size.width || diagonal), "roaming includes vertical and diagonal travel")
+            expect(corners.count == 4, "uninterrupted roaming visits every corner")
+        }
+
         let area = CGRect(x: 0, y: 0, width: 1000, height: 700)
         var world = DesktopPetWorld(areas: [area], cursor: CGPoint(x: 50, y: 600), idleSeconds: 0)
         var model = DesktopPetModel(seed: 42)
