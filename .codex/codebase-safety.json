@@ -1,0 +1,166 @@
+{
+  "$schema": "safely-modify-codebase/v1",
+  "status": "draft",
+  "project": {
+    "name": "neko-cloud-pilot",
+    "purpose": "Native macOS voice input app with an additive GCP Codex documentation pilot.",
+    "repo_root": ".",
+    "last_reviewed": "2026-10-19"
+  },
+  "instructions": {
+    "files": [
+      "../../AGENTS.md"
+    ],
+    "precedence_notes": [
+      "Desktop workspace rules are inherited from the parent workspace; app install/release and website publication are separate tasks."
+    ]
+  },
+  "stack": {
+    "languages": [
+      "Swift",
+      "Bash",
+      "Python"
+    ],
+    "frameworks": [
+      "AppKit",
+      "SwiftUI"
+    ],
+    "package_managers": [
+      "npm (pinned cloud-only Codex/proxy)"
+    ]
+  },
+  "commands": {
+    "install": [],
+    "test": [
+      "./scripts/test-all.sh",
+      "python3 -m unittest discover -s tools/cloud-agent/tests -v"
+    ],
+    "lint": [],
+    "typecheck": [],
+    "build": [
+      "./scripts/build.sh"
+    ],
+    "notes": "Cloud container build and runtime checks are in .github/workflows/neko-cloud-pilot.yml; native checks require macOS."
+  },
+  "architecture": {
+    "entry_points": [
+      "Sources/GroqVoiceInput/main.swift",
+      "tools/cloud-agent/runner.py#main",
+      ".github/workflows/neko-cloud-pilot.yml"
+    ],
+    "feature_roots": [
+      "Sources/GroqVoiceInput/",
+      "tools/cloud-agent/"
+    ],
+    "shared_modules": [
+      "tools/cloud-agent/runner.py#validate_task"
+    ],
+    "state_and_data": [
+      "Resources/Info.plist",
+      "tools/cloud-agent/runner.py#GCSStore"
+    ],
+    "external_integrations": [
+      "Groq API",
+      "Sparkle",
+      "GCP Cloud Run / GCS / Secret Manager",
+      "OpenAI Responses API",
+      "GitHub Actions / PR"
+    ]
+  },
+  "conventions": {
+    "patterns": [
+      "Existing scripts/build.sh and scripts/test-all.sh are the native CI entry points.",
+      "Cloud runner emits private patches; a separate publisher checks the fixed docs scope."
+    ],
+    "naming": [
+      "Task IDs are lowercase letters, digits and hyphens."
+    ],
+    "error_handling": [
+      "Cloud setup stops at the first failed command."
+    ],
+    "logging": [
+      "Model output is stored only in a private GCS task log."
+    ],
+    "tests": [
+      "Cloud offline tests use Python unittest fixtures without live API calls."
+    ],
+    "notes": "A successful Linux fixture is not native macOS or deployed-cloud proof."
+  },
+  "protected_areas": [
+    {
+      "path_or_symbol": "Resources/Info.plist",
+      "reason": "Canonical release version/build",
+      "invariants": [
+        "No pilot changes"
+      ]
+    },
+    {
+      "path_or_symbol": "scripts/release-macos.sh",
+      "reason": "Release and signing boundary",
+      "invariants": [
+        "No automatic release"
+      ]
+    },
+    {
+      "path_or_symbol": "Sources/GroqVoiceInput/KeychainStore.swift",
+      "reason": "User credentials",
+      "invariants": [
+        "No export"
+      ]
+    },
+    {
+      "path_or_symbol": "Resources/",
+      "reason": "Approved cat assets and release resources",
+      "invariants": [
+        "Preserve approved artwork"
+      ]
+    },
+    {
+      "path_or_symbol": ".github/workflows/",
+      "reason": "Credential and execution permissions",
+      "invariants": [
+        "Never accept model-generated workflow edits"
+      ]
+    }
+  ],
+  "change_policy": {
+    "prefer_local_changes": true,
+    "require_consumer_search_for_shared_changes": true,
+    "forbid_unrelated_refactors": true,
+    "require_baseline_before_edit": true,
+    "preferred_max_files_per_step": 5
+  },
+  "verification": {
+    "minimum_after_change": [
+      "focused tests for changed behavior",
+      "consumer regression checks for shared changes",
+      "final diff and git status review"
+    ],
+    "manual_checks": [
+      "Physical microphone, accessibility permissions, actual UI and updater installation need separate device verification."
+    ],
+    "notes": ""
+  },
+  "known_unknowns": [
+    "OpenAI credential setup is deferred; live model execution remains unverified.",
+    "Secret Manager mount and Responses proxy with a real key remain unverified."
+  ],
+  "evidence": [
+    {
+      "fact": "macOS CI builds and runs offline regression scripts.",
+      "source": ".github/workflows/build.yml"
+    },
+    {
+      "fact": "Cloud pilot limits generated output to two documentation paths.",
+      "source": "tools/cloud-agent/runner.py#PILOT_PATHS"
+    },
+    {
+      "fact": "Canonical version/build and updater configuration are release inputs.",
+      "source": "Resources/Info.plist"
+    },
+    {
+      "fact": "Trusted-branch preflight verifies the Cloud Run sandbox and fixed-SHA GCS audit before model work.",
+      "source": ".github/workflows/neko-cloud-pilot.yml#preflight"
+    }
+  ]
+}
