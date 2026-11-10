@@ -32,7 +32,8 @@ protocol MeetingTranscribing {
 /// 這裡只重用它的 `DictationRecording` 協定，而且必須拿到**自己專用**的錄音器實例，
 /// 不能與聽寫共用。
 ///
-/// 所有呼叫、錄音器事件與辨識完成回呼都在主執行緒。沒有 AppKit，也不碰金鑰。
+/// 所有呼叫、錄音器事件與辨識完成回呼都在主執行緒（每個入口都用 `dispatchPrecondition` 強制，
+/// 違反時直接中止，不會悄悄產生競態）。沒有 AppKit，也不碰金鑰。
 final class MeetingCoordinator {
     private struct Chunk {
         let index: Int
@@ -121,6 +122,7 @@ final class MeetingCoordinator {
 
     @discardableResult
     func start(deviceUID: String, language: LanguageSettings) -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
         guard canStart else { return false }
         do {
             session = try store.beginSession(
@@ -141,6 +143,7 @@ final class MeetingCoordinator {
     /// 使用者結束會議。最後一段停止後，剩下的段會繼續辨識，全部完成才算結束。
     @discardableResult
     func stop() -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
         guard state == .starting || state == .recording, !stopRequested else { return false }
         stopRequested = true
         cutToken = nil
@@ -153,6 +156,7 @@ final class MeetingCoordinator {
 
     /// App 結束時呼叫：不等辨識，把還沒處理的段在逐字稿裡標出來，檔案保留。
     func shutdown() {
+        dispatchPrecondition(condition: .onQueue(.main))
         guard state != .idle, let session else { return }
         cutToken = nil
         inFlightToken?.cancel()
@@ -180,6 +184,7 @@ final class MeetingCoordinator {
     // MARK: 錄音器事件
 
     private func recordingStarted(_ url: URL) {
+        dispatchPrecondition(condition: .onQueue(.main))
         guard state != .idle, current?.url == url else { return }
         let started = uptime()
         current?.startedUptime = started
@@ -195,6 +200,7 @@ final class MeetingCoordinator {
         let token = UUID()
         cutToken = token
         schedule(chunkSeconds) { [weak self] in
+            dispatchPrecondition(condition: .onQueue(.main))
             guard let self, self.cutToken == token else { return }
             self.cutToken = nil
             // 硬切：停掉這一段，recordingFinished 之後立刻開下一段。
@@ -203,6 +209,7 @@ final class MeetingCoordinator {
     }
 
     private func recordingStartFailed(_ url: URL, error: Error) {
+        dispatchPrecondition(condition: .onQueue(.main))
         guard state != .idle, current?.url == url else { return }
         current = nil
         let firstChunk = meetingStartUptime == nil
@@ -216,6 +223,7 @@ final class MeetingCoordinator {
     }
 
     private func recordingFinished(_ url: URL, error: Error?) {
+        dispatchPrecondition(condition: .onQueue(.main))
         guard state != .idle, let chunk = current, chunk.url == url else { return }
         current = nil
         cutToken = nil
@@ -267,6 +275,7 @@ final class MeetingCoordinator {
     }
 
     private func transcriptionFinished(_ chunk: PendingChunk, result: Result<TranscriptionResult, Error>) {
+        dispatchPrecondition(condition: .onQueue(.main))
         guard inFlight?.index == chunk.index, let session else { return }
         inFlight = nil
         inFlightToken = nil

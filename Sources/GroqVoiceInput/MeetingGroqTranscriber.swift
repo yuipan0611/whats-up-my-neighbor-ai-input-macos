@@ -35,6 +35,8 @@ struct MeetingGroqTranscriber: MeetingTranscribing {
     /// 在主執行緒呼叫（詞庫學習資料只能在主執行緒讀）。
     let makePrompt: (LanguageSettings) -> String
     var workQueue: DispatchQueue = .global(qos: .utility)
+    /// 測試用：換成帶假 URLProtocol 的 session，不碰真網路。
+    var session: URLSession = .shared
 
     func transcribe(
         url: URL, language: LanguageSettings,
@@ -53,7 +55,7 @@ struct MeetingGroqTranscriber: MeetingTranscribing {
             guard !pending.isCancelled else { return }
             let task = GroqTranscriptionClient.transcribe(
                 audioURL: url, apiKey: apiKey, language: code,
-                prompt: prompt, format: .verboseWithWords, startImmediately: false
+                prompt: prompt, format: .verboseWithWords, session: session, startImmediately: false
             ) { result in
                 DispatchQueue.main.async {
                     guard !pending.isCancelled else { return }

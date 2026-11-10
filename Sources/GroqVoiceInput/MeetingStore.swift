@@ -114,15 +114,35 @@ final class MeetingStore {
 
     // MARK: 查詢
 
-    /// 最近一場有逐字稿的會議。資料夾名稱以日期開頭，字串排序即時間排序。
+    /// 最近一場有逐字稿的會議。依「日期時間，再依同分鐘的序號」排序：
+    /// `…_2130-10` 比 `…_2130-9` 新（字串排序會把 -9 排在 -10 後面）。
     func latestTranscriptURL() -> URL? {
         guard let names = try? fileManager.contentsOfDirectory(atPath: root.path) else { return nil }
-        for name in names.sorted(by: >) {
+        for name in names.sorted(by: { Self.isNewer($0, than: $1) }) {
             let url = root.appendingPathComponent(name, isDirectory: true)
                 .appendingPathComponent(Self.transcriptFilename)
             if fileManager.fileExists(atPath: url.path) { return url }
         }
         return nil
+    }
+
+    private static let folderPattern = try! NSRegularExpression(
+        pattern: "^(\\d{4}-\\d{2}-\\d{2}_\\d{4})(?:-(\\d+))?$")
+
+    /// `(日期時間, 序號)`。沒有 suffix 的第一場序號是 1，`-2` 起才有 suffix。
+    /// 不符合命名規則的資料夾（使用者自己放的）用原名與序號 0，排在同名日期之後的比較不會出錯。
+    private static func sortKey(_ name: String) -> (String, Int) {
+        let range = NSRange(name.startIndex..., in: name)
+        guard let match = folderPattern.firstMatch(in: name, range: range),
+              let base = Range(match.range(at: 1), in: name) else { return (name, 0) }
+        var number = 1
+        if let suffix = Range(match.range(at: 2), in: name), let value = Int(name[suffix]) { number = value }
+        return (String(name[base]), number)
+    }
+
+    private static func isNewer(_ lhs: String, than rhs: String) -> Bool {
+        let a = sortKey(lhs), b = sortKey(rhs)
+        return a.0 != b.0 ? a.0 > b.0 : (a.1 != b.1 ? a.1 > b.1 : lhs > rhs)
     }
 
     // MARK: 格式

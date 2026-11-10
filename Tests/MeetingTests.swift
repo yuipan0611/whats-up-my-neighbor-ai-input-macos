@@ -125,6 +125,7 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String, lin
 enum MeetingTests {
     static func main() throws {
         testTimestampFormatting()
+        try testLatestTranscriptUsesNumericSuffixOrder()
         try testStoreSessionLifecycle()
         try testStoreNeverEscapesRootAndNeverOverwrites()
         testThreeChunksWithFailureInTheMiddle()
@@ -138,7 +139,7 @@ enum MeetingTests {
         testStaleRecorderCallbacksAreIgnored()
         testShutdownMarksUnfinishedChunks()
         testCannotStartWhileRecorderBusyOrActive()
-        print("Meeting tests passed (14 scenarios)")
+        print("Meeting tests passed (15 scenarios)")
     }
 
     static func testTimestampFormatting() {
@@ -147,6 +148,24 @@ enum MeetingTests {
         expect(MeetingStore.timestamp(3725) == "01:02:05", "hours")
         expect(MeetingStore.timestamp(-5) == "00:00:00", "negative")
         expect(MeetingStore.timestamp(.nan) == "00:00:00", "nan")
+    }
+
+    // 同一分鐘建立 10 場：字串排序會把 -9 排在 -10 之後，「最近一次」就會拿錯。
+    static func testLatestTranscriptUsesNumericSuffixOrder() throws {
+        let f = Fixture()
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        var sessions: [MeetingSession] = []
+        for _ in 1...11 { sessions.append(try f.store.beginSession(startedAt: date, language: "zh", chunkSeconds: 300)) }
+        expect(sessions[8].directory.lastPathComponent == "2027-01-15_0800-9", "ninth is -9")
+        expect(sessions[9].directory.lastPathComponent == "2027-01-15_0800-10", "tenth is -10")
+        expect(f.store.latestTranscriptURL() == sessions[10].transcriptURL, "-11 is latest of eleven")
+        try FileManager.default.removeItem(at: sessions[10].directory)
+        expect(f.store.latestTranscriptURL() == sessions[9].transcriptURL, "-10 beats -9")
+        // 較晚的分鐘永遠比較新，不論 suffix；使用者自己放的資料夾不會壓過會議資料夾。
+        let later = try f.store.beginSession(startedAt: date.addingTimeInterval(120), language: "zh", chunkSeconds: 300)
+        let stray = f.directory.appendingPathComponent("zzz-notes", isDirectory: true)
+        try FileManager.default.createDirectory(at: stray, withIntermediateDirectories: true)
+        expect(f.store.latestTranscriptURL() == later.transcriptURL, "later minute wins; stray folder without transcript ignored")
     }
 
     static func testStoreSessionLifecycle() throws {
