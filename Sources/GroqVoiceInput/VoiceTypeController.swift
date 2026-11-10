@@ -30,6 +30,8 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     private let meetingRecorder = PinnedMicrophoneRecorder(audioSettings: MeetingAudio.settings)
     private let meetingStore = MeetingStore()
     private var meetingTimer: Timer?
+    private var activeSummaryJobs: [URL: MeetingSummaryJob] = [:]
+    private var summaryGenerations: [URL: Int] = [:]
     private var catConfiguration = CatConfiguration.load()
     private var recordingCatImage: NSImage? {
         guard catConfiguration.image == nil, let original = NekoAppearance.catImage else { return NekoAppearance.catImage }
@@ -43,7 +45,8 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         pet.isBusy = { [weak self] in
             guard let self else { return true }
             return self.dictation.state != .idle || self.clipboardPicker.isVisible ||
-                self.catOverlay.isVisible || self.nekoHUD.isVisible || NSApp.modalWindow != nil
+                self.catOverlay.isVisible || self.nekoHUD.isVisible || NSApp.modalWindow != nil ||
+                !self.activeSummaryJobs.isEmpty
         }
         pet.onReleasedChange = { [weak self] released in
             self?.settings.saveDesktopPetReleased(released)
@@ -53,7 +56,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     }()
     private lazy var appUpdater = AppUpdateController { [weak self] in
         guard let self else { return true }
-        return self.dictation.state != .idle || self.micRecorder.isBusy || self.meeting.state != .idle || NSApp.modalWindow != nil
+        return self.dictation.state != .idle || self.micRecorder.isBusy || self.meeting.state != .idle || NSApp.modalWindow != nil || !self.activeSummaryJobs.isEmpty
     }
     private let vocabularyStore = MacVocabularyStore()
     private lazy var vocabularyLearning = VocabularyLearningStore(vocabulary: vocabularyStore)
@@ -212,6 +215,8 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         dictation.shutdown()
         meeting.shutdown()
         meetingTimer?.invalidate()
+        for job in activeSummaryJobs.values { job.cancel() }
+        activeSummaryJobs.removeAll()
         if let clipboardPermissionObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(clipboardPermissionObserver)
         }
@@ -1074,6 +1079,17 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             showMeetingNotice("還沒有會議記錄。")
             return
         }
+        if meeting.state != .idle {
+            NSSound.beep()
+            showMeetingNotice("會議錄音進行中，結束後再產生摘要。")
+            return
+        }
+        if let content = try? String(contentsOf: url, encoding: .utf8),
+           MeetingSummarizer.isRecordingSession(transcript: content) {
+            NSSound.beep()
+            showMeetingNotice("會議錄音進行中，結束後再產生摘要。")
+            return
+        }
         requestMeetingSummary(for: url, manualTrigger: true)
     }
 
@@ -1082,7 +1098,8 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             if manualTrigger {
                 showAPIKeyDialog(firstRun: false)
             } else {
-                showMeetingNotice("自動產生摘要失敗：尚未設定 Groq API 金鑰。")
+                notifyMeetingSummaryFailure(for: transcriptURL, errorDescription: "尚未設定 Groq API 金鑰")
+                statusMenu.updateSummarizeLatestMeeting(title: "摘要失敗：未設定 Key，點此重試", enabled: true)
             }
             return
         }
@@ -1090,33 +1107,70 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
               !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             if manualTrigger {
                 showMeetingNotice("逐字稿內容為空，無法產生摘要。")
+            } else {
+                notifyMeetingSummaryFailure(for: transcriptURL, errorDescription: "逐字稿內容為空")
+                statusMenu.updateSummarizeLatestMeeting(title: "摘要失敗：逐字稿為空", enabled: true)
             }
             return
         }
 
+        // 取消先前同一個 transcript 的 active job（若有的話）
+        activeSummaryJobs[transcriptURL]?.cancel()
+
+        let nextGeneration = (summaryGenerations[transcriptURL] ?? 0) + 1
+        summaryGenerations[transcriptURL] = nextGeneration
+
+        let job = MeetingSummaryJob(transcriptURL: transcriptURL, generation: nextGeneration)
+        activeSummaryJobs[transcriptURL] = job
+
         statusMenu.updateSummarizeLatestMeeting(title: "正在產生會議摘要…", enabled: false)
         MeetingSummarizer.generateSummary(
             transcript: transcript,
-            keychain: credentials
+            keychain: credentials,
+            job: job
         ) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.statusMenu.updateSummarizeLatestMeeting(title: "為最近一次會議產生摘要", enabled: true)
+                guard !job.isCancelled else { return }
+                guard self.summaryGenerations[transcriptURL] == job.generation else {
+                    // 舊 generation，丟棄結果，不准寫入 summary.md
+                    return
+                }
+                self.activeSummaryJobs.removeValue(forKey: transcriptURL)
+
                 switch result {
                 case .success(let summaryMarkdown):
                     do {
                         let summaryURL = try self.meetingStore.writeSummary(summaryMarkdown, for: transcriptURL)
+                        self.statusMenu.updateSummarizeLatestMeeting(title: "為最近一次會議產生摘要", enabled: true)
                         NSSound(named: "Glass")?.play()
                         if manualTrigger {
-                            NSWorkspace.shared.activateFileViewerSelecting([summaryURL])
+                            if self.dictation.state == .idle {
+                                NSWorkspace.shared.activateFileViewerSelecting([summaryURL])
+                            }
                         } else {
                             self.notifyMeetingSummaryCompleted(summaryURL: summaryURL)
                         }
                     } catch {
-                        self.showMeetingNotice("摘要檔案寫入失敗：\(error.localizedDescription)")
+                        if manualTrigger {
+                            if self.dictation.state == .idle {
+                                self.showMeetingNotice("摘要檔案寫入失敗：\(error.localizedDescription)")
+                            }
+                        } else {
+                            self.notifyMeetingSummaryFailure(for: transcriptURL, errorDescription: "寫入失敗")
+                            self.statusMenu.updateSummarizeLatestMeeting(title: "摘要失敗：寫入失敗，點此重試", enabled: true)
+                        }
                     }
                 case .failure(let error):
-                    self.showMeetingNotice("會議摘要產生失敗：\(error.localizedDescription)")
+                    let failureTitle = self.summarizeFailureMenuTitle(for: error)
+                    self.statusMenu.updateSummarizeLatestMeeting(title: failureTitle, enabled: true)
+                    if manualTrigger {
+                        if self.dictation.state == .idle {
+                            self.showMeetingNotice("會議摘要產生失敗：\(error.localizedDescription)")
+                        }
+                    } else {
+                        self.notifyMeetingSummaryFailure(for: transcriptURL, errorDescription: error.localizedDescription)
+                    }
                 }
             }
         }
@@ -1133,6 +1187,35 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             trigger: nil
         )
         UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+    }
+
+    private func notifyMeetingSummaryFailure(for url: URL, errorDescription: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "What's up my neighbor"
+        content.body = "會議摘要產生失敗：\(errorDescription)"
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: "meeting-summary-failure-\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+    }
+
+    private func summarizeFailureMenuTitle(for error: Error) -> String {
+        let msg = error.localizedDescription
+        if msg.contains("429") {
+            return "摘要失敗：429，點此重試"
+        } else if msg.contains("401") {
+            return "摘要失敗：401，點此重試"
+        } else if msg.contains("403") {
+            return "摘要失敗：403，點此重試"
+        } else if msg.contains("413") {
+            return "摘要失敗：413，點此重試"
+        } else if msg.contains("逾時") {
+            return "摘要失敗：逾時，點此重試"
+        }
+        return "摘要失敗，點此重試"
     }
 
     private func renderMeetingStatus(_ status: MeetingStatus) {

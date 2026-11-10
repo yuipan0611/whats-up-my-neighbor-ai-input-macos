@@ -11,6 +11,7 @@ swiftc \
   -framework Security \
   "$ROOT/Sources/GroqVoiceInput/GroqTranscriptionClient.swift" \
   "$ROOT/Sources/GroqVoiceInput/KeychainStore.swift" \
+  "$ROOT/Sources/GroqVoiceInput/MeetingAudio.swift" \
   "$ROOT/Sources/GroqVoiceInput/MeetingStore.swift" \
   "$ROOT/Sources/GroqVoiceInput/GroqModelSelector.swift" \
   "$ROOT/Sources/GroqVoiceInput/MeetingSummarizer.swift" \

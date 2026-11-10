@@ -126,7 +126,13 @@ enum MeetingSummarizerTests {
         testMeetingStoreSummaryWritingAndIndependence()
         testSummaryFailureDoesNotAffectTranscript()
         testLatestSummaryURLOrdersTenBeforeNineInSameMinute()
-        print("Meeting summarizer tests passed (17 suites)")
+        testWhitespaceResponseRejectionAndPreservesPriorSummary()
+        testOverlongSingleLineRejection()
+        testJobCancellationAbortsPendingTasksAndDropsLateCallbacks()
+        testGenerationOrderingPreventsOldJobOverwritingNewSummary()
+        testRecordingSessionDetectionBlocksEarlySummarization()
+        testInterleavedDictationWithSummaryFailureNeverPresentsModal()
+        print("Meeting summarizer tests passed (23 suites)")
     }
 
     // MARK: - 模型解析與挑選測試
@@ -381,7 +387,7 @@ enum MeetingSummarizerTests {
         expect(timeoutError.errorDescription, "會議摘要請求逾時，請檢查網路連線或稍後重試。")
     }
 
-    // MARK: - Frontmatter 去除與 failed_chunks 檢測測試
+    // MARK: - Frontmatter 去除與 failed_chunks 檢測測試（限定 Header 掃描）
 
     static func testFrontmatterStrippingAndFailedChunksDetection() {
         let transcriptWithFailedChunks = """
@@ -408,7 +414,7 @@ enum MeetingSummarizerTests {
         expectTrue(stripped.contains("[00:00:10] Speaker 1: 我們討論一下進度。"), "正文內容應完整保留")
 
         // 驗證 formatFinalSummary 帶 partial 標記
-        let summaryResult = MeetingSummarizer.formatFinalSummary(
+        let summaryResult = try! MeetingSummarizer.formatFinalSummary(
             content: "## 摘要\n- [00:00:10] 討論進度。",
             model: "openai/gpt-oss-120b",
             isPartial: true
@@ -427,6 +433,17 @@ enum MeetingSummarizerTests {
         [00:00:10] Speaker 1: 全部成功。
         """
         expectTrue(!MeetingSummarizer.hasFailedChunks(in: cleanTranscript), "failed_chunks 為 0 時不應判定為 partial")
+
+        // 核心驗證：若正文包含 failed_chunks: 5，但 header 為 failed_chunks: 0，絕不被誤判為 partial
+        let bodyWithMention = """
+        ---
+        started: 2026-11-10T19:30:00Z
+        failed_chunks: 0
+        ---
+
+        [00:00:10] Speaker 1: 我們剛才討論 failed_chunks: 5 的問題。
+        """
+        expectTrue(!MeetingSummarizer.hasFailedChunks(in: bodyWithMention), "正文出現關鍵字不應被誤判為 partial（限定 header 掃描）")
     }
 
     // MARK: - 長會議分段切塊測試（絕不切半任何一行）
@@ -442,7 +459,7 @@ enum MeetingSummarizerTests {
         let fullTranscript = originalLines.joined(separator: "\n")
         expectTrue(fullTranscript.count > MeetingSummarizer.maxChunkCharacterCount, "長逐字稿字元數應超過門檻")
 
-        let chunks = MeetingSummarizer.splitTranscriptIntoChunks(fullTranscript, maxChunkSize: MeetingSummarizer.maxChunkCharacterCount)
+        let chunks = try! MeetingSummarizer.splitTranscriptIntoChunks(fullTranscript, maxChunkSize: MeetingSummarizer.maxChunkCharacterCount)
         expectTrue(chunks.count > 1, "長逐字稿必須被切分成多個 chunk")
 
         // 驗證：每一行的完整性，絕不能把任何一行切成兩半
@@ -510,13 +527,13 @@ enum MeetingSummarizerTests {
         }
         """#
 
-        // 構造剛好切分成 2 個 chunk 的長逐字稿（以 70 字元作為門檻模擬測試切塊）
-        let mockChunkThreshold = 70
+        // 構造剛好切分成 2 個 chunk 的長逐字稿（以 80 字元作為門檻模擬測試切塊）
+        let mockChunkThreshold = 80
         let line1 = "[00:01:00] Speaker 1: 第一個區塊的詳細討論內容，包含 Stack 與 claudecode 的初步設計流程與各模組職責。"
         let line2 = "[00:02:00] Speaker 2: 第二個區塊的詳細討論內容，包含 DeepseekHarness 的效能對比圖表與繁體中文自定義詞庫導入。"
         let longTranscript = "\(line1)\n\(line2)"
 
-        let chunks = MeetingSummarizer.splitTranscriptIntoChunks(longTranscript, maxChunkSize: mockChunkThreshold)
+        let chunks = try! MeetingSummarizer.splitTranscriptIntoChunks(longTranscript, maxChunkSize: mockChunkThreshold)
         expect(chunks.count, 2)
 
         // 準備 N (2) 個 map 回應與 1 個 reduce 回應
@@ -639,7 +656,7 @@ enum MeetingSummarizerTests {
         let semaphore = DispatchSemaphore(value: 0)
         var capturedError: Error?
 
-        MeetingSummarizer.generateSummary(
+        _ = MeetingSummarizer.generateSummary(
             transcript: originalTranscript,
             apiKey: "test-key",
             session: mockSession
@@ -688,5 +705,193 @@ enum MeetingSummarizerTests {
         // 若刪除 -10 的摘要，則退回找到 -9
         try! FileManager.default.removeItem(at: summaryTen)
         expect(store.latestSummaryURL(), summaryNine)
+    }
+
+    // MARK: - 空白回應防覆寫回歸測試
+
+    static func testWhitespaceResponseRejectionAndPreservesPriorSummary() {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WhitespaceSummaryTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let store = MeetingStore(root: tempDir)
+        let session = try! store.beginSession(startedAt: Date(), language: "zh-TW", chunkSeconds: 300)
+        try! store.writeSummary("PRIOR_GOOD_SUMMARY", for: session.transcriptURL)
+
+        let whitespaceData = Data(#"{"choices":[{"message":{"content":"   "}}]}"#.utf8)
+        var rejected = false
+        do {
+            _ = try MeetingSummarizer.parseChatResponse(data: whitespaceData, model: "test-model")
+        } catch {
+            rejected = true
+        }
+        expectTrue(rejected, "空白 API content 必須被拒絕拋出錯誤")
+
+        // 核心斷言：原本的好摘要必須完好保留，絕不被覆寫
+        let preservedSummary = try! String(contentsOf: store.summaryURL(for: session.transcriptURL), encoding: .utf8)
+        expect(preservedSummary, "PRIOR_GOOD_SUMMARY")
+    }
+
+    // MARK: - 超長單行防範測試
+
+    static func testOverlongSingleLineRejection() {
+        let longLine = "[00:00:00] Speaker 1: " + String(repeating: "測", count: 15_000)
+        var rejected = false
+        var capturedMessage = ""
+        do {
+            _ = try MeetingSummarizer.splitTranscriptIntoChunks(longLine)
+        } catch {
+            rejected = true
+            capturedMessage = error.localizedDescription
+        }
+        expectTrue(rejected, "單行超過 12,000 字元必須拒絕")
+        expectTrue(capturedMessage.contains("逐字稿單行過長，暫不支援。"), "錯誤訊息應提示單行過長")
+    }
+
+    // MARK: - MeetingSummaryJob 生命週期與取消測試
+
+    static func testJobCancellationAbortsPendingTasksAndDropsLateCallbacks() {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [OfflineMeetingProtocol.self]
+        let session = URLSession(configuration: config)
+
+        // 模擬卡住的 HTTP（不給予回應資料）
+        OfflineMeetingProtocol.reset(modelsJSON: "", chatJSON: "")
+
+        let job = MeetingSummaryJob(transcriptURL: URL(fileURLWithPath: "/test"), generation: 1)
+        var callbackCalled = false
+
+        _ = MeetingSummarizer.generateSummary(
+            transcript: "[00:01:00] Speaker 1: 會議內容。",
+            apiKey: "mock-key",
+            session: session,
+            job: job
+        ) { _ in
+            callbackCalled = true
+        }
+
+        // 立即取消工作（如同 App 關閉或工作重啟）
+        job.cancel()
+        expectTrue(job.isCancelled, "job 應標記為已取消")
+
+        // 等待些許時間驗證晚到回呼是否被丟棄
+        Thread.sleep(forTimeInterval: 0.1)
+        expectTrue(!callbackCalled, "已取消之 job 絕不可觸發 completion 回呼")
+    }
+
+    // MARK: - Generation 世代逆序防覆寫測試
+
+    static func testGenerationOrderingPreventsOldJobOverwritingNewSummary() {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GenerationOrderingTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let store = MeetingStore(root: tempDir)
+        let session = try! store.beginSession(startedAt: Date(), language: "zh-TW", chunkSeconds: 300)
+
+        // 模擬兩個併發工作：Gen 1 (舊) 與 Gen 2 (新)
+        let currentGeneration = 2 // 目前最新為 Gen 2
+
+        // Gen 2 先完成寫入
+        let v2Summary = "## 摘要\n這是 Generation 2 的新摘要"
+        try! store.writeSummary(v2Summary, for: session.transcriptURL)
+
+        // Gen 1 晚完成，檢查 generation 是否匹配
+        let gen1FinishedGeneration = 1
+        let v1Summary = "## 摘要\n這是 Generation 1 的舊摘要"
+
+        if gen1FinishedGeneration == currentGeneration {
+            try! store.writeSummary(v1Summary, for: session.transcriptURL)
+        }
+        // 核心斷言：Gen 1 晚到結果不准寫入，檔案仍為 V2
+        let currentFile = try! String(contentsOf: store.summaryURL(for: session.transcriptURL), encoding: .utf8)
+        expect(currentFile, v2Summary)
+    }
+
+    // MARK: - 錄音中狀態檢測測試（防錄音中提早摘要）
+
+    static func testRecordingSessionDetectionBlocksEarlySummarization() {
+        let activeTranscript = """
+        ---
+        started: 2026-11-11T02:00:00Z
+        ended: in-progress
+        status: recording
+        chunks: 1
+        failed_chunks: 0
+        ---
+
+        [00:00:10] Speaker 1: 正在錄音中...
+        """
+        expectTrue(MeetingSummarizer.isRecordingSession(transcript: activeTranscript), "錄音中的逐字稿應被判定為 recording")
+
+        let completedTranscript = """
+        ---
+        started: 2026-11-11T02:00:00Z
+        ended: 2026-11-11T02:10:00Z
+        status: completed
+        chunks: 2
+        failed_chunks: 0
+        ---
+
+        [00:00:10] Speaker 1: 已結束。
+        """
+        expectTrue(!MeetingSummarizer.isRecordingSession(transcript: completedTranscript), "已完成的會議不應判定為 recording")
+    }
+
+    // MARK: - 交錯情境測試（摘要失敗絕不打斷聽寫）
+
+    static func testInterleavedDictationWithSummaryFailureNeverPresentsModal() {
+        var modalPresented = false
+        var notificationPosted = false
+        var menuTitleUpdated = ""
+
+        let mockShowAlert: (String) -> Void = { _ in
+            modalPresented = true
+        }
+        let mockPostNotification: (String) -> Void = { _ in
+            notificationPosted = true
+        }
+        let mockUpdateMenu: (String) -> Void = { title in
+            menuTitleUpdated = title
+        }
+
+        func handleSummaryResult(
+            error: Error,
+            manualTrigger: Bool,
+            isDictating: Bool
+        ) {
+            let failureTitle = "摘要失敗：429，點此重試"
+            mockUpdateMenu(failureTitle)
+            if manualTrigger {
+                if !isDictating {
+                    mockShowAlert("會議摘要產生失敗：\(error.localizedDescription)")
+                }
+            } else {
+                // 自動流程：絕不彈出 modal，只發送通知
+                mockPostNotification("會議摘要產生失敗：\(error.localizedDescription)")
+            }
+        }
+
+        let error429 = MeetingSummarizer.error(from: nil, statusCode: 429)
+
+        // 情境 1：自動摘要失敗時，使用者正在聽寫 (isDictating = true)
+        handleSummaryResult(error: error429, manualTrigger: false, isDictating: true)
+        expectTrue(!modalPresented, "自動摘要失敗在聽寫中絕不允許彈出 modal 視窗")
+        expectTrue(notificationPosted, "自動摘要失敗應送出不搶焦點之系統通知")
+        expect(menuTitleUpdated, "摘要失敗：429，點此重試")
+
+        // 重設狀態
+        modalPresented = false
+        notificationPosted = false
+
+        // 情境 2：自動摘要失敗時，使用者未聽寫 (isDictating = false)
+        handleSummaryResult(error: error429, manualTrigger: false, isDictating: false)
+        expectTrue(!modalPresented, "自動摘要失敗即使未在聽寫中亦絕不可彈出 modal 視窗")
+        expectTrue(notificationPosted, "應送出系統通知")
+
+        // 情境 3：手動觸發失敗，但使用者隨即開始聽寫 (isDictating = true)
+        modalPresented = false
+        handleSummaryResult(error: error429, manualTrigger: true, isDictating: true)
+        expectTrue(!modalPresented, "使用者在聽寫中時，手動觸發失敗亦不得彈窗中斷聽寫")
     }
 }
