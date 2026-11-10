@@ -93,6 +93,8 @@ final class MeetingDiarizationCoordinator {
     private var token: DictationCancellable?
     /// 辨識開始前的 transcript.md 全文：備份與新版逐字稿都以它為準（之後 frontmatter 會被改成 pending／running）。
     private var originalTranscript: String?
+    /// 辨識進行中又結束的會議，依序等待（App 結束時丟掉；它們的 frontmatter 是 pending，下次啟動會被標成 interrupted）。
+    private var queue: [URL] = []
 
     init(store: MeetingStore, locator: MeetingDiarizerLocator, runner: DiarizerProcessRunning,
          modelsDirectory: @escaping () -> URL?,
@@ -112,11 +114,16 @@ final class MeetingDiarizationCoordinator {
 
     // MARK: 開始
 
-    /// 會議逐字稿完成後呼叫。已有辨識在進行時回傳 false。
+    /// 會議逐字稿完成後呼叫。已有辨識在進行時放進佇列（回傳 true），已經在佇列或正在處理的不重複放。
     @discardableResult
     func begin(transcriptURL: URL) -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard phase == .idle else { return false }
+        guard phase == .idle else {
+            if transcriptURL == job || queue.contains(transcriptURL) { return false }
+            queue.append(transcriptURL)
+            try? store.setFrontmatter([("diarization", MeetingDiarizationState.pending.rawValue)], transcriptURL: transcriptURL)
+            return true
+        }
         generation += 1
         let mine = generation
         job = transcriptURL
@@ -227,7 +234,10 @@ final class MeetingDiarizationCoordinator {
                               records: [TranscriptSegmentRecord], directory: URL) throws {
         let transcriptURL = directory.appendingPathComponent(MeetingStore.transcriptFilename)
         let plainURL = directory.appendingPathComponent(MeetingStore.plainTranscriptFilename)
-        guard let original = originalTranscript else { throw CocoaError(.fileReadUnknown) }
+        guard let captured = originalTranscript else { throw CocoaError(.fileReadUnknown) }
+        // 重試時原版可能帶著上次的 failed／interrupted 標記；備份與新版都不要帶。
+        let original = MeetingFrontmatter.removing("diarization_reason",
+                           from: MeetingFrontmatter.removing("diarization", from: captured))
         let body = MeetingStore.bodyAfterFrontmatter(original)
         let incomplete = MeetingFrontmatter.value("segments", in: original) != "complete"
 
@@ -274,11 +284,29 @@ final class MeetingDiarizationCoordinator {
         phase = .idle
         job = nil
         originalTranscript = nil
+        queue = []
         try? store.setFrontmatter([("diarization", MeetingDiarizationState.cancelled.rawValue)], transcriptURL: transcript)
         retainedAudio = store.chunkFiles(in: directory).isEmpty ? nil : (directory, .cancelled)
         onPhaseChange?(.idle)
         onFinished?(transcript, .cancelled)
         pending?.cancel()
+    }
+
+    /// 「重新辨識最近一次會議的說話者」：failed／interrupted／cancelled 且音檔還在。
+    var canRetry: Bool { phase == .idle && store.latestRetryableDiarization() != nil }
+
+    @discardableResult
+    func retryLatest() -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard phase == .idle, let candidate = store.latestRetryableDiarization() else { return false }
+        return begin(transcriptURL: candidate.transcriptURL)
+    }
+
+    /// 啟動時（掃描之後）呼叫：把磁碟上最近一場未完成的辨識接回選單狀態。
+    func restoreFromDisk() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard phase == .idle, retainedAudio == nil, let candidate = store.latestRetryableDiarization() else { return }
+        retainedAudio = (candidate.transcriptURL.deletingLastPathComponent(), candidate.state)
     }
 
     /// 使用者在選單選「刪除這場會議的音檔」。
@@ -309,6 +337,12 @@ final class MeetingDiarizationCoordinator {
         retainedAudio = state == .done || store.chunkFiles(in: directory).isEmpty ? nil : (directory, state)
         onPhaseChange?(.idle)
         onFinished?(transcript, state)
+        startNextInQueue()
+    }
+
+    private func startNextInQueue() {
+        guard phase == .idle, !queue.isEmpty else { return }
+        begin(transcriptURL: queue.removeFirst())
     }
 
     private func setState(_ state: MeetingDiarizationState) {

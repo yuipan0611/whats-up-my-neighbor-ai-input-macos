@@ -9,6 +9,8 @@ enum MeetingDiarizationState: String, Equatable {
     case notApplicable = "n/a"
     case pending, running
     case done, failed, skipped, cancelled
+    /// App 在辨識途中結束或當機：啟動掃描把停在 pending／running 的會議改成這個（終態，音檔保留）。
+    case interrupted
 
     /// 之後不會再變的狀態（摘要可以開始產生）。`pending`／`running` 之外都是終態。
     var isTerminal: Bool { self != .pending && self != .running }
@@ -25,6 +27,15 @@ enum MeetingFrontmatter {
             }
         }
         return nil
+    }
+
+    /// 移除一個鍵（沒有就原樣回傳）。
+    static func removing(_ key: String, from text: String) -> String {
+        guard let block = frontmatterRange(in: text) else { return text }
+        let lines = text[block].split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let kept = lines.filter { !$0.hasPrefix("\(key):") }
+        guard kept.count != lines.count else { return text }
+        return String(text[..<block.lowerBound]) + kept.joined(separator: "\n") + String(text[block.upperBound...])
     }
 
     /// 設定（有就取代、沒有就加在結尾 `---` 之前）。沒有 frontmatter 時原樣回傳。
@@ -63,6 +74,37 @@ extension MeetingStore {
         guard let text = try? String(contentsOf: transcriptURL, encoding: .utf8),
               let value = MeetingFrontmatter.value("diarization", in: text) else { return .notApplicable }
         return MeetingDiarizationState(rawValue: value) ?? .notApplicable
+    }
+
+    /// 啟動掃描：frontmatter 停在 `pending`／`running` 的會議，代表上次 App 在辨識途中結束或當機，
+    /// 一律改成 `interrupted`（終態），音檔不動。回傳被改的逐字稿，由新到舊。
+    @discardableResult
+    func markInterruptedDiarizations() -> [URL] {
+        var changed: [URL] = []
+        for directory in sessionDirectoriesNewestFirst() {
+            let url = directory.appendingPathComponent(Self.transcriptFilename)
+            let state = diarizationState(for: url)
+            guard state == .pending || state == .running else { continue }
+            if (try? setFrontmatter([("diarization", MeetingDiarizationState.interrupted.rawValue),
+                                     ("diarization_reason", "app-exit")], transcriptURL: url)) != nil {
+                changed.append(url)
+            }
+        }
+        return changed
+    }
+
+    /// 最近一場可以（重新）辨識說話者的會議：狀態是 failed／interrupted／cancelled，且段檔與 manifest 都還在。
+    func latestRetryableDiarization() -> (transcriptURL: URL, state: MeetingDiarizationState)? {
+        let retryable: Set<MeetingDiarizationState> = [.failed, .interrupted, .cancelled]
+        for directory in sessionDirectoriesNewestFirst() {
+            let url = directory.appendingPathComponent(Self.transcriptFilename)
+            let state = diarizationState(for: url)
+            guard retryable.contains(state), !chunkFiles(in: directory).isEmpty,
+                  FileManager.default.fileExists(atPath: directory.appendingPathComponent(Self.manifestFilename).path)
+            else { continue }
+            return (url, state)
+        }
+        return nil
     }
 
     /// 寫入 frontmatter 欄位（原子寫入）。

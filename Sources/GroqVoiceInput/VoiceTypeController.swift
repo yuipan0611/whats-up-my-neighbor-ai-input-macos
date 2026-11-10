@@ -252,6 +252,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             "copyLatestMeetingTranscript": #selector(copyLatestMeetingTranscript),
             "toggleMeetingDiarization": #selector(toggleMeetingDiarization),
             "deleteMeetingAudio": #selector(deleteMeetingAudio),
+            "retryMeetingDiarization": #selector(retryMeetingDiarization),
             "selectOutputMode": #selector(selectOutputMode(_:)),
             "showLanguageDialog": #selector(showLanguageDialog),
             "showTextSettingsDialog": #selector(showTextSettingsDialog),
@@ -278,6 +279,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         updateRelayMenu()
         statusMenu.updateMeetingDiarization(enabled: settings.meetingDiarizationEnabled && MeetingDiarizerSupport.isAppleSilicon,
                                             supported: MeetingDiarizerSupport.isAppleSilicon)
+        recoverMeetingDiarizationAfterLaunch()
         renderDictationState(.idle)
     }
 
@@ -1144,6 +1146,20 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         statusMenu.updateMeetingDiarization(enabled: settings.meetingDiarizationEnabled, supported: true)
     }
 
+    @objc private func retryMeetingDiarization() {
+        _ = diarizationCoordinator().retryLatest()
+        renderDiarizationStatus()
+    }
+
+    /// 啟動時：上次停在 pending／running 的會議改成 interrupted（音檔保留），並把選單接回來。
+    /// 沒有任何這類會議時什麼都不建立（功能沒用過就和以前完全一樣）。
+    private func recoverMeetingDiarizationAfterLaunch() {
+        meetingStore.markInterruptedDiarizations()
+        guard meetingStore.latestRetryableDiarization() != nil else { return }
+        diarizationCoordinator().restoreFromDisk()
+        renderDiarizationStatus()
+    }
+
     @objc private func deleteMeetingAudio() {
         _ = meetingDiarizationCoordinator?.deleteRetainedAudio()
         renderDiarizationStatus()
@@ -1176,6 +1192,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             statusMenu.updateMeetingDiarizationStatus(statusTitle: nil, canDeleteAudio: false)
             return
         }
+        let retry = coordinator.canRetry
         switch coordinator.phase {
         case .asking, .preparing:
             statusMenu.updateMeetingDiarizationStatus(statusTitle: "說話者辨識準備中…", canDeleteAudio: false)
@@ -1185,11 +1202,13 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         case .idle:
             switch coordinator.retainedAudio?.state {
             case .failed?:
-                statusMenu.updateMeetingDiarizationStatus(statusTitle: "說話者辨識失敗，音檔保留中", canDeleteAudio: true)
+                statusMenu.updateMeetingDiarizationStatus(statusTitle: "說話者辨識失敗，音檔保留中", canDeleteAudio: true, canRetry: retry)
+            case .interrupted?:
+                statusMenu.updateMeetingDiarizationStatus(statusTitle: "上次說話者辨識被中斷，音檔保留中", canDeleteAudio: true, canRetry: retry)
             case .some:
-                statusMenu.updateMeetingDiarizationStatus(statusTitle: "音檔保留中（未辨識說話者）", canDeleteAudio: true)
+                statusMenu.updateMeetingDiarizationStatus(statusTitle: "音檔保留中（未辨識說話者）", canDeleteAudio: true, canRetry: retry)
             case nil:
-                statusMenu.updateMeetingDiarizationStatus(statusTitle: nil, canDeleteAudio: false)
+                statusMenu.updateMeetingDiarizationStatus(statusTitle: nil, canDeleteAudio: false, canRetry: retry)
             }
         }
     }

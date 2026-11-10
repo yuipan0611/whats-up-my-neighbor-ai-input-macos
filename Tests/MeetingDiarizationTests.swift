@@ -111,6 +111,17 @@ private final class Fixture {
 
     deinit { try? FileManager.default.removeItem(at: root) }
 
+    /// 同一個 root 底下再一場完整的會議（同一分鐘，資料夾會加 -2）。
+    func addMeeting() -> MeetingSession {
+        let other = try! store.beginSession(startedAt: Date(timeIntervalSince1970: 1_800_000_000), language: "zh", chunkSeconds: 300)
+        try! store.appendChunk(other, offset: 0, lines: [MeetingLine(offset: 0, text: "另一場")])
+        try! store.endSession(other, endedAt: Date(timeIntervalSince1970: 1_800_000_900), chunks: 1, failedChunks: 0)
+        try! store.appendSegments(other, records: [MeetingSegmentRecord(v: 1, chunk: 1, start: 0, end: 3, text: "另一場", words: nil, failed: nil)])
+        try! Data([1]).write(to: store.chunkURL(other, index: 1))
+        try! store.writeManifest(directory: other.directory, chunks: [(1, 0)])
+        return other
+    }
+
     static let defaultRecords: [MeetingSegmentRecord] = [
         MeetingSegmentRecord(v: 1, chunk: 1, start: 0, end: 4, text: "大家好", words: nil, failed: nil),
         MeetingSegmentRecord(v: 1, chunk: 1, start: 5, end: 9, text: "我是第二個人", words: nil, failed: nil),
@@ -146,10 +157,13 @@ enum MeetingDiarizationTests {
         testUserDeclineKeepsAudio()
         testNotReadyOrNoManifestFails()
         testBadOutputAndLaunchErrorFail()
-        testSecondBeginWhileBusyIsRefused()
+        testSecondMeetingIsQueuedAndRunsAfterTheFirst()
+        testCancelDropsQueueAndRelaunchMarksInterrupted()
+        testStartupScanMarksInterrupted()
+        testRetryAfterFailureAndInterruption()
         testRerunKeepsOriginalPlainBackup()
         testRealProcessRunner()
-        print("MeetingDiarization tests passed (16 scenarios)")
+        print("MeetingDiarization tests passed (19 scenarios)")
     }
 
     // MARK: 純函式
@@ -158,6 +172,7 @@ enum MeetingDiarizationTests {
         let text = "---\na: 1\nb: two\n---\n\n# 標題\n"
         expect(MeetingFrontmatter.value("a", in: text) == "1" && MeetingFrontmatter.value("b", in: text) == "two", "read values")
         expect(MeetingFrontmatter.value("c", in: text) == nil, "missing key")
+        expect(MeetingFrontmatter.removing("a", from: text) == "---\nb: two\n---\n\n# 標題\n" && MeetingFrontmatter.removing("zz", from: text) == text, "remove key")
         expect(MeetingFrontmatter.setting("a", to: "9", in: text) == "---\na: 9\nb: two\n---\n\n# 標題\n", "replace keeps the rest")
         expect(MeetingFrontmatter.setting("c", to: "x\ny", in: text) == "---\na: 1\nb: two\nc: x y\n---\n\n# 標題\n",
                "add before closing marker, newline in value folded")
@@ -394,12 +409,95 @@ enum MeetingDiarizationTests {
                && MeetingFrontmatter.value("diarization_reason", in: launch.transcript)?.contains("拒絕執行") == true, "launch error → failed")
     }
 
-    static func testSecondBeginWhileBusyIsRefused() {
+    // 辨識進行中又結束一場：排隊，第一場完成後自動接著問人數與辨識；同一場不重複排。
+    static func testSecondMeetingIsQueuedAndRunsAfterTheFirst() {
         let f = Fixture()
+        let second = f.addMeeting()
         f.coordinator.begin(transcriptURL: f.transcriptURL)
-        expect(!f.coordinator.begin(transcriptURL: f.transcriptURL) && f.runner.calls.count == 1, "no second run while busy")
-        f.succeed()
-        expect(f.coordinator.begin(transcriptURL: f.transcriptURL), "accepted again once idle")
+        expect(!f.coordinator.begin(transcriptURL: f.transcriptURL), "the running meeting is not queued again")
+        expect(f.coordinator.begin(transcriptURL: second.transcriptURL), "second meeting accepted into the queue")
+        expect(!f.coordinator.begin(transcriptURL: second.transcriptURL), "no duplicate in the queue")
+        expect(f.runner.calls.count == 1 && f.asked.count == 1, "only the first one runs")
+        expect(f.store.diarizationState(for: second.transcriptURL) == .pending, "queued meeting is pending (not terminal)")
+        f.succeed(0)
+        expect(f.finished.map(\.1) == [.done], "first finished")
+        expect(f.runner.calls.count == 2 && f.asked.count == 2, "second starts right after, asking its own speaker count")
+        expect(f.store.diarizationState(for: second.transcriptURL) == .running, "second is running")
+        f.succeed(1)
+        expect(f.finished.map(\.1) == [.done, .done] && f.store.diarizationState(for: second.transcriptURL) == .done, "second done")
+        expect(f.coordinator.phase == .idle, "queue drained")
+    }
+
+    // App 結束：佇列丟掉（不寫 cancelled 以外的狀態）；排隊的那場停在 pending，下次啟動被標成 interrupted。
+    static func testCancelDropsQueueAndRelaunchMarksInterrupted() {
+        let f = Fixture()
+        let second = f.addMeeting()
+        f.coordinator.begin(transcriptURL: f.transcriptURL)
+        f.coordinator.begin(transcriptURL: second.transcriptURL)
+        f.coordinator.cancel()
+        expect(f.runner.calls.count == 1 && f.asked.count == 1, "the queued meeting never starts after cancel")
+        expect(f.store.diarizationState(for: f.transcriptURL) == .cancelled, "running one cancelled")
+        expect(f.store.diarizationState(for: second.transcriptURL) == .pending, "queued one left pending")
+        let changed = f.store.markInterruptedDiarizations()
+        expect(changed == [second.transcriptURL], "next launch: only the pending one is marked: \(changed)")
+        expect(f.store.diarizationState(for: second.transcriptURL) == .interrupted
+               && MeetingDiarizationState.interrupted.isTerminal, "interrupted is terminal")
+        expect(f.exists("chunk-001.m4a") && FileManager.default.fileExists(atPath: second.directory.appendingPathComponent("chunk-001.m4a").path),
+               "audio kept")
+    }
+
+    static func testStartupScanMarksInterrupted() {
+        let f = Fixture()
+        let b = f.addMeeting()
+        // 第一場停在 running（當機），第二場是 done，第三場沒有欄位。
+        try! f.store.setFrontmatter([("diarization", "running")], transcriptURL: f.transcriptURL)
+        try! f.store.setFrontmatter([("diarization", "done")], transcriptURL: b.transcriptURL)
+        let c = f.addMeeting()
+        expect(f.store.markInterruptedDiarizations() == [f.transcriptURL], "only running/pending are changed")
+        expect(f.store.diarizationState(for: f.transcriptURL) == .interrupted, "running → interrupted")
+        expect(MeetingFrontmatter.value("diarization_reason", in: f.transcript) == "app-exit", "reason recorded")
+        expect(f.store.diarizationState(for: b.transcriptURL) == .done && f.store.diarizationState(for: c.transcriptURL) == .notApplicable,
+               "others untouched")
+        expect(f.store.markInterruptedDiarizations().isEmpty, "idempotent")
+        expect(f.exists("chunk-001.m4a"), "audio untouched")
+        // 選單狀態接回來：最近一場可重試的是第一場（另兩場不是 failed/interrupted/cancelled）。
+        f.coordinator.restoreFromDisk()
+        expect(f.coordinator.retainedAudio?.state == .interrupted && f.coordinator.retainedAudio?.directory == f.directory,
+               "menu knows about the interrupted meeting")
+        expect(f.coordinator.canRetry, "retry offered")
+    }
+
+    // 重試：failed／interrupted／cancelled 且音檔還在；成功後備份是不帶失敗標記的原版。
+    static func testRetryAfterFailureAndInterruption() {
+        let f = Fixture()
+        expect(!f.coordinator.canRetry && !f.coordinator.retryLatest(), "nothing to retry for a meeting that never ran")
+        f.coordinator.begin(transcriptURL: f.transcriptURL)
+        f.runner.calls[0].completion(.success(DiarizerRunResult(exitCode: 5, standardOutput: Data(), standardError: "boom")))
+        expect(f.finished.map(\.1) == [.failed] && f.coordinator.canRetry, "failed meeting can be retried")
+        expect(f.coordinator.retryLatest(), "retry accepted")
+        expect(f.asked.count == 2 && f.runner.calls.count == 2, "same lifecycle: asks again and launches")
+        expect(f.store.diarizationState(for: f.transcriptURL) == .running, "running again")
+        f.succeed(1)
+        expect(f.finished.map(\.1) == [.failed, .done], "second attempt done")
+        let text = f.transcript
+        expect(MeetingFrontmatter.value("diarization", in: text) == "done" && MeetingFrontmatter.value("diarization_reason", in: text) == nil,
+               "old failure reason removed")
+        let plain = (try? String(contentsOf: f.directory.appendingPathComponent("transcript.plain.md"), encoding: .utf8)) ?? ""
+        expect(MeetingFrontmatter.value("diarization", in: plain) == nil && MeetingFrontmatter.value("diarization_reason", in: plain) == nil,
+               "backup carries no diarization markers: \(plain)")
+        expect(!f.coordinator.canRetry && !f.coordinator.retryLatest(), "audio is gone → nothing to retry")
+
+        // cancelled 與 interrupted 也能重試；busy 時不能。
+        let g = Fixture()
+        g.coordinator.begin(transcriptURL: g.transcriptURL)
+        g.coordinator.cancel()
+        expect(g.coordinator.canRetry, "cancelled can be retried")
+        g.coordinator.retryLatest()
+        expect(!g.coordinator.canRetry && !g.coordinator.retryLatest(), "no retry while running")
+        g.coordinator.cancel()
+        _ = g.store.markInterruptedDiarizations()
+        try! g.store.setFrontmatter([("diarization", "interrupted")], transcriptURL: g.transcriptURL)
+        expect(g.coordinator.retryLatest(), "interrupted can be retried")
     }
 
     // 重新辨識時，plain 備份是最原始的版本，不能被「已經有 Speaker 的版本」覆蓋。
