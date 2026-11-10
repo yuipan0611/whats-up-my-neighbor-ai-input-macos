@@ -178,7 +178,8 @@ final class MeetingCoordinator {
                    duration: chunk.duration, audioKept: true)
         }
         try? store.endSession(session, endedAt: now(), chunks: totalChunkCount,
-                              failedChunks: failedChunkCount, status: "interrupted")
+                              failedChunks: failedChunkCount, status: "interrupted",
+                              segmentsComplete: sidecarFailureCount == 0)
         current = nil
         queue = []
         inFlight = nil
@@ -342,7 +343,8 @@ final class MeetingCoordinator {
         guard state == .draining, stopRequested, current == nil, queue.isEmpty, inFlight == nil,
               let session else { return }
         do {
-            try store.endSession(session, endedAt: now(), chunks: totalChunkCount, failedChunks: failedChunkCount)
+            try store.endSession(session, endedAt: now(), chunks: totalChunkCount, failedChunks: failedChunkCount,
+                                segmentsComplete: sidecarFailureCount == 0)
         } catch {
             onError?("無法完成逐字稿：\(error.localizedDescription)")
         }

@@ -112,11 +112,14 @@ final class MeetingStore {
 
     /// 重寫 frontmatter（結束時間與段數），正文不動。可重複呼叫，不會壞檔。
     /// `status`：`completed` 正常結束；`interrupted` 是 App 在會議中被關閉。
+    /// `segmentsComplete`：`segments.jsonl` 是否完整。旁路檔寫入失敗過就傳 false，frontmatter 會寫
+    /// `segments: incomplete`，之後的說話者辨識讀得到。
     func endSession(_ session: MeetingSession, endedAt: Date, chunks: Int, failedChunks: Int,
-                    status: String = "completed") throws {
+                    status: String = "completed", segmentsComplete: Bool = true) throws {
         let current = try String(contentsOf: session.transcriptURL, encoding: .utf8)
         let body = Self.bodyAfterFrontmatter(current)
-        let text = frontmatter(session, ended: endedAt, chunks: chunks, failed: failedChunks, status: status)
+        let text = frontmatter(session, ended: endedAt, chunks: chunks, failed: failedChunks, status: status,
+                               segmentsComplete: segmentsComplete)
             + body
         try write(text, to: session.transcriptURL)
     }
@@ -240,7 +243,7 @@ final class MeetingStore {
     }
 
     private func frontmatter(_ session: MeetingSession, ended: Date?, chunks: Int,
-                             failed: Int, status: String) -> String {
+                             failed: Int, status: String, segmentsComplete: Bool = true) -> String {
         let iso = ISO8601DateFormatter()
         iso.timeZone = timeZone
         iso.formatOptions = [.withInternetDateTime]
@@ -254,6 +257,7 @@ final class MeetingStore {
         failed_chunks: \(failed)
         chunk_seconds: \(session.chunkSeconds)
         audio: \(session.audio)
+        segments: \(segmentsComplete ? "complete" : "incomplete")
         chunk_gap: 每段錄音之間會有約 0.3–0.5 秒沒有錄到（錄音器停止再重新啟動）
         timestamps: 每行時間為「整場會議的相對時間」，一行對應 Whisper 的一個 segment，不一定剛好是一句
         ---

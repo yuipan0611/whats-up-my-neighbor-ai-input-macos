@@ -258,6 +258,7 @@ enum MeetingTests {
         expect(transcript.contains("[00:00:00] 大家好 Grokbot") && transcript.contains("[00:00:04] yui 說 claudecode"), "transcript.md unchanged by the sidecar")
         expect(transcript.contains("> ⚠️ [00:05:00] 第 2 段辨識失敗：Rate limit reached。音檔保留：chunk-002.m4a"), "failure marker unchanged")
         expect(f.coordinator.sidecarFailureCount == 0, "no sidecar failures")
+        expect(transcript.contains("audio: aac-44100-mono-64k\nsegments: complete\n"), "complete sidecar is declared in frontmatter")
         expect(!f.exists(c1) && f.exists(c2) && !f.exists(c3), "chunk deletion behaviour unchanged: success deleted, failure kept")
     }
 
@@ -297,6 +298,14 @@ enum MeetingTests {
         expect(f.coordinator.sidecarFailureCount == 1, "sidecar failure counted")
         expect(f.transcript.contains("[00:00:00] 逐字稿照寫"), "transcript still written")
         expect(!f.exists(c1) && f.coordinator.failedChunkCount == 0, "successful chunk still deleted and not marked failed")
+        // 結束會議後，frontmatter 要說明旁路檔不完整，讓說話者辨識讀得到。
+        let c2 = f.recorder.starts[1]
+        f.coordinator.stop()
+        f.recorder.started(c2)
+        f.recorder.finish(c2)
+        expect(f.coordinator.state == .idle, "meeting finished")
+        expect(f.transcript.contains("audio: aac-44100-mono-64k\nsegments: incomplete\n"), "incomplete sidecar is declared: \(f.transcript.prefix(400))")
+        expect(f.transcript.contains("[00:00:00] 逐字稿照寫"), "body untouched by the frontmatter rewrite")
     }
 
     static func testTimestampFormatting() {
