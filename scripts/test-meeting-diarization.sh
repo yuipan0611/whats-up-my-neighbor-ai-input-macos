@@ -19,6 +19,8 @@ swiftc \
   "$ROOT/Sources/GroqVoiceInput/MeetingDiarizationCoordinator.swift" \
   "$ROOT/Sources/GroqVoiceInput/MeetingDiarizerProcess.swift" \
   "$ROOT/Sources/GroqVoiceInput/MeetingAudio.swift" \
+  "$ROOT/Sources/GroqVoiceInput/MeetingDiarizerLocator.swift" \
+  "$ROOT/Sources/GroqVoiceInput/MeetingDiarizerAssets.swift" \
   "$ROOT/Tests/MeetingDiarizationTests.swift" \
   -o "$OUTPUT"
 

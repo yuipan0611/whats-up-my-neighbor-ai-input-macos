@@ -100,7 +100,10 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
                     return self?.vocabularyLearning.prompt(base: base) ?? base
                 }),
             store: meetingStore,
-            retainAudio: { [weak self] in self?.settings.meetingDiarizationEnabled ?? false })
+            retainAudio: { [weak self] in
+                guard let self else { return false }
+                return self.settings.meetingDiarizationEnabled && MeetingDiarizerSupport.isAppleSilicon
+            })
         coordinator.onStatusChange = { [weak self] status in self?.renderMeetingStatus(status) }
         coordinator.onError = { [weak self] message in self?.showMeetingError(message) }
         coordinator.onFinished = { [weak self] url, failed in self?.meetingFinished(url, failedChunks: failed) }
@@ -273,7 +276,8 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         statusMenu.updateNekoPosition(nekoHUD.position)
         statusMenu.updateCatCoat(catConfiguration.appearance.preset)
         updateRelayMenu()
-        statusMenu.updateMeetingDiarization(enabled: settings.meetingDiarizationEnabled)
+        statusMenu.updateMeetingDiarization(enabled: settings.meetingDiarizationEnabled && MeetingDiarizerSupport.isAppleSilicon,
+                                            supported: MeetingDiarizerSupport.isAppleSilicon)
         renderDictationState(.idle)
     }
 
@@ -1109,8 +1113,8 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     private func diarizationCoordinator() -> MeetingDiarizationCoordinator {
         if let meetingDiarizationCoordinator { return meetingDiarizationCoordinator }
         let coordinator = MeetingDiarizationCoordinator(
-            store: meetingStore, locator: UnavailableMeetingDiarizerLocator(), runner: ProcessDiarizerRunner(),
-            modelsDirectory: { nil },
+            store: meetingStore, locator: meetingDiarizerLocator, runner: ProcessDiarizerRunner(),
+            modelsDirectory: { MeetingDiarizerAssets().modelsDirectory },
             askSpeakerCount: { [weak self] last, completion in completion(self?.askSpeakerCount(last: last)) },
             loadLastChoice: { [weak self] in SpeakerCountChoice(stored: self?.settings.meetingDiarizationSpeakerCount) },
             saveLastChoice: { [weak self] in self?.settings.meetingDiarizationSpeakerCount = $0.stored })
@@ -1121,6 +1125,10 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleMeetingDiarization() {
+        guard MeetingDiarizerSupport.isAppleSilicon else {
+            showMeetingNotice(MeetingDiarizerSupport.unsupportedMessage)
+            return
+        }
         if settings.meetingDiarizationEnabled {
             settings.meetingDiarizationEnabled = false
         } else {
@@ -1133,7 +1141,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             guard alert.runModal() == .alertFirstButtonReturn else { return }
             settings.meetingDiarizationEnabled = true
         }
-        statusMenu.updateMeetingDiarization(enabled: settings.meetingDiarizationEnabled)
+        statusMenu.updateMeetingDiarization(enabled: settings.meetingDiarizationEnabled, supported: true)
     }
 
     @objc private func deleteMeetingAudio() {

@@ -5,6 +5,14 @@ import Carbon
 enum SettingsStoreTests {
     static func main() {
         withStore { store, defaults in
+            // 會議說話者辨識：預設關閉、沒有人數紀錄；設定後重新載入仍在。
+            precondition(!store.meetingDiarizationEnabled && store.meetingDiarizationSpeakerCount == nil)
+            store.meetingDiarizationEnabled = true
+            store.meetingDiarizationSpeakerCount = 0
+            precondition(SettingsStore(defaults: defaults).meetingDiarizationEnabled)
+            precondition(SettingsStore(defaults: defaults).meetingDiarizationSpeakerCount == 0)
+            store.meetingDiarizationEnabled = false
+            precondition(!SettingsStore(defaults: defaults).meetingDiarizationEnabled)
             precondition(!store.loadDesktopPetReleased())
             defaults.set("retained", forKey: "unrelatedPreference")
             store.saveDesktopPetReleased(true)

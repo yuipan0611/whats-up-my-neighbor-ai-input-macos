@@ -217,8 +217,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         statusItem.menu = menu
     }
 
-    func updateMeetingDiarization(enabled: Bool) {
+    func updateMeetingDiarization(enabled: Bool, supported: Bool) {
         meetingDiarizationToggleMenuItem?.state = enabled ? .on : .off
+        // 不支援的機器（Intel）：功能停用，標題說明原因。
+        meetingDiarizationToggleMenuItem?.isEnabled = supported
+        meetingDiarizationToggleMenuItem?.title = supported
+            ? "會議說話者辨識（實驗）" : "會議說話者辨識（實驗）— \(MeetingDiarizerSupport.unsupportedMessage)"
     }
 
     /// `statusTitle` 為 nil 時隱藏狀態列；`canDeleteAudio` 控制「刪除這場會議的音檔」是否出現。

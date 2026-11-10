@@ -6,18 +6,7 @@ import Foundation
 // 所以可以用假的執行器做離線測試。功能由 `SettingsStore.meetingDiarizationEnabled` 控制（預設關閉），
 // 開關關閉時 App 不會建立任何東西、也不會碰這個類別。
 
-/// Tom 的打包與模型下載器會提供實作（介面約定）。這裡只宣告用到的部分。
-protocol MeetingDiarizerLocator {
-    func executableURL() -> URL?
-    func modelsReady() -> Bool
-}
-
-/// 佔位實作：Tom 的打包與模型下載器合併前，辨識程式一律「未就緒」，開關打開也只會得到
-/// `diarization: failed`（音檔保留）。合併後換成 Tom 的實作。
-struct UnavailableMeetingDiarizerLocator: MeetingDiarizerLocator {
-    func executableURL() -> URL? { nil }
-    func modelsReady() -> Bool { false }
-}
+/// 辨識程式與模型的位置由 `MeetingDiarizerLocator`（Tom，MeetingDiarizerLocator.swift）提供。
 
 enum SpeakerCountChoice: Equatable {
     case count(Int)
