@@ -19,8 +19,10 @@ enum MeetingDiarizerDownloadText {
         for model in models { lines.append("• \(model.name)（約 \(megabytes(model.downloadBytes))）") }
         lines.append("")
         lines.append("來源：github.com/k2-fsa/sherpa-onnx 的 release。每個檔案都用固定的 SHA256 驗證，不符就丟棄、不安裝。")
+        lines.append("")
         lines.append("存放位置：\((directory.path as NSString).abbreviatingWithTildeInPath)")
-        lines.append("說話者辨識本身在這台 Mac 上執行。下載只需要這一次；不下載就不能使用這個功能。")
+        lines.append("")
+        lines.append("說話者辨識本身在這台 Mac 上執行。下載只需要這一次；不下載就不能使用這個功能。之後可以在選單關閉這個功能，並刪除已下載的模型。")
         let notes = models.compactMap(\.licenseNote)
         if !notes.isEmpty {
             lines.append("")
@@ -29,10 +31,16 @@ enum MeetingDiarizerDownloadText {
         return lines.joined(separator: "\n")
     }
 
-    static func progressLine(received: Int64, total: Int64, modelName: String) -> String {
+    /// 進度視窗第一行（短，不會被截斷）。模型名稱放在第二行（`modelLine`）。
+    static func progressLine(received: Int64, total: Int64) -> String {
         let percent = total > 0 ? Int((Double(received) / Double(total) * 100).rounded(.down)) : 100
-        return "已下載 \(megabytes(received)) / \(megabytes(total))（\(min(100, percent))%）· \(modelName)"
+        return "已下載 \(megabytes(received)) / \(megabytes(total))（\(min(100, percent))%）"
     }
+
+    static func modelLine(_ modelName: String) -> String { modelName }
+    static let preparingLine = "準備下載…"
+    static let menuDeleteModelsTitle = "刪除說話者辨識模型"
+
 
     static func failureMessage(_ failure: Error) -> String {
         (failure.localizedDescription) + "\n\n已下載且驗證通過的檔案會保留，重試只會下載缺少的部分。"

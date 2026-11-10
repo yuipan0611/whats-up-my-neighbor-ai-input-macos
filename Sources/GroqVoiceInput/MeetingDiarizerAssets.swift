@@ -102,6 +102,40 @@ struct MeetingDiarizerAssets {
         return size.int64Value == model.installedBytes
     }
 
+    /// 磁碟上有沒有任何已安裝的模型檔（不看大小；「刪除模型」選單用）。
+    var hasInstalledFiles: Bool {
+        models.contains { fileManager.fileExists(atPath: installedURL(for: $0).path) }
+    }
+
+    /// 「刪除說話者辨識模型」只有在功能關閉、沒有辨識進行中、而且確實有檔案時才能用。
+    func canDeleteModels(featureEnabled: Bool, diarizationBusy: Bool) -> Bool {
+        !featureEnabled && !diarizationBusy && hasInstalledFiles
+    }
+
+    /// 刪除已安裝的模型檔與下載中斷留下的 `.download-*` 暫存資料夾。只刪這份清單裡的檔案與暫存，
+    /// 不遞迴刪整個 models 資料夾（裡面若有別的東西不動）；子資料夾與 models 資料夾本身在空了之後才移除。
+    /// 回傳刪掉的模型檔數。
+    @discardableResult
+    func deleteInstalledModels() -> Int {
+        var removed = 0
+        for model in models {
+            let url = installedURL(for: model)
+            if (try? fileManager.removeItem(at: url)) != nil { removed += 1 }
+            removeIfEmpty(url.deletingLastPathComponent())
+        }
+        let names = (try? fileManager.contentsOfDirectory(atPath: modelsDirectory.path)) ?? []
+        for name in names where name.hasPrefix(".download-") {
+            try? fileManager.removeItem(at: modelsDirectory.appendingPathComponent(name))
+        }
+        removeIfEmpty(modelsDirectory)
+        return removed
+    }
+
+    private func removeIfEmpty(_ directory: URL) {
+        guard let items = try? fileManager.contentsOfDirectory(atPath: directory.path), items.isEmpty else { return }
+        try? fileManager.removeItem(at: directory)
+    }
+
     /// 還沒安裝的模型（下載器只會下載這些）。
     func missingModels() -> [MeetingDiarizerModel] {
         models.filter { !isInstalled($0) }

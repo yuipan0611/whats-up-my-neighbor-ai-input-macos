@@ -9,7 +9,10 @@ final class MeetingDiarizerDownloadController: NSObject {
     private var downloader: MeetingDiarizerDownloader?
     private var panel: NSPanel?
     private var bar: NSProgressIndicator?
+    /// 還沒收到位元組時顯示的「不確定」進度條（會動）；與 `bar` 疊在同一個位置。
+    private var spinner: NSProgressIndicator?
     private var label: NSTextField?
+    private var modelLabel: NSTextField?
 
     init(assets: MeetingDiarizerAssets = MeetingDiarizerAssets(),
          makeDownloader: @escaping () -> MeetingDiarizerDownloader = { MeetingDiarizerDownloader() }) {
@@ -34,9 +37,20 @@ final class MeetingDiarizerDownloadController: NSObject {
         let downloader = makeDownloader()
         self.downloader = downloader
         downloader.start(progress: { [weak self] progress in
-            self?.bar?.doubleValue = progress.fraction
-            self?.label?.stringValue = MeetingDiarizerDownloadText.progressLine(
-                received: progress.receivedBytes, total: progress.totalBytes, modelName: progress.modelName)
+            guard let self else { return }
+            // 還沒收到任何位元組時維持「不確定」的動畫；開始有資料才切成確定的進度。
+            // 兩個獨立的進度條互相切換：同一個 NSProgressIndicator 從不確定切成確定時，畫面會停在空的狀態。
+            if progress.receivedBytes > 0, self.spinner?.isHidden == false {
+                self.spinner?.stopAnimation(nil)
+                self.spinner?.isHidden = true
+                self.bar?.isHidden = false
+            }
+            self.bar?.doubleValue = progress.fraction
+            if progress.receivedBytes > 0 {
+                self.label?.stringValue = MeetingDiarizerDownloadText.progressLine(
+                    received: progress.receivedBytes, total: progress.totalBytes)
+            }
+            self.modelLabel?.stringValue = MeetingDiarizerDownloadText.modelLine(progress.modelName)
         }, completion: { [weak self] result in
             guard let self else { return }
             self.downloader = nil
@@ -61,6 +75,7 @@ final class MeetingDiarizerDownloadController: NSObject {
         alert.messageText = MeetingDiarizerDownloadText.consentTitle
         alert.informativeText = MeetingDiarizerDownloadText.consentMessage(for: models, directory: assets.modelsDirectory)
         alert.alertStyle = .informational
+        alert.icon = NSApp.applicationIconImage
         alert.addButton(withTitle: MeetingDiarizerDownloadText.consentDownloadButton)
         alert.addButton(withTitle: MeetingDiarizerDownloadText.cancelButton)
         NSApp.activate(ignoringOtherApps: true)
@@ -79,42 +94,62 @@ final class MeetingDiarizerDownloadController: NSObject {
     }
 
     private func showPanel() {
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 120),
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 140),
                             styleMask: [.titled], backing: .buffered, defer: false)
         panel.title = MeetingDiarizerDownloadText.progressTitle
         panel.isReleasedWhenClosed = false
         panel.level = .floating
 
-        let label = NSTextField(labelWithString: "準備下載…")
-        label.frame = NSRect(x: 20, y: 76, width: 380, height: 20)
-        label.lineBreakMode = .byTruncatingMiddle
+        // 第一行：已下載／總量／百分比（短）；第二行：模型名稱，太長時從尾端截斷。
+        let label = NSTextField(labelWithString: MeetingDiarizerDownloadText.preparingLine)
+        label.frame = NSRect(x: 20, y: 100, width: 380, height: 20)
+        label.lineBreakMode = .byTruncatingTail
 
-        let bar = NSProgressIndicator(frame: NSRect(x: 20, y: 52, width: 380, height: 14))
+        let modelLabel = NSTextField(labelWithString: "")
+        modelLabel.frame = NSRect(x: 20, y: 80, width: 380, height: 18)
+        modelLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        modelLabel.textColor = .secondaryLabelColor
+        modelLabel.lineBreakMode = .byTruncatingTail
+
+        let bar = NSProgressIndicator(frame: NSRect(x: 20, y: 56, width: 380, height: 14))
         bar.style = .bar
-        bar.isIndeterminate = false
         bar.minValue = 0
         bar.maxValue = 1
         bar.doubleValue = 0
+        bar.isIndeterminate = false
+        bar.isHidden = true
+
+        let spinner = NSProgressIndicator(frame: bar.frame)
+        spinner.style = .bar
+        spinner.isIndeterminate = true
+        spinner.startAnimation(nil)
 
         let cancel = NSButton(title: MeetingDiarizerDownloadText.cancelButton, target: self, action: #selector(cancelTapped))
         cancel.frame = NSRect(x: 320, y: 12, width: 80, height: 30)
         cancel.bezelStyle = .rounded
 
         panel.contentView?.addSubview(label)
+        panel.contentView?.addSubview(modelLabel)
         panel.contentView?.addSubview(bar)
+        panel.contentView?.addSubview(spinner)
         panel.contentView?.addSubview(cancel)
         panel.center()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         self.panel = panel
         self.bar = bar
+        self.spinner = spinner
         self.label = label
+        self.modelLabel = modelLabel
     }
 
     private func closePanel() {
         panel?.orderOut(nil)
         panel = nil
         bar = nil
+        spinner?.stopAnimation(nil)
+        spinner = nil
         label = nil
+        modelLabel = nil
     }
 }

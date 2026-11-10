@@ -112,8 +112,8 @@ enum MeetingDiarizerLocatorTests {
         expect(message.contains("發布前必須確認"), "the unconfirmed CAM++ license is shown to the tester")
         let confirmed = MeetingDiarizerDownloadText.consentMessage(for: [MeetingDiarizerModelCatalog.all[0]], directory: directory)
         expect(!confirmed.contains("⚠️"), "no warning when every license is confirmed")
-        expect(MeetingDiarizerDownloadText.progressLine(received: 12_300_000, total: 35_239_608, modelName: "x") == "已下載 12.3 MB / 35.2 MB（34%）· x", "progress line")
-        expect(MeetingDiarizerDownloadText.progressLine(received: 5, total: 0, modelName: "x").contains("100%"), "no division by zero")
+        expect(MeetingDiarizerDownloadText.progressLine(received: 12_300_000, total: 35_239_608) == "已下載 12.3 MB / 35.2 MB（34%）", "progress line (model name is on its own line)")
+        expect(MeetingDiarizerDownloadText.progressLine(received: 5, total: 0).contains("100%"), "no division by zero")
         expect(MeetingDiarizerDownloadText.failureMessage(MeetingDiarizerDownloader.Failure.checksumMismatch(model: "m")).contains("重試只會下載缺少的部分"), "retry hint")
     }
 }

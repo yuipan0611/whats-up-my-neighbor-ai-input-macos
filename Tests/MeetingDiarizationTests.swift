@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 // 會議說話者辨識（M2）的離線測試：協調器用假的 Process 執行器，真的 Process 執行器用 /bin/sh 小腳本。
@@ -162,8 +163,10 @@ enum MeetingDiarizationTests {
         testStartupScanMarksInterrupted()
         testRetryAfterFailureAndInterruption()
         testRerunKeepsOriginalPlainBackup()
+        testDeleteInstalledModels()
+        testDialogTexts()
         testRealProcessRunner()
-        print("MeetingDiarization tests passed (19 scenarios)")
+        print("MeetingDiarization tests passed (21 scenarios)")
     }
 
     // MARK: 純函式
@@ -510,6 +513,58 @@ enum MeetingDiarizationTests {
         expect(f.finished.map(\.1) == [.done, .failed], "second run fails: audio is gone")
         let plain = try? String(contentsOf: f.directory.appendingPathComponent("transcript.plain.md"), encoding: .utf8)
         expect(plain == original, "backup is still the original")
+    }
+
+    // MARK: 模型刪除與對話框
+
+    static func testDeleteInstalledModels() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ModelsTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let assets = MeetingDiarizerAssets(modelsDirectory: dir)
+        expect(!assets.hasInstalledFiles && !assets.canDeleteModels(featureEnabled: false, diarizationBusy: false), "nothing to delete in an empty/missing folder")
+        for model in MeetingDiarizerModelCatalog.all {
+            let url = assets.installedURL(for: model)
+            try! FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try! Data([1]).write(to: url)
+        }
+        try! FileManager.default.createDirectory(at: dir.appendingPathComponent(".download-123"), withIntermediateDirectories: true)
+        try! Data([1]).write(to: dir.appendingPathComponent(".download-123/x.part"))
+        try! Data("mine".utf8).write(to: dir.appendingPathComponent("keep.txt"))
+        expect(assets.hasInstalledFiles, "installed files are seen")
+        expect(!assets.canDeleteModels(featureEnabled: true, diarizationBusy: false), "cannot delete while the feature is on")
+        expect(!assets.canDeleteModels(featureEnabled: false, diarizationBusy: true), "cannot delete while diarization runs")
+        expect(assets.canDeleteModels(featureEnabled: false, diarizationBusy: false), "can delete once the feature is off and idle")
+        expect(assets.deleteInstalledModels() == MeetingDiarizerModelCatalog.all.count, "both model files removed")
+        expect(!assets.hasInstalledFiles && !FileManager.default.fileExists(atPath: dir.appendingPathComponent(".download-123").path), "models and stale staging gone")
+        expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("keep.txt").path) && FileManager.default.fileExists(atPath: dir.path),
+               "unrelated files (and so the folder) are left alone")
+        expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("pyannote-segmentation").path), "emptied sub-folder removed")
+        // 只剩我們的檔案時，連 models 資料夾一起收掉。
+        try! FileManager.default.removeItem(at: dir.appendingPathComponent("keep.txt"))
+        let first = MeetingDiarizerModelCatalog.all[0]
+        let url = assets.installedURL(for: first)
+        try! FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try! Data([1]).write(to: url)
+        expect(assets.deleteInstalledModels() == 1 && !FileManager.default.fileExists(atPath: dir.path), "empty models folder removed")
+        expect(assets.deleteInstalledModels() == 0, "deleting again is a no-op")
+    }
+
+    static func testDialogTexts() {
+        _ = NSApplication.shared
+        let withDownload = MeetingDiarizationDialogs.privacyAlert(modelsNeedDownload: true).informativeText
+        expect(withDownload.contains("約 35.2 MB 的模型") && withDownload.contains("只存放在這台 Mac"), "privacy: download notice and local storage: \(withDownload)")
+        expect(withDownload.contains("Groq"), "privacy: does not claim the recording never leaves the Mac")
+        expect(!MeetingDiarizationDialogs.privacyAlert(modelsNeedDownload: false).informativeText.contains("接下來會請你下載"), "no download notice once models exist")
+        let dialog = MeetingDiarizationDialogs.speakerCountAlert(last: .count(4))
+        expect(dialog.alert.informativeText.contains("略過") && dialog.alert.informativeText.contains("音檔會保留")
+               && dialog.alert.informativeText.contains("1 小時的會議約需 10 分鐘以上"), "speaker count: skip keeps audio, duration: \(dialog.alert.informativeText)")
+        expect(dialog.popup.itemTitles == ["2 人", "3 人", "4 人", "5 人", "6 人", "不確定"], "choices")
+        expect(MeetingDiarizationDialogs.choice(from: dialog.popup) == .count(4), "defaults to the last choice")
+        dialog.popup.selectItem(at: 5)
+        expect(MeetingDiarizationDialogs.choice(from: dialog.popup) == .auto, "last item is auto")
+        expect(MeetingDiarizationDialogs.choice(from: MeetingDiarizationDialogs.speakerCountAlert(last: nil).popup) == .count(2), "default 2 people")
+        let consent = MeetingDiarizerDownloadText.consentMessage(for: MeetingDiarizerModelCatalog.all, directory: URL(fileURLWithPath: "/tmp/m"))
+        expect(consent.contains("\n\n存放位置") && consent.contains("\n\n說話者辨識本身") && consent.contains("刪除已下載的模型"), "consent: blank lines and deletion hint")
     }
 
     // MARK: 真的 Process 執行器
