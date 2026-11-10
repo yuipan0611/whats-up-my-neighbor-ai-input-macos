@@ -33,6 +33,8 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     private var meetingTimer: Timer?
     /// 第一次需要時才建立；功能關閉時永遠是 nil。
     private var meetingDiarizationCoordinator: MeetingDiarizationCoordinator?
+    /// 第一次使用說話者辨識時的下載同意與進度視窗（Tom）。
+    private lazy var diarizerDownload = MeetingDiarizerDownloadController()
     private var catConfiguration = CatConfiguration.load()
     private var recordingCatImage: NSImage? {
         guard catConfiguration.image == nil, let original = NekoAppearance.catImage else { return NekoAppearance.catImage }
@@ -1141,14 +1143,24 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             alert.addButton(withTitle: "開啟")
             alert.addButton(withTitle: "取消")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
-            settings.meetingDiarizationEnabled = true
+            // 模型還沒下載：先徵求同意並下載；使用者取消就維持關閉（開關不會半開）。
+            diarizerDownload.ensureModels { [weak self] ready in
+                guard let self, ready else { return }
+                self.settings.meetingDiarizationEnabled = true
+                self.statusMenu.updateMeetingDiarization(enabled: true, supported: true)
+            }
+            return
         }
         statusMenu.updateMeetingDiarization(enabled: settings.meetingDiarizationEnabled, supported: true)
     }
 
     @objc private func retryMeetingDiarization() {
-        _ = diarizationCoordinator().retryLatest()
-        renderDiarizationStatus()
+        // 模型被刪掉時重試：先走一次同意與下載，再開始。
+        diarizerDownload.ensureModels { [weak self] ready in
+            guard let self, ready else { return }
+            _ = self.diarizationCoordinator().retryLatest()
+            self.renderDiarizationStatus()
+        }
     }
 
     /// 啟動時：上次停在 pending／running 的會議改成 interrupted（音檔保留），並把選單接回來。

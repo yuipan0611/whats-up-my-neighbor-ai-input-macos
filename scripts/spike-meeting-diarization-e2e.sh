@@ -16,7 +16,7 @@ fi
 
 ROOT="${0:A:h:h}"
 HOME_DIR="${MEETING_DIARIZER_HOME:-$ROOT/build/meeting-diarizer}"
-TOOL="$HOME_DIR/bin/meeting-diarizer"
+TOOL="${MEETING_DIARIZER_TOOL:-$HOME_DIR/bin/meeting-diarizer}"   # 例如 App bundle 內的 Contents/Helpers/meeting-diarizer
 MODELS="$HOME_DIR/assets/models"
 WAV="$HOME_DIR/cache/ES2002a.Mix-Headset.wav"
 RTTM="$HOME_DIR/cache/ES2002a.rttm"
