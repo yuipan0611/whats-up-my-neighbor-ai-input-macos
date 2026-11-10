@@ -299,8 +299,8 @@ App 以 `Process` 呼叫（**進度提醒**：63 分鐘那次，工具開始處�
 | 項目 | 內容 | 負責 | 估計 |
 |---|---|---|---|
 | M1 調整 | `segments.jsonl`、`diarization` 狀態、不刪段檔、啟動時掃描未完成會議 | Tom | 0.5–1 天 |
-| CLI `--manifest` | 讀多個段檔＋offset、補靜音、測試 | Ben | 0.5 天 |
-| 對齊器 | 字級／segment 對齊、平滑、合併；純函式＋離線測試 | Ben | 0.5–1 天 |
+| CLI `--manifest` | 讀多個段檔＋offset、補靜音、測試 | Ben | **已完成**（#49）|
+| 對齊器 | 字級／segment 對齊、平滑、合併；純函式＋離線測試 | Ben | **純函式與測試已完成**（#49，未接 App）；真實 Groq 輸出驗證待第一次呼叫 |
 | 逐字稿渲染與改名 | 從 `segments.jsonl`＋`speakers.json`＋`speaker_names` 產生 `transcript.md`，備份與原子寫入 | Ben | 0.5 天 |
 | 模型下載器 | 同意提示、進度、SHA256、失敗處理 | Ben | 0.5–1 天 |
 | 打包與簽章 | `build.sh`、重簽、公證驗證 | Senior dev 審查 | 無法估計（需簽章環境）|
@@ -326,3 +326,176 @@ App 以 `Process` 呼叫（**進度提醒**：63 分鐘那次，工具開始處�
 2. **M1 要不要先合併再改**：#47 目前會刪段檔、不存結束時間；要在合併前就加 `segments.jsonl`，還是合併後另開 PR 改？
 3. **逐字稿覆寫**：`transcript.md` 在辨識完成後被改寫（舊版備份為 `transcript.plain.md`）是否可接受？
 4. **第一版改名**：先不做程式，讓使用者自己用編輯器取代（§5 替代方案），是否可接受？
+
+---
+
+## 附錄 A：JSON schema（給實作旁路檔的人用）
+
+三份資料：`manifest.json`（App 給 CLI）、`segments.jsonl`（M1 寫、對齊器讀）、CLI 的輸出（對齊器讀）。程式裡的對應型別：`Tools/MeetingDiarizer/MeetingManifest.swift`、`SpeakerAligner.swift`（`TranscriptSegmentRecord`、`SpeakerTurn`）、`main.swift`（`Output`）。所有時間單位是**秒**（浮點數），所有檔案 UTF-8。
+
+### 共同規則：時間軸
+
+- **整場會議相對時間**：0 = 會議開始（`MeetingCoordinator` 的 `meetingStartUptime`），不是牆上時鐘，也不是各段檔自己的 0。
+- 段檔的 `offset` 必須和 `MeetingCoordinator.offset(of:)` 給逐字稿用的 `chunk.offset` **同一個值**。M1 用 uptime 算，所以段間的 0.3–0.5 秒縫隙會自然反映在 offset 裡（這就是要補靜音的原因）。
+- `segments.jsonl` 裡的 `start`／`end`／`words[].s／e` = 段 `offset` ＋ Groq 回傳的段內時間。
+
+### A.1 `manifest.json`（`meeting-diarizer --manifest`）
+
+```json
+{
+  "version": 1,
+  "chunks": [
+    {"path": "chunk-000.m4a", "offset": 0.0},
+    {"path": "chunk-001.m4a", "offset": 300.4},
+    {"path": "chunk-002.m4a", "offset": 600.9}
+  ]
+}
+```
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["version", "chunks"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {"const": 1},
+    "chunks": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "required": ["path", "offset"], "additionalProperties": false,
+        "properties": {
+          "path": {"type": "string", "description": "絕對路徑，或相對於 manifest 所在資料夾"},
+          "offset": {"type": "number", "minimum": 0, "description": "這段錄音在整場會議的開始時間（秒）"}
+        }
+      }
+    }
+  }
+}
+```
+
+CLI 的行為（有測試）：
+- 不要求 `chunks` 已排序，CLI 會依 `offset` 排序。
+- 段與段之間依 offset **補 0（靜音）**；後一段與前一段**重疊**時保住後面音訊的時間位置、丟掉後一段開頭重疊的部分，並寫入輸出的 `warnings`。
+- 某一段**解不開**（檔案不存在、損毀）：當成缺口，其他段照常處理，寫入 `warnings`；**全部**解不開才以非 0 結束。
+- `offset` 為負數、非數值，或整場超過 12 小時：以非 0 結束，不處理。
+- `version` 不是 1、`chunks` 為空、JSON 壞掉：以非 0 結束。
+- 不能與 `--input` 同時使用。
+
+### A.2 `segments.jsonl`（M1 在每段辨識成功時 append；Tom 實作）
+
+**每個 Groq segment 一行**（與 M1 現在「一行逐字稿＝一個 segment」一致），UTF-8，以 `\n` 結尾，空行會被略過。
+
+```json
+{"v":1,"chunk":1,"start":312.4,"end":318.9,"text":"我們先看下週的時程。","words":[{"w":"我們","s":312.4,"e":312.9},{"w":"先","s":312.9,"e":313.1}]}
+{"v":1,"chunk":1,"start":319.0,"end":322.4,"text":"Then let's confirm with QA."}
+{"v":1,"chunk":2,"start":600.9,"end":900.9,"text":"","failed":"HTTP 429: rate limited"}
+```
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["v", "chunk", "start", "end", "text"],
+  "additionalProperties": false,
+  "properties": {
+    "v": {"const": 1},
+    "chunk": {"type": "integer", "minimum": 0, "description": "與段檔名 chunk-NNN.m4a 的 NNN 相同"},
+    "start": {"type": "number", "minimum": 0},
+    "end": {"type": "number", "minimum": 0, "description": ">= start"},
+    "text": {"type": "string", "description": "Groq 原文（含標點）；失敗行為空字串"},
+    "words": {
+      "type": ["array", "null"],
+      "description": "只在 Groq 真的回傳字級時間時才有；沒有就省略整個欄位",
+      "items": {
+        "type": "object", "required": ["w", "s", "e"], "additionalProperties": false,
+        "properties": {
+          "w": {"type": "string", "description": "原樣保留，包含 Whisper 常見的前導空白；不要 trim"},
+          "s": {"type": "number", "minimum": 0},
+          "e": {"type": "number", "minimum": 0}
+        }
+      }
+    },
+    "failed": {"type": "string", "description": "這一段辨識失敗的原因；有這個欄位時 text 為空、沒有 words"}
+  }
+}
+```
+
+寫入規則（Tom 實作時請遵守）：
+1. **只加不改**：整場期間只 append，不重寫。每行用單次 `write` 加上 `\n`，並在寫完後才刪段檔（開啟說話者辨識時不刪，見 §1）。
+2. 順序：先 append `segments.jsonl`，再 append `transcript.md`。如果中途當機，`segments.jsonl` 多一行比少一行好（`transcript.md` 可以由它重新產生）。
+3. 空白文字的 segment 不寫（M1 目前也略過）；整段沒有辨識到內容時**不寫任何行**。
+4. 失敗的段寫一行 `failed`，`start` 為該段 `offset`、`end` 為 offset＋段長（不知道段長就等於 start）。重新產生逐字稿時它會以 `> ⚠️ [時間] 這段辨識失敗：原因` 保留在原位。
+5. 一行出現解析錯誤時，對齊器會**整份失敗**（不默默丟資料），呼叫端退回純文字逐字稿並標 `diarization: failed`。
+6. `v` 必須是 1；日後欄位增加時 `v` 才變，不要在 v1 偷加必填欄位。
+
+### A.3 CLI 輸出（`meeting-diarizer` 的 stdout）
+
+```json
+{
+  "durationSeconds": 900.1,
+  "numSpeakers": 2,
+  "numSpeakersMode": "fixed",
+  "processingSeconds": 83.2,
+  "warnings": [],
+  "segments": [
+    {"start": 0.031, "end": 7.186, "speaker": 0, "label": "Speaker 1"},
+    {"start": 8.215, "end": 14.577, "speaker": 1, "label": "Speaker 2"}
+  ]
+}
+```
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["durationSeconds", "numSpeakers", "numSpeakersMode", "processingSeconds", "warnings", "segments"],
+  "properties": {
+    "durationSeconds": {"type": "number"},
+    "numSpeakers": {"type": "integer", "description": "輸出中實際出現的說話者數，不一定等於要求的人數"},
+    "numSpeakersMode": {"enum": ["fixed", "auto"], "description": "auto = 人數是估計值，逐字稿要註明可能不準"},
+    "processingSeconds": {"type": "number"},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "segments": {
+      "type": "array", "description": "依 start 排序；不同說話者的段落可以重疊",
+      "items": {
+        "type": "object", "required": ["start", "end", "speaker", "label"],
+        "properties": {
+          "start": {"type": "number"}, "end": {"type": "number"},
+          "speaker": {"type": "integer", "minimum": 0, "description": "sherpa 的 id，0 起算，整場一致"},
+          "label": {"type": "string", "description": "Speaker N（N = speaker + 1）；顯示名稱由 frontmatter 的 speaker_names 決定，不看這個欄位"}
+        }
+      }
+    }
+  }
+}
+```
+
+退出碼：0 成功；2 參數錯誤；3 檔案／模型／manifest 不存在或無效；4 音訊解不開；5 辨識器建立失敗。進度在 stderr（加 `--progress`）：`progress 已完成/總數`。
+
+App 存成 `speakers.json` 時，**原樣存這份輸出**即可（改名時重新產生逐字稿需要它，見 §5）。
+
+### A.4 已驗證的行為（測試）
+
+| 測試 | 內容 | 結果（M1 MacBook，2026-11-12）|
+|---|---|---|
+| `scripts/test-meeting-diarization-core.sh`（無下載、秒級）| 18 項純函式：時間軸補靜音（3 段、0.4 秒縫隙，後面的段位置精確）、排序、小數 offset（300.4 秒 → 第 4,806,400 個樣本）、重疊、被包含的段、壞 offset；manifest 驗證與路徑；`segments.jsonl` 解析（壞行整份失敗、行號）；對齊規則（見下）；失敗段保留；渲染 | 通過 |
+| `scripts/spike-meeting-diarizer-test.sh` 的 manifest 區段 | 3 個 AAC 44.1 kHz／64 kbps 段檔＋manifest，中間 0.4 秒縫隙，與「整場一個 WAV」比對每段的最佳時間位移 | 第 1／2／3 段位移 **0／30／30 毫秒**（標準 ≤ 50 毫秒，解析度 10 毫秒）；負對照（offset 不含縫隙）最後一段偏 **-760 毫秒**，證明測試抓得到漂移 |
+| 同上，失敗情境 | 缺一段 → 警告並照常處理；全部缺 → 非 0；壞 manifest → 非 0；`--input` 與 `--manifest` 並用 → 非 0 | 通過 |
+
+注意：位移 30 毫秒距離標準只剩 20 毫秒，兩次都是第 2、3 段，我**沒有查明原因**（可能是 AAC 重新取樣的延遲，也可能是 10 毫秒取樣的邊界效應）。只測了 3 段合成音檔，沒有測 12 段以上的長會議是否累積。
+
+### A.5 對齊演算法的規則（`SpeakerAligner.align`，純函式）
+
+輸入：`segments.jsonl` 解析結果＋CLI 輸出的 `segments`。輸出：每行 `AlignedLine(start, end, speaker?, text)`，`speaker == nil` 顯示為 `Speaker ?`。
+
+1. **詞級（有 `words`）**：每個詞取與它時間重疊**最久**的說話者；重疊一樣久取較早開始的 turn。完全沒重疊時，取 1.0 秒內最近的 turn；還是沒有就沿用前一個詞（開頭的詞沿用後一個詞）。
+2. **邊界抖動**：A B A 且中間那個詞短於 0.3 秒 → 改成 A A A。
+3. **併短 run**：同一個 segment 內，某位說話者連續說話短於 1.0 秒，就併回相鄰較長的那位（避免為了很短的插話切行）。
+4. **只剩一位說話者**（最常見）：用 Groq 原本的 `text`（含標點），一個 segment 一行，與 M1 格式相同。
+5. **有兩位以上**：依字級時間切成多行，文字由詞串接（英文保留詞的前導空白、中文直接相連），**標點可能比原文少**。
+6. **沒有 `words`**：整個 segment 取重疊最久的說話者，不切行（沒有字級時間就切不了文字）。
+7. 空白文字的 segment 略過；`failed` 行原位保留。
+8. 輸出格式：`[hh:mm:ss] Speaker N：文字`（N = speaker id + 1）；`names` 對照表（id → 名字）有值就用名字；文字中的換行折成一個空白。
+
+**沒有用真實 Groq 輸出測過**；上面的測試用手寫的 segments／words。字級時間是否存在、詞是否帶標點、中文是逐字還是逐詞，要等第一次實際呼叫才知道，規則 5 的「標點可能比原文少」就是依這個不確定性寫的。

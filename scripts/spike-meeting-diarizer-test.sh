@@ -121,6 +121,89 @@ PY
 
 print "meeting diarizer spike test (pipeline) passed"
 
+# --manifest：3 段、段與段之間 0.4 秒縫隙（M1 的 chunk_gap）。
+# 對照組是「整場一個 WAV」（時間軸的標準答案）；受測的是「3 個 AAC 44.1 kHz 64 kbps 的段檔＋manifest」。
+# 兩者的說話活動時間軸，在每一段的區間內，最佳位移都要 ≤ 50 毫秒。
+# 負對照：把 offset 改成不含縫隙的「純接起來」，最後一段必須明顯偏掉（證明這個測試抓得到漂移）。
+python3 - "$WORK" <<'PY'
+import sys, wave, json
+work = sys.argv[1]; rate = 16000; gap = int(rate * 0.4)
+groups = [range(1, 5), range(5, 10), range(10, 15)]
+manifest = {"version": 1, "chunks": []}; naive = {"version": 1, "chunks": []}
+pos = 0; naive_pos = 0.0; regions = []
+for ci, g in enumerate(groups, 1):
+    data = b""
+    for k, i in enumerate(g):
+        with wave.open(f"{work}/u{i}.wav") as w: d = w.readframes(w.getnframes())
+        data += d + (b"\x00\x00" * gap if k < len(g) - 1 else b"")
+    n = len(data) // 2
+    with wave.open(f"{work}/chunk-{ci:03d}.wav", "wb") as o:
+        o.setnchannels(1); o.setsampwidth(2); o.setframerate(rate); o.writeframes(data)
+    manifest["chunks"].append({"path": f"chunk-{ci:03d}.m4a", "offset": pos / rate})
+    naive["chunks"].append({"path": f"chunk-{ci:03d}.m4a", "offset": naive_pos})
+    regions.append([pos / rate, (pos + n) / rate])
+    pos += n + gap; naive_pos += n / rate
+json.dump(manifest, open(f"{work}/manifest.json", "w")); json.dump(naive, open(f"{work}/manifest-naive.json", "w"))
+json.dump(regions, open(f"{work}/regions.json", "w"))
+PY
+for i in 1 2 3; do afconvert -f m4af -d aac@44100 -c 1 -b 64000 "$WORK/chunk-00$i.wav" "$WORK/chunk-00$i.m4a"; done
+
+"$TOOL" --input "$WORK/meeting.wav" --models "$MODELS" --num-speakers 2 > "$WORK/ref.json"
+"$TOOL" --manifest "$WORK/manifest.json" --models "$MODELS" --num-speakers 2 > "$WORK/manifest-out.json"
+"$TOOL" --manifest "$WORK/manifest-naive.json" --models "$MODELS" --num-speakers 2 > "$WORK/naive-out.json"
+
+python3 - "$WORK" <<'PY'
+import sys, json
+work = sys.argv[1]
+ref = json.load(open(f"{work}/ref.json")); got = json.load(open(f"{work}/manifest-out.json")); naive = json.load(open(f"{work}/naive-out.json"))
+regions = json.load(open(f"{work}/regions.json"))
+assert got["warnings"] == [], got["warnings"]
+assert abs(got["durationSeconds"] - ref["durationSeconds"]) < 0.5, (got["durationSeconds"], ref["durationSeconds"])
+N = int(ref["durationSeconds"] * 100) + 200
+def mask(out):
+    m = bytearray(N)
+    for s in out["segments"]:
+        for f in range(max(0, int(s["start"] * 100)), min(N, int(s["end"] * 100))): m[f] = 1
+    return m
+def best_lag(a, b, lo, hi, span=100):   # b 相對於 a 的最佳位移（10 毫秒為單位）
+    best = None
+    for lag in range(-span, span + 1):
+        mism = sum(1 for f in range(lo, hi) if 0 <= f + lag < N and a[f] != b[f + lag])
+        if best is None or mism < best[1]: best = (lag, mism)
+    return best
+A, B, C = mask(ref), mask(got), mask(naive)
+for i, (b0, e0) in enumerate(regions, 1):
+    lo, hi = int(b0 * 100), int(e0 * 100)
+    lag, mism = best_lag(A, B, lo, hi)
+    print(f"chunk {i}: best shift {lag * 10} ms, {mism} of {hi - lo} frames differ")
+    assert abs(lag) * 10 <= 50, f"chunk {i} timestamps are off by {lag * 10} ms"
+lo, hi = int(regions[2][0] * 100), int(regions[2][1] * 100)
+lag, _ = best_lag(A, C, lo, hi, span=150)
+print(f"negative control (no gaps), chunk 3: best shift {lag * 10} ms")
+assert abs(lag) * 10 >= 500, "negative control should drift by about 0.8 s; the test cannot see drift"
+PY
+
+# manifest 的失敗情境
+python3 - "$WORK" <<'PY'
+import json, sys
+work = sys.argv[1]
+m = json.load(open(f"{work}/manifest.json"))
+m2 = {"version": 1, "chunks": [m["chunks"][0], {"path": "does-not-exist.m4a", "offset": 300}, m["chunks"][2]]}
+json.dump(m2, open(f"{work}/manifest-missing-one.json", "w"))
+json.dump({"version": 1, "chunks": [{"path": "nope-1.m4a", "offset": 0}, {"path": "nope-2.m4a", "offset": 5}]}, open(f"{work}/manifest-all-missing.json", "w"))
+open(f"{work}/manifest-bad.json", "w").write("{not json")
+PY
+"$TOOL" --manifest "$WORK/manifest-missing-one.json" --models "$MODELS" --num-speakers 2 > "$WORK/missing-one-out.json" 2>/dev/null
+python3 -c "
+import json
+d = json.load(open('$WORK/missing-one-out.json'))
+assert len(d['warnings']) == 1 and 'could not be read' in d['warnings'][0], d['warnings']
+assert d['segments'], 'the readable chunks must still be processed'"
+! "$TOOL" --manifest "$WORK/manifest-all-missing.json" --models "$MODELS" --num-speakers 2 >/dev/null 2>&1 || { print -u2 "FAIL: all chunks missing should fail"; exit 1; }
+! "$TOOL" --manifest "$WORK/manifest-bad.json" --models "$MODELS" --num-speakers 2 >/dev/null 2>&1 || { print -u2 "FAIL: bad manifest should fail"; exit 1; }
+! "$TOOL" --manifest "$WORK/manifest.json" --input "$WORK/meeting.m4a" --models "$MODELS" --num-speakers 2 >/dev/null 2>&1 || { print -u2 "FAIL: --input with --manifest should fail"; exit 1; }
+print "meeting diarizer spike test (manifest) passed"
+
 if [[ "${AMI:-0}" == "1" ]]; then
   CACHE="$OUT/cache"
   fetch() {  # 名稱 網址 SHA256
