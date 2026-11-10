@@ -28,6 +28,8 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     /// 會議記錄專用的第二個錄音器實例，不與聽寫共用。
     private let meetingRecorder = PinnedMicrophoneRecorder(audioSettings: MeetingAudio.settings)
     private let meetingStore = MeetingStore()
+    /// 說話者辨識的 CLI／模型位置（Ben 的 coordinator 注入用；功能預設關閉，這裡不呼叫它）。
+    let meetingDiarizerLocator: MeetingDiarizerLocator = BundledMeetingDiarizerLocator()
     private var meetingTimer: Timer?
     private var catConfiguration = CatConfiguration.load()
     private var recordingCatImage: NSImage? {
