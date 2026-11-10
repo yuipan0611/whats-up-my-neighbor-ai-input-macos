@@ -255,6 +255,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             "toggleMeetingDiarization": #selector(toggleMeetingDiarization),
             "deleteMeetingAudio": #selector(deleteMeetingAudio),
             "retryMeetingDiarization": #selector(retryMeetingDiarization),
+            "deleteMeetingDiarizerModels": #selector(deleteMeetingDiarizerModels),
             "selectOutputMode": #selector(selectOutputMode(_:)),
             "showLanguageDialog": #selector(showLanguageDialog),
             "showTextSettingsDialog": #selector(showTextSettingsDialog),
@@ -271,6 +272,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         ])
         if let menu = statusItem.menu { appUpdater.addMenuItems(to: menu) }
         statusMenu.onMenuWillOpen = { [weak self] in
+            self?.updateMeetingDiarizerModelsMenu()
             self?.statusMenu.updateVPSDesktop(available: VPSDesktopAvailability.isAvailable())
         }
         statusMenu.updateVPSDesktop(available: VPSDesktopAvailability.isAvailable())
@@ -282,6 +284,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         statusMenu.updateMeetingDiarization(enabled: settings.meetingDiarizationEnabled && MeetingDiarizerSupport.isAppleSilicon,
                                             supported: MeetingDiarizerSupport.isAppleSilicon)
         recoverMeetingDiarizationAfterLaunch()
+        updateMeetingDiarizerModelsMenu()
         renderDictationState(.idle)
     }
 
@@ -1137,11 +1140,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             settings.meetingDiarizationEnabled = false
         } else {
             NSApp.activate(ignoringOtherApps: true)
-            let alert = NSAlert()
-            alert.messageText = "開啟會議說話者辨識（實驗）？"
-            alert.informativeText = "開啟後，之後的會議錄音檔會保留到說話者辨識完成才刪除；辨識失敗時會一直保留，直到你從選單刪除。關閉時維持原本「辨識成功就刪音檔」。"
-            alert.addButton(withTitle: "開啟")
-            alert.addButton(withTitle: "取消")
+            let alert = MeetingDiarizationDialogs.privacyAlert(modelsNeedDownload: !MeetingDiarizerAssets().missingModels().isEmpty)
             guard alert.runModal() == .alertFirstButtonReturn else { return }
             // 模型還沒下載：先徵求同意並下載；使用者取消就維持關閉（開關不會半開）。
             diarizerDownload.ensureModels { [weak self] ready in
@@ -1172,6 +1171,32 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         renderDiarizationStatus()
     }
 
+    /// 「刪除說話者辨識模型」：只有功能關閉、沒有辨識進行中、確實有檔案時才可用。
+    @objc private func deleteMeetingDiarizerModels() {
+        let assets = MeetingDiarizerAssets()
+        guard assets.canDeleteModels(featureEnabled: settings.meetingDiarizationEnabled,
+                                     diarizationBusy: meetingDiarizationCoordinator?.isBusy ?? false) else {
+            updateMeetingDiarizerModelsMenu()
+            return
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "刪除說話者辨識模型？"
+        alert.informativeText = "會刪除已下載的模型檔（約 \(MeetingDiarizerDownloadText.megabytes(MeetingDiarizerModelCatalog.totalDownloadBytes))）。之後再開啟會議說話者辨識時需要重新下載。"
+        alert.addButton(withTitle: "刪除")
+        alert.addButton(withTitle: "取消")
+        if alert.runModal() == .alertFirstButtonReturn { assets.deleteInstalledModels() }
+        updateMeetingDiarizerModelsMenu()
+    }
+
+    private func updateMeetingDiarizerModelsMenu() {
+        let assets = MeetingDiarizerAssets()
+        statusMenu.updateMeetingDiarizerModels(
+            visible: assets.hasInstalledFiles,
+            enabled: assets.canDeleteModels(featureEnabled: settings.meetingDiarizationEnabled,
+                                            diarizationBusy: meetingDiarizationCoordinator?.isBusy ?? false))
+    }
+
     @objc private func deleteMeetingAudio() {
         _ = meetingDiarizationCoordinator?.deleteRetainedAudio()
         renderDiarizationStatus()
@@ -1180,23 +1205,9 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     /// 會議剛結束，使用者選說話人數。回傳 nil = 略過。
     private func askSpeakerCount(last: SpeakerCountChoice?) -> SpeakerCountChoice? {
         NSApp.activate(ignoringOtherApps: true)
-        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 160, height: 26), pullsDown: false)
-        for count in SpeakerCountChoice.supportedCounts { popup.addItem(withTitle: "\(count) 人") }
-        popup.addItem(withTitle: "不確定")
-        switch last ?? .count(2) {
-        case .count(let n): popup.selectItem(at: n - SpeakerCountChoice.supportedCounts.lowerBound)
-        case .auto: popup.selectItem(at: SpeakerCountChoice.supportedCounts.count)
-        }
-        let alert = NSAlert()
-        alert.messageText = "這場會議有幾個人說話？"
-        alert.informativeText = "知道人數時分得比較準；選「不確定」會自動估計，可能不準。"
-        alert.accessoryView = popup
-        alert.addButton(withTitle: "開始辨識")
-        alert.addButton(withTitle: "略過")
-        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-        let index = popup.indexOfSelectedItem
-        return index >= SpeakerCountChoice.supportedCounts.count
-            ? .auto : .count(SpeakerCountChoice.supportedCounts.lowerBound + index)
+        let dialog = MeetingDiarizationDialogs.speakerCountAlert(last: last)
+        guard dialog.alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return MeetingDiarizationDialogs.choice(from: dialog.popup)
     }
 
     private func renderDiarizationStatus() {

@@ -10,6 +10,7 @@ mkdir -p "$ROOT/build"
 
 swiftc \
   -swift-version 5 \
+  -framework AppKit \
   "$ROOT/Sources/GroqVoiceInput/LanguagePolicy.swift" \
   "$ROOT/Sources/GroqVoiceInput/TextPostProcessor.swift" \
   "$ROOT/Sources/GroqVoiceInput/DictationCoordinator.swift" \
@@ -21,6 +22,8 @@ swiftc \
   "$ROOT/Sources/GroqVoiceInput/MeetingAudio.swift" \
   "$ROOT/Sources/GroqVoiceInput/MeetingDiarizerLocator.swift" \
   "$ROOT/Sources/GroqVoiceInput/MeetingDiarizerAssets.swift" \
+  "$ROOT/Sources/GroqVoiceInput/MeetingDiarizerDownloadText.swift" \
+  "$ROOT/Sources/GroqVoiceInput/MeetingDiarizationDialogs.swift" \
   "$ROOT/Tests/MeetingDiarizationTests.swift" \
   -o "$OUTPUT"
 

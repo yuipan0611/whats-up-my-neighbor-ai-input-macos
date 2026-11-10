@@ -26,6 +26,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private(set) var meetingDiarizationStatusMenuItem: NSMenuItem!
     private(set) var meetingDeleteAudioMenuItem: NSMenuItem!
     private(set) var meetingRetryDiarizationMenuItem: NSMenuItem!
+    private(set) var meetingDeleteModelsMenuItem: NSMenuItem!
     private(set) var modeMenuItems: [TextOutputMode: NSMenuItem] = [:]
     private var nekoPositionItems: [NekoHUDPosition: NSMenuItem] = [:]
     private var catCoatItems: [String: NSMenuItem] = [:]
@@ -87,6 +88,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         meetingRetryDiarizationMenuItem.target = target
         meetingRetryDiarizationMenuItem.isHidden = true
         menu.addItem(meetingRetryDiarizationMenuItem)
+        meetingDeleteModelsMenuItem = NSMenuItem(title: MeetingDiarizerDownloadText.menuDeleteModelsTitle, action: actions["deleteMeetingDiarizerModels"], keyEquivalent: "")
+        meetingDeleteModelsMenuItem.target = target
+        meetingDeleteModelsMenuItem.isHidden = true
+        menu.addItem(meetingDeleteModelsMenuItem)
         menu.addItem(NSMenuItem.separator())
 
         clipboardPickerMenuItem = NSMenuItem(title: "剪貼簿歷史", action: actions["showClipboardPicker"], keyEquivalent: "")
@@ -220,6 +225,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(quit)
         menu.delegate = self
         statusItem.menu = menu
+    }
+
+    /// 有模型檔才顯示；功能開啟中或辨識進行中時顯示但停用（要先關閉功能才能刪）。
+    func updateMeetingDiarizerModels(visible: Bool, enabled: Bool) {
+        meetingDeleteModelsMenuItem?.isHidden = !visible
+        meetingDeleteModelsMenuItem?.isEnabled = enabled
     }
 
     func updateMeetingDiarization(enabled: Bool, supported: Bool) {
