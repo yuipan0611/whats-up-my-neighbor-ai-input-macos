@@ -80,7 +80,10 @@ enum MeetingSummarizerTests {
         testChatResponseParsingAndFrontmatter()
         testEndToEndOfflineSummaryGeneration()
         testAPIErrorExtraction()
-        print("Meeting summarizer tests passed (9 suites)")
+        testMeetingStoreSummaryWritingAndIndependence()
+        testSummaryFailureDoesNotAffectTranscript()
+        testLatestSummaryURLOrdersTenBeforeNineInSameMinute()
+        print("Meeting summarizer tests passed (12 suites)")
     }
 
     // MARK: - 模型解析與挑選測試
@@ -311,5 +314,122 @@ enum MeetingSummarizerTests {
             fatalError("未捕獲預期之 VoiceTypeError")
         }
         expect(error.errorDescription, "Invalid API Key supplied to Groq.")
+    }
+
+    // MARK: - MeetingStore 摘要寫入與獨立性測試
+
+    static func testMeetingStoreSummaryWritingAndIndependence() {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MeetingStoreTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let store = MeetingStore(root: tempDir)
+        let session = try! store.beginSession(startedAt: Date(), language: "zh-TW", chunkSeconds: 300)
+        let originalTranscript = try! String(contentsOf: session.transcriptURL, encoding: .utf8)
+
+        let mockSummary = """
+        ---
+        model: llama-3.3-70b-versatile
+        generated_at: 2026-11-11T02:00:00Z
+        ---
+
+        ## 摘要
+        - [00:01:00] 測試會議。
+
+        ## 決議
+        - 未提及
+
+        ## 待辦
+        - 未提及
+
+        ## 未解決問題
+        - 未提及
+        """
+
+        let writtenURL = try! store.writeSummary(mockSummary, for: session.transcriptURL)
+        expect(writtenURL, store.summaryURL(for: session.transcriptURL))
+        expectTrue(FileManager.default.fileExists(atPath: writtenURL.path), "summary.md 必須存在")
+
+        let readSummary = try! String(contentsOf: writtenURL, encoding: .utf8)
+        expect(readSummary, mockSummary)
+
+        // 核心斷言：transcript.md 必須完全不受寫入 summary 影響
+        let transcriptAfter = try! String(contentsOf: session.transcriptURL, encoding: .utf8)
+        expect(transcriptAfter, originalTranscript)
+
+        // 查詢驗證
+        expect(store.latestSummaryURL(), writtenURL)
+    }
+
+    static func testSummaryFailureDoesNotAffectTranscript() {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MeetingFailureTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let store = MeetingStore(root: tempDir)
+        let session = try! store.beginSession(startedAt: Date(), language: "zh-TW", chunkSeconds: 300)
+        let originalTranscript = try! String(contentsOf: session.transcriptURL, encoding: .utf8)
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [OfflineMeetingProtocol.self]
+        let mockSession = URLSession(configuration: config)
+
+        OfflineMeetingProtocol.reset(
+            modelsJSON: #"{"error":{"message":"Rate limit exceeded."}}"#,
+            statusCode: 429
+        )
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var capturedError: Error?
+
+        MeetingSummarizer.generateSummary(
+            transcript: originalTranscript,
+            apiKey: "test-key",
+            session: mockSession
+        ) { result in
+            switch result {
+            case .success:
+                break
+            case .failure(let err):
+                capturedError = err
+            }
+            semaphore.signal()
+        }
+
+        semaphore.wait()
+        expectTrue(capturedError != nil, "摘要失敗應回傳錯誤")
+
+        // 核心斷言：摘要失敗時，transcript.md 絕不能被修改或損壞
+        let transcriptAfterFailure = try! String(contentsOf: session.transcriptURL, encoding: .utf8)
+        expect(transcriptAfterFailure, originalTranscript)
+
+        // summary.md 不應被建立
+        let summaryURL = store.summaryURL(for: session.transcriptURL)
+        expectTrue(!FileManager.default.fileExists(atPath: summaryURL.path), "失敗時不應產生 summary.md")
+    }
+
+    static func testLatestSummaryURLOrdersTenBeforeNineInSameMinute() {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MeetingSummarySortTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let store = MeetingStore(root: tempDir, timeZone: TimeZone(identifier: "UTC")!)
+        let fixedDate = Date(timeIntervalSince1970: 1_800_000_000) // 2027-01-15 08:00
+
+        var sessions: [MeetingSession] = []
+        for _ in 0..<11 {
+            let session = try! store.beginSession(startedAt: fixedDate, language: "zh", chunkSeconds: 300)
+            sessions.append(session)
+        }
+        // sessions[8] 為 -9，sessions[9] 為 -10，sessions[10] 為 -11
+        let summaryNine = try! store.writeSummary("## 摘要\n第 9 場會議摘要", for: sessions[8].transcriptURL)
+        let summaryTen = try! store.writeSummary("## 摘要\n第 10 場會議摘要", for: sessions[9].transcriptURL)
+
+        // 核心斷言：同一分鐘內 -10 必須排在 -9 前面，不能被字串字典序搞錯
+        expect(store.latestSummaryURL(), summaryTen)
+
+        // 若刪除 -10 的摘要，則退回找到 -9
+        try! FileManager.default.removeItem(at: summaryTen)
+        expect(store.latestSummaryURL(), summaryNine)
     }
 }

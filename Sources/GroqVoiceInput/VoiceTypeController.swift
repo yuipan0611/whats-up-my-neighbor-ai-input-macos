@@ -241,6 +241,8 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             "toggleMeetingFromMenu": #selector(toggleMeetingFromMenu),
             "openMeetingFolder": #selector(openMeetingFolder),
             "copyLatestMeetingTranscript": #selector(copyLatestMeetingTranscript),
+            "summarizeLatestMeeting": #selector(summarizeLatestMeeting),
+            "toggleAutoSummary": #selector(toggleAutoSummary),
             "selectOutputMode": #selector(selectOutputMode(_:)),
             "showLanguageDialog": #selector(showLanguageDialog),
             "showTextSettingsDialog": #selector(showTextSettingsDialog),
@@ -262,6 +264,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         statusMenu.updateVPSDesktop(available: VPSDesktopAvailability.isAvailable())
         statusMenu.updateClipboardShortcut(clipboardShortcutTitle)
         updateTextOutputModeMenu()
+        statusMenu.updateAutoSummary(enabled: settings.loadAutoMeetingSummary())
         statusMenu.updateNekoPosition(nekoHUD.position)
         statusMenu.updateCatCoat(catConfiguration.appearance.preset)
         updateRelayMenu()
@@ -1056,6 +1059,64 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         if !MeetingClipboard.copy(text) { NSSound.beep() }
     }
 
+    @objc private func toggleAutoSummary() {
+        let current = settings.loadAutoMeetingSummary()
+        let updated = !current
+        settings.saveAutoMeetingSummary(updated)
+        statusMenu.updateAutoSummary(enabled: updated)
+    }
+
+    @objc private func summarizeLatestMeeting() {
+        guard let url = meetingStore.latestTranscriptURL(),
+              FileManager.default.fileExists(atPath: url.path) else {
+            NSSound.beep()
+            showMeetingNotice("還沒有會議記錄。")
+            return
+        }
+        requestMeetingSummary(for: url, manualTrigger: true)
+    }
+
+    private func requestMeetingSummary(for transcriptURL: URL, manualTrigger: Bool) {
+        guard credentials.readAPIKey() != nil else {
+            if manualTrigger {
+                showAPIKeyDialog(firstRun: false)
+            } else {
+                showMeetingNotice("自動產生摘要失敗：尚未設定 Groq API 金鑰。")
+            }
+            return
+        }
+        guard let transcript = try? String(contentsOf: transcriptURL, encoding: .utf8),
+              !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            if manualTrigger {
+                showMeetingNotice("逐字稿內容為空，無法產生摘要。")
+            }
+            return
+        }
+
+        statusMenu.updateSummarizeLatestMeeting(title: "正在產生會議摘要…", enabled: false)
+        MeetingSummarizer.generateSummary(
+            transcript: transcript,
+            keychain: credentials
+        ) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.statusMenu.updateSummarizeLatestMeeting(title: "為最近一次會議產生摘要", enabled: true)
+                switch result {
+                case .success(let summaryMarkdown):
+                    do {
+                        let summaryURL = try self.meetingStore.writeSummary(summaryMarkdown, for: transcriptURL)
+                        NSSound(named: "Glass")?.play()
+                        NSWorkspace.shared.activateFileViewerSelecting([summaryURL])
+                    } catch {
+                        self.showMeetingNotice("摘要檔案寫入失敗：\(error.localizedDescription)")
+                    }
+                case .failure(let error):
+                    self.showMeetingNotice("會議摘要產生失敗：\(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
     private func renderMeetingStatus(_ status: MeetingStatus) {
         meetingTimer?.invalidate()
         meetingTimer = nil
@@ -1090,6 +1151,9 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.activateFileViewerSelecting([url])
         if failedChunks > 0 {
             showMeetingNotice("逐字稿已存好，但有 \(failedChunks) 段辨識失敗，音檔已保留在同一個資料夾，逐字稿裡有標出位置。")
+        }
+        if settings.loadAutoMeetingSummary() {
+            requestMeetingSummary(for: url, manualTrigger: false)
         }
     }
 
