@@ -1105,10 +1105,16 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             showMeetingNotice("會議錄音進行中，結束後再產生摘要。")
             return
         }
+        let diarizationState = meetingStore.diarizationState(for: url)
+        if !diarizationState.isTerminal {
+            NSSound.beep()
+            showMeetingNotice("說話者辨識進行中，完成後再產生摘要。")
+            return
+        }
         requestMeetingSummary(for: url, manualTrigger: true)
     }
 
-    private func requestMeetingSummary(for transcriptURL: URL, manualTrigger: Bool) {
+    func requestMeetingSummary(for transcriptURL: URL, manualTrigger: Bool) {
         guard credentials.readAPIKey() != nil else {
             if manualTrigger {
                 showAPIKeyDialog(firstRun: false)
@@ -1257,8 +1263,9 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             showMeetingNotice("逐字稿已存好，但有 \(failedChunks) 段辨識失敗，音檔已保留在同一個資料夾，逐字稿裡有標出位置。")
         }
         // 說話者辨識只在這場會議開始時開關是開的（音檔有保留）才會接著做。
-        if meeting.audioRetained { diarizationCoordinator().begin(transcriptURL: url) }
-        if settings.loadAutoMeetingSummary() {
+        if meeting.audioRetained {
+            diarizationCoordinator().begin(transcriptURL: url)
+        } else if settings.loadAutoMeetingSummary() {
             requestMeetingSummary(for: url, manualTrigger: false)
         }
     }
@@ -1274,7 +1281,13 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             loadLastChoice: { [weak self] in SpeakerCountChoice(stored: self?.settings.meetingDiarizationSpeakerCount) },
             saveLastChoice: { [weak self] in self?.settings.meetingDiarizationSpeakerCount = $0.stored })
         coordinator.onPhaseChange = { [weak self] _ in self?.renderDiarizationStatus() }
-        coordinator.onFinished = { [weak self] _, _ in self?.renderDiarizationStatus() }
+        coordinator.onFinished = { [weak self] transcriptURL, state in
+            guard let self else { return }
+            self.renderDiarizationStatus()
+            if self.settings.loadAutoMeetingSummary() && state.isTerminal {
+                self.requestMeetingSummary(for: transcriptURL, manualTrigger: false)
+            }
+        }
         meetingDiarizationCoordinator = coordinator
         return coordinator
     }

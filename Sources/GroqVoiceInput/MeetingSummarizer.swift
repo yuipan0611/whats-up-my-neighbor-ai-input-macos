@@ -197,7 +197,7 @@ enum MeetingSummarizer {
     static let maxReduceDepth: Int = 3
 
     /// 單段或短稿系統提示詞：防提示詞注入、零幻覺、時間戳回查、四固定欄位
-    static let systemPrompt = """
+    static let baseSystemPrompt = """
     你是一個專業、嚴謹且客觀的會議記錄摘要助手。
     你的任務是根據輸入的「會議逐字稿（帶說話者與時間戳）」提煉出精確的會議摘要。
 
@@ -227,7 +227,7 @@ enum MeetingSummarizer {
     """
 
     /// 長會議 Reduce 階段系統提示詞：合併統整多個區段的分段摘要，保留時間戳並去重
-    static let reduceSystemPrompt = """
+    static let baseReduceSystemPrompt = """
     你是一個專業的會議記錄統整專家。
     你的任務是將一場長會議中多個時間區段的「分段摘要」，合併統整為一份最終完整、無重複且結構清晰的會議記錄摘要。
 
@@ -254,6 +254,38 @@ enum MeetingSummarizer {
     ## 未解決問題
     - [hh:mm:ss] 會議中提出但尚未達成結論、留待後續討論的事項（若無則寫「未提及」）
     """
+
+    /// 根據是否包含已完成之說話者辨識結果，動態提供系統提示詞
+    static func systemPrompt(diarized: Bool = false) -> String {
+        guard diarized else { return baseSystemPrompt }
+        return baseSystemPrompt + """
+
+
+        【說話者辨識特別指示】
+        - 說話者標籤由自動辨識產生，可能不準；不要從說話內容推斷說話者是誰。
+        - 待辦事項的負責人欄位請直接原樣使用逐字稿中的說話者標籤（如 Speaker 1、Speaker 2）。
+        """
+    }
+
+    /// 根據是否包含已完成之說話者辨識結果，動態提供 Reduce 系統提示詞
+    static func reduceSystemPrompt(diarized: Bool = false) -> String {
+        guard diarized else { return baseReduceSystemPrompt }
+        return baseReduceSystemPrompt + """
+
+
+        【說話者辨識特別指示】
+        - 說話者標籤由自動辨識產生，可能不準；不要從說話內容推斷說話者是誰。
+        - 待辦事項的負責人欄位請直接原樣使用分段摘要中的說話者標籤（如 Speaker 1、Speaker 2）。
+        """
+    }
+
+    static var systemPrompt: String { systemPrompt(diarized: false) }
+    static var reduceSystemPrompt: String { reduceSystemPrompt(diarized: false) }
+
+    /// 檢驗逐字稿是否已完成說話者辨識（frontmatter 中 diarization == done）
+    static func isDiarizedDone(transcript: String) -> Bool {
+        MeetingFrontmatter.value("diarization", in: transcript) == "done"
+    }
 
     // MARK: - 提示詞與請求組裝（純函式）
 
@@ -581,6 +613,7 @@ enum MeetingSummarizer {
         session: URLSession,
         job: MeetingSummaryJob? = nil,
         currentDepth: Int = 0,
+        isDiarized: Bool = false,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
         if let job, job.isCancelled { return }
@@ -602,7 +635,7 @@ enum MeetingSummarizer {
         if reduceUserPrompt.count <= maxChunkCharacterCount {
             executeChatCompletion(
                 model: model,
-                system: reduceSystemPrompt,
+                system: reduceSystemPrompt(diarized: isDiarized),
                 user: reduceUserPrompt,
                 apiKey: apiKey,
                 session: session,
@@ -629,6 +662,7 @@ enum MeetingSummarizer {
                         session: session,
                         job: job,
                         currentDepth: currentDepth + 1,
+                        isDiarized: isDiarized,
                         completion: completion
                     )
                     return
@@ -637,7 +671,7 @@ enum MeetingSummarizer {
                 let batchPrompt = makeReduceUserPrompt(partialSummaries: batch)
                 executeChatCompletion(
                     model: model,
-                    system: reduceSystemPrompt,
+                    system: reduceSystemPrompt(diarized: isDiarized),
                     user: batchPrompt,
                     apiKey: apiKey,
                     session: session,
@@ -663,6 +697,7 @@ enum MeetingSummarizer {
         apiKey: String,
         session: URLSession,
         job: MeetingSummaryJob? = nil,
+        isDiarized: Bool = false,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
         var partialSummaries: [String] = []
@@ -677,6 +712,7 @@ enum MeetingSummarizer {
                     session: session,
                     job: job,
                     currentDepth: 0,
+                    isDiarized: isDiarized,
                     completion: completion
                 )
                 return
@@ -686,7 +722,7 @@ enum MeetingSummarizer {
             let userPrompt = makeUserPrompt(transcript: chunk)
             executeChatCompletion(
                 model: model,
-                system: systemPrompt,
+                system: systemPrompt(diarized: isDiarized),
                 user: userPrompt,
                 apiKey: apiKey,
                 session: session,
@@ -720,6 +756,7 @@ enum MeetingSummarizer {
 
         if activeJob.isCancelled { return activeJob }
 
+        let isDiarized = isDiarizedDone(transcript: transcript)
         let isPartial = hasFailedChunks(in: transcript)
         let body = stripFrontmatter(from: transcript)
         guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -749,7 +786,7 @@ enum MeetingSummarizer {
                     let singleChunk = chunks.first ?? body
                     executeChatCompletion(
                         model: selectedModel,
-                        system: systemPrompt,
+                        system: systemPrompt(diarized: isDiarized),
                         user: makeUserPrompt(transcript: singleChunk),
                         apiKey: apiKey,
                         session: session,
@@ -774,7 +811,8 @@ enum MeetingSummarizer {
                         model: selectedModel,
                         apiKey: apiKey,
                         session: session,
-                        job: activeJob
+                        job: activeJob,
+                        isDiarized: isDiarized
                     ) { result in
                         if activeJob.isCancelled { return }
                         switch result {

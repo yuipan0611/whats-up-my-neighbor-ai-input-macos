@@ -135,7 +135,10 @@ enum MeetingSummarizerTests {
         testRecordingSessionDetectionBlocksEarlySummarization()
         testInterleavedDictationWithSummaryFailureNeverPresentsModal()
         testReduceDepthLimitExceededFailsCleanly()
-        print("Meeting summarizer tests passed (26 suites)")
+        testDiarizedSystemPromptIncludesWarningAndTodoSpeakerDirective()
+        testDiarizationStateGateForManualAndAutomaticSummary()
+        testEndToEndDiarizedTranscriptUsesDiarizedPrompt()
+        print("Meeting summarizer tests passed (29 suites)")
     }
 
     // MARK: - 模型解析與挑選測試
@@ -1001,5 +1004,184 @@ enum MeetingSummarizerTests {
             fatalError("超限 depth 應觸發錯誤")
         }
         expectTrue(error.localizedDescription.contains("會議分段摘要彙整層數超過上限（最多 3 層）"), "錯誤訊息應提示層數超過上限")
+    }
+
+    // MARK: - Diarization 說話者辨識配合測試
+
+    static func testDiarizedSystemPromptIncludesWarningAndTodoSpeakerDirective() {
+        let defaultPrompt = MeetingSummarizer.systemPrompt(diarized: false)
+        expectTrue(!defaultPrompt.contains("說話者標籤由自動辨識產生，可能不準"), "未辨識說話者時不應包含警告")
+        expectTrue(defaultPrompt == MeetingSummarizer.systemPrompt, "預設 systemPrompt 屬性必須完全向後相容")
+
+        let diarizedPrompt = MeetingSummarizer.systemPrompt(diarized: true)
+        expectTrue(diarizedPrompt.contains("說話者標籤由自動辨識產生，可能不準；不要從說話內容推斷說話者是誰。"), "diarized: true 必須包含辨識警告")
+        expectTrue(diarizedPrompt.contains("待辦事項的負責人欄位請直接原樣使用逐字稿中的說話者標籤（如 Speaker 1、Speaker 2）。"), "diarized: true 必須包含待辦 Speaker 標籤指示")
+
+        let defaultReducePrompt = MeetingSummarizer.reduceSystemPrompt(diarized: false)
+        expectTrue(!defaultReducePrompt.contains("說話者標籤由自動辨識產生，可能不準"), "未辨識說話者時 Reduce 不應包含警告")
+        expectTrue(defaultReducePrompt == MeetingSummarizer.reduceSystemPrompt, "預設 reduceSystemPrompt 屬性必須完全向後相容")
+
+        let diarizedReducePrompt = MeetingSummarizer.reduceSystemPrompt(diarized: true)
+        expectTrue(diarizedReducePrompt.contains("說話者標籤由自動辨識產生，可能不準；不要從說話內容推斷說話者是誰。"), "diarized: true Reduce 必須包含辨識警告")
+        expectTrue(diarizedReducePrompt.contains("待辦事項的負責人欄位請直接原樣使用分段摘要中的說話者標籤（如 Speaker 1、Speaker 2）。"), "diarized: true Reduce 必須包含待辦 Speaker 標籤指示")
+    }
+
+    static func testDiarizationStateGateForManualAndAutomaticSummary() {
+        // 驗證終態判定：除了 pending/running 之外都是終態
+        expectTrue(!MeetingDiarizationState.pending.isTerminal, "pending 不是終態")
+        expectTrue(!MeetingDiarizationState.running.isTerminal, "running 不是終態")
+        expectTrue(MeetingDiarizationState.done.isTerminal, "done 是終態")
+        expectTrue(MeetingDiarizationState.failed.isTerminal, "failed 是終態")
+        expectTrue(MeetingDiarizationState.skipped.isTerminal, "skipped 是終態")
+        expectTrue(MeetingDiarizationState.cancelled.isTerminal, "cancelled 是終態")
+        expectTrue(MeetingDiarizationState.interrupted.isTerminal, "interrupted 是終態")
+        expectTrue(MeetingDiarizationState.notApplicable.isTerminal, "notApplicable 是終態")
+
+        // 驗證 isDiarizedDone
+        let doneTranscript = """
+        ---
+        status: finished
+        diarization: done
+        ---
+        [00:00:01] (Speaker 1) 會議開始
+        """
+        expectTrue(MeetingSummarizer.isDiarizedDone(transcript: doneTranscript), "diarization: done 應回傳 true")
+
+        let failedTranscript = """
+        ---
+        status: finished
+        diarization: failed
+        ---
+        [00:00:01] (Speaker 1) 會議開始
+        """
+        expectTrue(!MeetingSummarizer.isDiarizedDone(transcript: failedTranscript), "diarization: failed 應回傳 false")
+
+        let interruptedTranscript = """
+        ---
+        status: finished
+        diarization: interrupted
+        ---
+        [00:00:01] 會議開始
+        """
+        expectTrue(!MeetingSummarizer.isDiarizedDone(transcript: interruptedTranscript), "diarization: interrupted 應回傳 false")
+
+        let legacyTranscript = """
+        ---
+        status: finished
+        ---
+        [00:00:01] 會議開始
+        """
+        expectTrue(!MeetingSummarizer.isDiarizedDone(transcript: legacyTranscript), "無 diarization 欄位應回傳 false")
+
+        let noFrontmatterTranscript = "[00:00:01] 會議開始"
+        expectTrue(!MeetingSummarizer.isDiarizedDone(transcript: noFrontmatterTranscript), "無 frontmatter 應回傳 false")
+    }
+
+    static func testEndToEndDiarizedTranscriptUsesDiarizedPrompt() {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [OfflineMeetingProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let modelsJSON = #"""
+        {
+          "data": [
+            {"id": "llama-3.3-70b-versatile", "active": true, "context_window": 131072}
+          ]
+        }
+        """#
+        let chatResponseJSON = #"""
+        {
+          "choices": [
+            {
+              "message": {
+                "role": "assistant",
+                "content": "## 摘要\n- [00:00:15] 會議決策。\n\n## 決議\n- 未提及\n\n## 待辦\n- 未提及\n\n## 未解決問題\n- 未提及"
+              }
+            }
+          ]
+        }
+        """#
+
+        OfflineMeetingProtocol.reset(modelsJSON: modelsJSON, chatJSON: chatResponseJSON)
+
+        let diarizedTranscript = """
+        ---
+        status: finished
+        diarization: done
+        ---
+        [00:00:01] (Speaker 1) 各位早安，我們今天討論專案進度。
+        [00:00:15] (Speaker 2) 我負責前端，預計週三完成。
+        """
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var capturedSummary: String?
+        var capturedError: Error?
+
+        MeetingSummarizer.generateSummary(
+            transcript: diarizedTranscript,
+            apiKey: "mock-api-key",
+            session: session
+        ) { result in
+            switch result {
+            case .success(let summary):
+                capturedSummary = summary
+            case .failure(let error):
+                capturedError = error
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        if let error = capturedError {
+            fatalError("產生摘要不應失敗：\(error)")
+        }
+        guard let summary = capturedSummary else {
+            fatalError("應取得摘要內容")
+        }
+        expectTrue(summary.contains("## 摘要"), "產生的 Markdown 應包含摘要區塊")
+
+        // 檢驗送出給 Groq API 的實際 system prompt 包含說話者辨識警告指示
+        let chatRequests = OfflineMeetingProtocol.capturedRequests.filter { $0.url?.path.hasSuffix("/chat/completions") == true }
+        guard let lastRequest = chatRequests.last,
+              let body = extractBody(from: lastRequest),
+              let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let messages = json["messages"] as? [[String: Any]],
+              let systemMessage = messages.first(where: { ($0["role"] as? String) == "system" }),
+              let systemContent = systemMessage["content"] as? String else {
+            fatalError("未攔截到有效的 Chat Request 系統提示詞")
+        }
+
+        expectTrue(systemContent.contains("說話者標籤由自動辨識產生，可能不準；不要從說話內容推斷說話者是誰。"), "diarization: done 的逐字稿送出之系統提示詞必須包含警告指示")
+        expectTrue(systemContent.contains("待辦事項的負責人欄位請直接原樣使用逐字稿中的說話者標籤"), "diarization: done 的逐字稿送出之系統提示詞必須包含待辦 Speaker 標籤指示")
+
+        // 測試非 done（例如 legacy）逐字稿不包含該提示詞
+        let legacyTranscript = """
+        ---
+        status: finished
+        ---
+        [00:00:01] 各位早安，我們今天討論專案進度。
+        """
+        OfflineMeetingProtocol.reset(modelsJSON: modelsJSON, chatJSON: chatResponseJSON)
+        let semaphore2 = DispatchSemaphore(value: 0)
+        MeetingSummarizer.generateSummary(
+            transcript: legacyTranscript,
+            apiKey: "mock-api-key",
+            session: session
+        ) { _ in
+            semaphore2.signal()
+        }
+        semaphore2.wait()
+
+        let legacyChatRequests = OfflineMeetingProtocol.capturedRequests.filter { $0.url?.path.hasSuffix("/chat/completions") == true }
+        guard let legacyRequest = legacyChatRequests.last,
+              let legacyBody = extractBody(from: legacyRequest),
+              let legacyJson = try? JSONSerialization.jsonObject(with: legacyBody) as? [String: Any],
+              let legacyMessages = legacyJson["messages"] as? [[String: Any]],
+              let legacySystemMsg = legacyMessages.first(where: { ($0["role"] as? String) == "system" }),
+              let legacySystemContent = legacySystemMsg["content"] as? String else {
+            fatalError("未攔截到有效的 Legacy Chat Request 系統提示詞")
+        }
+
+        expectTrue(!legacySystemContent.contains("說話者標籤由自動辨識產生，可能不準"), "未帶 diarization: done 的逐字稿不得包含說話者辨識警告")
     }
 }
