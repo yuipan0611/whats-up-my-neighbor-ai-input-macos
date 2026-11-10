@@ -3,6 +3,7 @@ import AVFoundation
 import ApplicationServices
 import Carbon
 import Security
+import UserNotifications
 
 // MARK: - macOS 語音輸入主應用程式委派與生命週期總協調者
 // 作為 NSApplicationDelegate，本類別負責統籌整套應用的所有子系統：
@@ -1106,7 +1107,11 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
                     do {
                         let summaryURL = try self.meetingStore.writeSummary(summaryMarkdown, for: transcriptURL)
                         NSSound(named: "Glass")?.play()
-                        NSWorkspace.shared.activateFileViewerSelecting([summaryURL])
+                        if manualTrigger {
+                            NSWorkspace.shared.activateFileViewerSelecting([summaryURL])
+                        } else {
+                            self.notifyMeetingSummaryCompleted(summaryURL: summaryURL)
+                        }
                     } catch {
                         self.showMeetingNotice("摘要檔案寫入失敗：\(error.localizedDescription)")
                     }
@@ -1115,6 +1120,19 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
                 }
             }
         }
+    }
+
+    private func notifyMeetingSummaryCompleted(summaryURL: URL) {
+        let content = UNMutableNotificationContent()
+        content.title = "What's up my neighbor"
+        content.body = "會議記錄摘要已產生完成（\(summaryURL.lastPathComponent)）"
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: "meeting-summary-\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
     }
 
     private func renderMeetingStatus(_ status: MeetingStatus) {
