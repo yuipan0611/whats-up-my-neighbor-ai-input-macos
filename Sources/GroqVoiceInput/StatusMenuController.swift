@@ -21,6 +21,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private(set) var desktopPetMenuItem: NSMenuItem!
     private(set) var retryMenuItem: NSMenuItem!
     private(set) var cancelMenuItem: NSMenuItem!
+    private(set) var meetingToggleMenuItem: NSMenuItem!
     private(set) var modeMenuItems: [TextOutputMode: NSMenuItem] = [:]
     private var nekoPositionItems: [NekoHUDPosition: NSMenuItem] = [:]
     private var catCoatItems: [String: NSMenuItem] = [:]
@@ -55,6 +56,18 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         cancelMenuItem = NSMenuItem(title: "取消本次錄音／辨識", action: actions["cancelRecordingFromMenu"], keyEquivalent: "")
         cancelMenuItem.target = target
         menu.addItem(cancelMenuItem)
+
+        menu.addItem(NSMenuItem.separator())
+        meetingToggleMenuItem = NSMenuItem(title: "開始會議記錄", action: actions["toggleMeetingFromMenu"], keyEquivalent: "")
+        meetingToggleMenuItem.target = target
+        menu.addItem(meetingToggleMenuItem)
+        let meetingFolder = NSMenuItem(title: "開啟會議資料夾", action: actions["openMeetingFolder"], keyEquivalent: "")
+        meetingFolder.target = target
+        menu.addItem(meetingFolder)
+        let meetingCopy = NSMenuItem(title: "複製最近一次逐字稿", action: actions["copyLatestMeetingTranscript"], keyEquivalent: "")
+        meetingCopy.target = target
+        menu.addItem(meetingCopy)
+        menu.addItem(NSMenuItem.separator())
 
         clipboardPickerMenuItem = NSMenuItem(title: "剪貼簿歷史", action: actions["showClipboardPicker"], keyEquivalent: "")
         clipboardPickerMenuItem.target = target
@@ -187,6 +200,11 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(quit)
         menu.delegate = self
         statusItem.menu = menu
+    }
+
+    func updateMeeting(title: String, enabled: Bool) {
+        meetingToggleMenuItem?.title = title
+        meetingToggleMenuItem?.isEnabled = enabled
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {

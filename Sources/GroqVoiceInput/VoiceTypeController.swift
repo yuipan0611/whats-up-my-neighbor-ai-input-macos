@@ -25,6 +25,10 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     private let credentials = KeychainStore()
     private let recordingStore = TemporaryRecordingStore()
     private let micRecorder = PinnedMicrophoneRecorder()
+    /// 會議記錄專用的第二個錄音器實例，不與聽寫共用。
+    private let meetingRecorder = PinnedMicrophoneRecorder()
+    private let meetingStore = MeetingStore()
+    private var meetingTimer: Timer?
     private var catConfiguration = CatConfiguration.load()
     private var recordingCatImage: NSImage? {
         guard catConfiguration.image == nil, let original = NekoAppearance.catImage else { return NekoAppearance.catImage }
@@ -48,7 +52,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     }()
     private lazy var appUpdater = AppUpdateController { [weak self] in
         guard let self else { return true }
-        return self.dictation.state != .idle || self.micRecorder.isBusy || NSApp.modalWindow != nil
+        return self.dictation.state != .idle || self.micRecorder.isBusy || self.meeting.state != .idle || NSApp.modalWindow != nil
     }
     private let vocabularyStore = MacVocabularyStore()
     private lazy var vocabularyLearning = VocabularyLearningStore(vocabulary: vocabularyStore)
@@ -82,6 +86,21 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             }),
         storage: recordingStore
     )
+    private lazy var meeting: MeetingCoordinator = {
+        let coordinator = MeetingCoordinator(
+            recorder: meetingRecorder,
+            transcriber: MeetingGroqTranscriber(
+                readAPIKey: { [weak self] in self?.credentials.readAPIKey() },
+                makePrompt: { [weak self] language in
+                    let base = language.primary.transcriptionPrompt
+                    return self?.vocabularyLearning.prompt(base: base) ?? base
+                }),
+            store: meetingStore)
+        coordinator.onStatusChange = { [weak self] status in self?.renderMeetingStatus(status) }
+        coordinator.onError = { [weak self] message in self?.showMeetingError(message) }
+        coordinator.onFinished = { [weak self] url, failed in self?.meetingFinished(url, failedChunks: failed) }
+        return coordinator
+    }()
     private var currentHotKey = defaultHotKey
     private var clipboardHotKey: HotKeyShortcut? = defaultClipboardHotKey
     private var clipboardHotKeyRegistrationFailed = false
@@ -190,6 +209,8 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         desktopPet.dispose()
         correctionMonitor.stop()
         dictation.shutdown()
+        meeting.shutdown()
+        meetingTimer?.invalidate()
         if let clipboardPermissionObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(clipboardPermissionObserver)
         }
@@ -217,6 +238,9 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             "toggleFromMenu": #selector(toggleFromMenu),
             "retryRecordingFromMenu": #selector(retryRecordingFromMenu),
             "cancelRecordingFromMenu": #selector(cancelRecordingFromMenu),
+            "toggleMeetingFromMenu": #selector(toggleMeetingFromMenu),
+            "openMeetingFolder": #selector(openMeetingFolder),
+            "copyLatestMeetingTranscript": #selector(copyLatestMeetingTranscript),
             "selectOutputMode": #selector(selectOutputMode(_:)),
             "showLanguageDialog": #selector(showLanguageDialog),
             "showTextSettingsDialog": #selector(showTextSettingsDialog),
@@ -774,6 +798,12 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     }
 
     func toggleRecording(useAlternateMode: Bool = false, stopMethod: PasteDiagnostics.StopMethod = .shortcut) {
+        // 會議記錄中不能聽寫：同一支麥克風一次只做一件事。
+        if meeting.state != .idle {
+            NSSound.beep()
+            showMeetingNotice("會議記錄進行中，聽寫暫停。請先從選單列結束會議記錄。")
+            return
+        }
         clipboardPasteGesture.cancelPending()
         clipboardPicker.dismiss()
         if PasteDiagnostics.shared.isEnabled {
@@ -988,6 +1018,93 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    // MARK: 會議記錄
+
+    @objc private func toggleMeetingFromMenu() {
+        if meeting.state != .idle {
+            meeting.stop()
+            return
+        }
+        guard dictation.state == .idle, !micRecorder.isBusy, meeting.canStart else { NSSound.beep(); return }
+        guard credentials.readAPIKey() != nil else { showAPIKeyDialog(firstRun: false); return }
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+            showMeetingNotice("尚未允許麥克風。請到「系統設定 → 隱私權與安全性 → 麥克風」開啟 What's up my neighbor。")
+            return
+        }
+        guard let device = AudioInputDevices.selected(preferredUID: preferredInputDeviceUID) else {
+            showMeetingNotice("找不到電腦端麥克風。請接上麥克風後再開始會議記錄。")
+            return
+        }
+        _ = meeting.start(deviceUID: device.uid, language: languageSettings)
+    }
+
+    @objc private func openMeetingFolder() {
+        try? FileManager.default.createDirectory(at: meetingStore.root, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(meetingStore.root)
+    }
+
+    @objc private func copyLatestMeetingTranscript() {
+        guard let url = meetingStore.latestTranscriptURL(),
+              let text = try? String(contentsOf: url, encoding: .utf8) else {
+            NSSound.beep()
+            showMeetingNotice("還沒有會議記錄。")
+            return
+        }
+        // 直接寫入系統剪貼簿，不經剪貼簿歷史：整場會議逐字稿不該被存進歷史清單。
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    private func renderMeetingStatus(_ status: MeetingStatus) {
+        meetingTimer?.invalidate()
+        meetingTimer = nil
+        switch status.state {
+        case .idle:
+            statusMenu.updateMeeting(title: "開始會議記錄", enabled: true)
+            resetStatus()
+        case .starting:
+            statusMenu.updateMeeting(title: "會議記錄準備中…", enabled: false)
+            statusMenu.updateIcon(.processing, description: "準備會議記錄")
+        case .recording:
+            statusMenu.updateIcon(.recording, description: "會議記錄中")
+            updateMeetingTitle()
+            let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.updateMeetingTitle() }
+            meetingTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+        case .draining:
+            statusMenu.updateIcon(.processing, description: "會議記錄收尾中")
+            statusMenu.updateMeeting(title: "會議記錄收尾中…（剩 \(status.pendingChunks) 段）", enabled: false)
+        }
+    }
+
+    private func updateMeetingTitle() {
+        let seconds = Int(meeting.elapsed)
+        let clock = String(format: "%02d:%02d", seconds / 60, seconds % 60)
+        let failed = meeting.failedChunkCount > 0 ? "，\(meeting.failedChunkCount) 段失敗" : ""
+        statusMenu.updateMeeting(title: "結束會議記錄（\(clock)\(failed)）", enabled: true)
+    }
+
+    private func meetingFinished(_ url: URL, failedChunks: Int) {
+        NSSound(named: "Glass")?.play()
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+        if failedChunks > 0 {
+            showMeetingNotice("逐字稿已存好，但有 \(failedChunks) 段辨識失敗，音檔已保留在同一個資料夾，逐字稿裡有標出位置。")
+        }
+    }
+
+    private func showMeetingError(_ message: String) { showMeetingNotice(message) }
+
+    /// 與 `showError` 不同：不呼叫 `resetStatus()`，會議進行中不能把選單列圖示洗成閒置。
+    private func showMeetingNotice(_ message: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "What's up my neighbor"
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "好")
+        alert.runModal()
     }
 
     @objc private func quitApp() {
