@@ -104,23 +104,23 @@ enum MeetingSummarizerTests {
 
     static func testModelSelectionPreferencePriority() {
         let models = [
-            GroqModelInfo(id: "openai/gpt-oss-120b", contextWindow: 131072, active: true),
             GroqModelInfo(id: "llama-3.3-70b-versatile", contextWindow: 131072, active: true),
-            GroqModelInfo(id: "openai/gpt-oss-20b", contextWindow: 131072, active: true)
+            GroqModelInfo(id: "openai/gpt-oss-120b", contextWindow: 131072, active: true),
+            GroqModelInfo(id: "llama-3.1-8b-instant", contextWindow: 131072, active: true)
         ]
-        // 預設偏好首選為 llama-3.3-70b-versatile
+        // 預設偏好首選為 openai/gpt-oss-120b
         let selected = try! GroqModelSelector.selectModel(from: models)
-        expect(selected, "llama-3.3-70b-versatile")
+        expect(selected, "openai/gpt-oss-120b")
     }
 
     static func testModelSelectionFallbackToSecondPreference() {
         let models = [
-            GroqModelInfo(id: "openai/gpt-oss-120b", contextWindow: 131072, active: true),
-            GroqModelInfo(id: "openai/gpt-oss-20b", contextWindow: 131072, active: true)
+            GroqModelInfo(id: "llama-3.3-70b-versatile", contextWindow: 131072, active: true),
+            GroqModelInfo(id: "llama-3.1-8b-instant", contextWindow: 131072, active: true)
         ]
-        // 首選 llama-3.3 不在清單中時，挑選第二順位 openai/gpt-oss-120b
+        // 首選 openai/gpt-oss-120b 不在清單中時，挑選第二順位 llama-3.3-70b-versatile
         let selected = try! GroqModelSelector.selectModel(from: models)
-        expect(selected, "openai/gpt-oss-120b")
+        expect(selected, "llama-3.3-70b-versatile")
     }
 
     static func testModelSelectionFallbackToMaxContextWindow() {
