@@ -14,6 +14,11 @@ enum SettingsStoreTests {
             store.meetingDiarizationEnabled = false
             precondition(!SettingsStore(defaults: defaults).meetingDiarizationEnabled)
             precondition(!store.loadDesktopPetReleased())
+            precondition(store.loadAutoMeetingSummary(), "First use defaults to auto summary enabled")
+            store.saveAutoMeetingSummary(false)
+            precondition(!SettingsStore(defaults: defaults).loadAutoMeetingSummary())
+            store.saveAutoMeetingSummary(true)
+            precondition(store.loadAutoMeetingSummary())
             defaults.set("retained", forKey: "unrelatedPreference")
             store.saveDesktopPetReleased(true)
             precondition(SettingsStore(defaults: defaults).loadDesktopPetReleased())
