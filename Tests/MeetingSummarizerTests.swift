@@ -6,19 +6,25 @@ private final class OfflineMeetingProtocol: URLProtocol {
     private static let lock = NSLock()
     static var mockModelsJSON: String = ""
     static var mockChatResponseJSON: String = ""
+    static var mockChatResponses: [String] = []
     static var mockStatusCode: Int = 200
+    static var mockError: Error?
     static var capturedRequests: [URLRequest] = []
 
     static func reset(
         modelsJSON: String = "",
         chatJSON: String = "",
-        statusCode: Int = 200
+        chatResponses: [String] = [],
+        statusCode: Int = 200,
+        error: Error? = nil
     ) {
         lock.lock()
         defer { lock.unlock() }
         mockModelsJSON = modelsJSON
         mockChatResponseJSON = chatJSON
+        mockChatResponses = chatResponses
         mockStatusCode = statusCode
+        mockError = error
         capturedRequests.removeAll()
     }
 
@@ -29,13 +35,25 @@ private final class OfflineMeetingProtocol: URLProtocol {
         Self.lock.lock()
         Self.capturedRequests.append(request)
         let statusCode = Self.mockStatusCode
+        let customError = Self.mockError
         let url = request.url!
         let responseData: Data
+
+        if let customError {
+            Self.lock.unlock()
+            client?.urlProtocol(self, didFailWithError: customError)
+            return
+        }
 
         if url.path.hasSuffix("/models") {
             responseData = Data(Self.mockModelsJSON.utf8)
         } else if url.path.hasSuffix("/chat/completions") {
-            responseData = Data(Self.mockChatResponseJSON.utf8)
+            if !Self.mockChatResponses.isEmpty {
+                let next = Self.mockChatResponses.removeFirst()
+                responseData = Data(next.utf8)
+            } else {
+                responseData = Data(Self.mockChatResponseJSON.utf8)
+            }
         } else {
             responseData = Data(#"{"error":{"message":"未知 endpoint"}}"#.utf8)
         }
@@ -57,6 +75,26 @@ private final class OfflineMeetingProtocol: URLProtocol {
 }
 
 // MARK: - 測試斷言輔助函式
+
+private func extractBody(from request: URLRequest) -> Data? {
+    if let data = request.httpBody { return data }
+    if let stream = request.httpBodyStream {
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 1024)
+        while stream.hasBytesAvailable {
+            let read = stream.read(&buffer, maxLength: buffer.count)
+            if read > 0 {
+                data.append(buffer, count: read)
+            } else {
+                break
+            }
+        }
+        return data.isEmpty ? nil : data
+    }
+    return nil
+}
 
 private func expect<T: Equatable>(_ actual: T, _ expected: T, file: StaticString = #file, line: UInt = #line) {
     precondition(actual == expected, "Expected \(expected), got \(actual)", file: file, line: line)
@@ -80,10 +118,15 @@ enum MeetingSummarizerTests {
         testChatResponseParsingAndFrontmatter()
         testEndToEndOfflineSummaryGeneration()
         testAPIErrorExtraction()
+        testCategorizedErrorMessages()
+        testFrontmatterStrippingAndFailedChunksDetection()
+        testChunkingDoesNotCutLinesInHalf()
+        testShortTranscriptSingleRequest()
+        testLongTranscriptMapReduceRequests()
         testMeetingStoreSummaryWritingAndIndependence()
         testSummaryFailureDoesNotAffectTranscript()
         testLatestSummaryURLOrdersTenBeforeNineInSameMinute()
-        print("Meeting summarizer tests passed (12 suites)")
+        print("Meeting summarizer tests passed (17 suites)")
     }
 
     // MARK: - 模型解析與挑選測試
@@ -216,11 +259,13 @@ enum MeetingSummarizerTests {
         let result = try! MeetingSummarizer.parseChatResponse(
             data: Data(chatJSON.utf8),
             model: "llama-3.3-70b-versatile",
+            isPartial: false,
             generatedAt: fixedDate
         )
 
         expectTrue(result.contains("model: llama-3.3-70b-versatile"), "輸出必須包含 model frontmatter")
         expectTrue(result.contains("generated_at:"), "輸出必須包含 generated_at frontmatter")
+        expectTrue(!result.contains("partial: true"), "完整會議摘要不應有 partial frontmatter")
         expectTrue(result.contains("## 摘要\n- [00:01:00] 討論 Grokbot。"), "輸出必須保留完整摘要本文")
     }
 
@@ -282,7 +327,7 @@ enum MeetingSummarizerTests {
         expectTrue(summary.contains("## 摘要"), "內容應包含摘要區塊")
     }
 
-    // MARK: - 錯誤處理測試
+    // MARK: - 錯誤處理測試（401/403/413/429/逾時）
 
     static func testAPIErrorExtraction() {
         let config = URLSessionConfiguration.ephemeral
@@ -313,7 +358,219 @@ enum MeetingSummarizerTests {
         guard let error = capturedError as? VoiceTypeError else {
             fatalError("未捕獲預期之 VoiceTypeError")
         }
-        expect(error.errorDescription, "Invalid API Key supplied to Groq.")
+        expectTrue(error.errorDescription?.contains("更換有效的 API Key") == true, "401 應明確提示更換 Key")
+    }
+
+    static func testCategorizedErrorMessages() {
+        // 403 測試：提示更換 Key
+        let err403 = MeetingSummarizer.error(from: nil, statusCode: 403)
+        expectTrue(err403.errorDescription?.contains("更換有效的 API Key") == true, "403 應提示更換 Key")
+
+        // 413 測試：獨立說明超出大小限制
+        let err413 = MeetingSummarizer.error(from: nil, statusCode: 413)
+        expectTrue(err413.errorDescription?.contains("413") == true, "413 應包含 413 狀態碼")
+        expectTrue(err413.errorDescription?.contains("超出單次請求大小限制") == true, "413 應提示超出單次大小限制")
+
+        // 429 測試：精確提示手動重試
+        let err429 = MeetingSummarizer.error(from: nil, statusCode: 429)
+        expect(err429.errorDescription, "Groq 額度或速率限制，請稍後用『為最近一次會議產生摘要』重試")
+
+        // 逾時測試：獨立清晰之訊息
+        let timeoutNS = NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut, userInfo: nil)
+        let timeoutError = MeetingSummarizer.formatNetworkError(timeoutNS)
+        expect(timeoutError.errorDescription, "會議摘要請求逾時，請檢查網路連線或稍後重試。")
+    }
+
+    // MARK: - Frontmatter 去除與 failed_chunks 檢測測試
+
+    static func testFrontmatterStrippingAndFailedChunksDetection() {
+        let transcriptWithFailedChunks = """
+        ---
+        started: 2026-11-10T19:30:00Z
+        ended: 2026-11-10T19:40:00Z
+        status: completed
+        language: zh
+        chunks: 10
+        failed_chunks: 2
+        chunk_seconds: 300
+        ---
+
+        # 會議記錄 2026-11-10 19:30
+
+        [00:00:10] Speaker 1: 我們討論一下進度。
+        [00:00:30] Speaker 2: 好。
+        """
+
+        expectTrue(MeetingSummarizer.hasFailedChunks(in: transcriptWithFailedChunks), "應偵測出 failed_chunks > 0")
+
+        let stripped = MeetingSummarizer.stripFrontmatter(from: transcriptWithFailedChunks)
+        expectTrue(!stripped.contains("failed_chunks: 2"), "正文應去除 frontmatter 區塊")
+        expectTrue(stripped.contains("[00:00:10] Speaker 1: 我們討論一下進度。"), "正文內容應完整保留")
+
+        // 驗證 formatFinalSummary 帶 partial 標記
+        let summaryResult = MeetingSummarizer.formatFinalSummary(
+            content: "## 摘要\n- [00:00:10] 討論進度。",
+            model: "openai/gpt-oss-120b",
+            isPartial: true
+        )
+        expectTrue(summaryResult.contains("partial: true"), "summary frontmatter 應包含 partial: true")
+        expectTrue(summaryResult.contains("部分段落辨識失敗，摘要可能不完整"), "摘要開頭應包含警示提醒")
+
+        // 驗證無失敗段落時不帶 partial
+        let cleanTranscript = """
+        ---
+        started: 2026-11-10T19:30:00Z
+        chunks: 10
+        failed_chunks: 0
+        ---
+
+        [00:00:10] Speaker 1: 全部成功。
+        """
+        expectTrue(!MeetingSummarizer.hasFailedChunks(in: cleanTranscript), "failed_chunks 為 0 時不應判定為 partial")
+    }
+
+    // MARK: - 長會議分段切塊測試（絕不切半任何一行）
+
+    static func testChunkingDoesNotCutLinesInHalf() {
+        // 構造超過 12,000 字元的長會議逐字稿
+        var originalLines: [String] = []
+        for i in 1...200 {
+            let line = String(format: "[%02d:%02d:00] Speaker %d: 這是第 %d 行會議發言，討論關於 Grokbot、yui 以及 claudecode 的整合架構與詳細規劃細節。",
+                              i / 60, i % 60, (i % 3) + 1, i)
+            originalLines.append(line)
+        }
+        let fullTranscript = originalLines.joined(separator: "\n")
+        expectTrue(fullTranscript.count > MeetingSummarizer.maxChunkCharacterCount, "長逐字稿字元數應超過門檻")
+
+        let chunks = MeetingSummarizer.splitTranscriptIntoChunks(fullTranscript, maxChunkSize: MeetingSummarizer.maxChunkCharacterCount)
+        expectTrue(chunks.count > 1, "長逐字稿必須被切分成多個 chunk")
+
+        // 驗證：每一行的完整性，絕不能把任何一行切成兩半
+        var extractedLines: [String] = []
+        for (idx, chunk) in chunks.enumerated() {
+            let chunkLines = chunk.components(separatedBy: "\n").filter { !$0.isEmpty }
+            for line in chunkLines {
+                extractedLines.append(line)
+                expectTrue(originalLines.contains(line), "第 \(idx + 1) 個 chunk 中的行必須存在於原始發言中，絕不能被切半：\(line)")
+            }
+        }
+        expect(extractedLines.count, originalLines.count)
+        expect(extractedLines, originalLines)
+    }
+
+    // MARK: - 短稿 1 次請求 vs 長稿 N+1 次請求
+
+    static func testShortTranscriptSingleRequest() {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [OfflineMeetingProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let modelsJSON = #"""
+        {
+          "data": [{"id": "llama-3.3-70b-versatile", "active": true, "context_window": 131072}]
+        }
+        """#
+        let chatResponseJSON = #"""
+        {
+          "choices": [{"message": {"role": "assistant", "content": "## 摘要\n- 短稿摘要內容。"}}]
+        }
+        """#
+
+        OfflineMeetingProtocol.reset(modelsJSON: modelsJSON, chatJSON: chatResponseJSON)
+
+        let shortTranscript = "[00:01:00] Speaker 1: 短會議測試。"
+        let semaphore = DispatchSemaphore(value: 0)
+        var resultSummary: String?
+
+        MeetingSummarizer.generateSummary(
+            transcript: shortTranscript,
+            apiKey: "mock-key",
+            session: session
+        ) { result in
+            if case .success(let md) = result { resultSummary = md }
+            semaphore.signal()
+        }
+
+        semaphore.wait()
+        expectTrue(resultSummary != nil, "應取得短稿摘要")
+
+        // 驗證 chat completions 請求次數剛好為 1 次
+        let chatRequests = OfflineMeetingProtocol.capturedRequests.filter { $0.url?.path.hasSuffix("/chat/completions") == true }
+        expect(chatRequests.count, 1)
+    }
+
+    static func testLongTranscriptMapReduceRequests() {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [OfflineMeetingProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let modelsJSON = #"""
+        {
+          "data": [{"id": "llama-3.3-70b-versatile", "active": true, "context_window": 131072}]
+        }
+        """#
+
+        // 構造剛好切分成 2 個 chunk 的長逐字稿（以 70 字元作為門檻模擬測試切塊）
+        let mockChunkThreshold = 70
+        let line1 = "[00:01:00] Speaker 1: 第一個區塊的詳細討論內容，包含 Stack 與 claudecode 的初步設計流程與各模組職責。"
+        let line2 = "[00:02:00] Speaker 2: 第二個區塊的詳細討論內容，包含 DeepseekHarness 的效能對比圖表與繁體中文自定義詞庫導入。"
+        let longTranscript = "\(line1)\n\(line2)"
+
+        let chunks = MeetingSummarizer.splitTranscriptIntoChunks(longTranscript, maxChunkSize: mockChunkThreshold)
+        expect(chunks.count, 2)
+
+        // 準備 N (2) 個 map 回應與 1 個 reduce 回應
+        let mapResponse1 = """
+        {"choices":[{"message":{"role":"assistant","content":"## 摘要\\n- [00:01:00] 討論模組一。"}}]}
+        """
+        let mapResponse2 = """
+        {"choices":[{"message":{"role":"assistant","content":"## 摘要\\n- [00:02:00] 討論模組二。"}}]}
+        """
+        let reduceResponse = """
+        {"choices":[{"message":{"role":"assistant","content":"## 摘要\\n- [00:01:00] 討論模組一。\\n- [00:02:00] 討論模組二。\\n\\n## 決議\\n- 未提及\\n\\n## 待辦\\n- 未提及\\n\\n## 未解決問題\\n- 未提及"}}]}
+        """
+
+        OfflineMeetingProtocol.reset(
+            modelsJSON: modelsJSON,
+            chatResponses: [mapResponse1, mapResponse2, reduceResponse]
+        )
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var finalResult: String?
+
+        // 執行 Map-Reduce
+        MeetingSummarizer.executeMapReduce(
+            chunks: chunks,
+            model: "llama-3.3-70b-versatile",
+            apiKey: "mock-key",
+            session: session
+        ) { result in
+            if case .success(let md) = result { finalResult = md }
+            semaphore.signal()
+        }
+
+        semaphore.wait()
+        guard let output = finalResult else {
+            fatalError("未取得 Map-Reduce 結果")
+        }
+
+        expectTrue(output.contains("討論模組一。"), "最終摘要應包含第一段重點")
+        expectTrue(output.contains("討論模組二。"), "最終摘要應包含第二段重點")
+
+        // 核心驗證：長稿 N 個 chunk 必須剛好發送 N + 1 次請求（2 次 map + 1 次 reduce = 3 次）
+        let chatRequests = OfflineMeetingProtocol.capturedRequests.filter { $0.url?.path.hasSuffix("/chat/completions") == true }
+        expect(chatRequests.count, 3)
+
+        // 驗證第 3 次請求（Reduce）的 payload 含有 <partial_summaries>
+        guard let reduceBodyData = extractBody(from: chatRequests[2]) else {
+            fatalError("無法自 URLRequest 讀取 httpBody")
+        }
+        let reduceBodyJSON = try! JSONSerialization.jsonObject(with: reduceBodyData) as! [String: Any]
+        let reduceMessages = reduceBodyJSON["messages"] as! [[String: Any]]
+        let reduceUserContent = reduceMessages[1]["content"] as! String
+        expectTrue(reduceUserContent.contains("<partial_summaries>"), "Reduce 請求必須包含 <partial_summaries>")
+        expectTrue(reduceUserContent.contains("=== 第 1 段摘要 ==="), "Reduce 請求必須註明段落標記")
+        expectTrue(reduceUserContent.contains("=== 第 2 段摘要 ==="), "Reduce 請求必須註明段落標記")
     }
 
     // MARK: - MeetingStore 摘要寫入與獨立性測試

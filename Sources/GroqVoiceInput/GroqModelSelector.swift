@@ -87,7 +87,7 @@ enum GroqModelSelector {
 
         let task = session.dataTask(with: request) { data, response, error in
             if let error {
-                completion(.failure(VoiceTypeError.message("查詢 Groq 模型清單失敗：\(error.localizedDescription)")))
+                completion(.failure(MeetingSummarizer.formatNetworkError(error)))
                 return
             }
             guard let http = response as? HTTPURLResponse, let data else {
@@ -95,7 +95,7 @@ enum GroqModelSelector {
                 return
             }
             guard (200..<300).contains(http.statusCode) else {
-                completion(.failure(GroqTranscriptionResponse.error(from: data, statusCode: http.statusCode)))
+                completion(.failure(MeetingSummarizer.error(from: data, statusCode: http.statusCode)))
                 return
             }
             do {
