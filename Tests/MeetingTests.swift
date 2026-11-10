@@ -166,6 +166,15 @@ enum MeetingTests {
         let stray = f.directory.appendingPathComponent("zzz-notes", isDirectory: true)
         try FileManager.default.createDirectory(at: stray, withIntermediateDirectories: true)
         expect(f.store.latestTranscriptURL() == later.transcriptURL, "later minute wins; stray folder without transcript ignored")
+        // 公開給其他功能（摘要等）用的由新到舊清單：順序正確、檔案不算、雜項資料夾在最後。
+        try Data([1]).write(to: f.directory.appendingPathComponent("2099-01-01_0000.txt"))
+        let names = f.store.sessionDirectoriesNewestFirst().map(\.lastPathComponent)
+        expect(names.first == "2027-01-15_0802", "newest first: \(names)")
+        expect(names.last == "zzz-notes", "unrecognised folder sorts last: \(names)")
+        expect(!names.contains("2099-01-01_0000.txt"), "plain files are not sessions")
+        let ten = names.firstIndex(of: "2027-01-15_0800-10")!, nine = names.firstIndex(of: "2027-01-15_0800-9")!
+        expect(ten < nine, "-10 listed before -9: \(names)")
+        expect(names.firstIndex(of: "2027-01-15_0800")! == names.count - 2, "unsuffixed first meeting is oldest of its minute")
     }
 
     static func testStoreSessionLifecycle() throws {
