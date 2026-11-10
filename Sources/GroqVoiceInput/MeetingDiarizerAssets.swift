@@ -65,6 +65,8 @@ enum MeetingDiarizerModelCatalog {
 
 struct MeetingDiarizerAssets {
     let modelsDirectory: URL
+    /// 需要的模型。正式環境永遠是 `MeetingDiarizerModelCatalog.all`；測試才會換成小檔案。
+    let models: [MeetingDiarizerModel]
     private let fileManager: FileManager
 
     /// 預設：~/Library/Application Support/tw.panh.FreeVoiceType/models
@@ -75,8 +77,11 @@ struct MeetingDiarizerAssets {
             .appendingPathComponent("models", isDirectory: true)
     }
 
-    init(modelsDirectory: URL = MeetingDiarizerAssets.defaultModelsDirectory, fileManager: FileManager = .default) {
+    init(modelsDirectory: URL = MeetingDiarizerAssets.defaultModelsDirectory,
+         models: [MeetingDiarizerModel] = MeetingDiarizerModelCatalog.all,
+         fileManager: FileManager = .default) {
         self.modelsDirectory = modelsDirectory
+        self.models = models
         self.fileManager = fileManager
     }
 
@@ -86,7 +91,7 @@ struct MeetingDiarizerAssets {
 
     /// 兩個模型都已安裝，且大小與預期相同（不重算雜湊：這個檢查會在選單開啟時呼叫）。
     func modelsReady() -> Bool {
-        MeetingDiarizerModelCatalog.all.allSatisfy { isInstalled($0) }
+        models.allSatisfy { isInstalled($0) }
     }
 
     func isInstalled(_ model: MeetingDiarizerModel) -> Bool {
@@ -99,6 +104,6 @@ struct MeetingDiarizerAssets {
 
     /// 還沒安裝的模型（下載器只會下載這些）。
     func missingModels() -> [MeetingDiarizerModel] {
-        MeetingDiarizerModelCatalog.all.filter { !isInstalled($0) }
+        models.filter { !isInstalled($0) }
     }
 }
