@@ -125,6 +125,10 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String, lin
 enum MeetingTests {
     static func main() throws {
         testTimestampFormatting()
+        testSegmentRecordsArePureAndFollowSchema()
+        testSegmentsSidecarForThreeChunks()
+        testSidecarIsWrittenBeforeTranscript()
+        testSidecarFailureIsBestEffort()
         try testLatestTranscriptUsesNumericSuffixOrder()
         try testStoreSessionLifecycle()
         try testStoreNeverEscapesRootAndNeverOverwrites()
@@ -139,7 +143,160 @@ enum MeetingTests {
         testStaleRecorderCallbacksAreIgnored()
         testShutdownMarksUnfinishedChunks()
         testCannotStartWhileRecorderBusyOrActive()
-        print("Meeting tests passed (15 scenarios)")
+        print("Meeting tests passed (19 scenarios)")
+    }
+
+    // MARK: segments.jsonl
+
+    private static func segmentLines(_ f: Fixture) -> [String] {
+        guard let url = f.store.latestTranscriptURL() else { return [] }
+        let sidecar = url.deletingLastPathComponent().appendingPathComponent("segments.jsonl")
+        guard let text = try? String(contentsOf: sidecar, encoding: .utf8) else { return [] }
+        return text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+    }
+
+    private static func json(_ line: String) -> [String: Any] {
+        (try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]) ?? [:]
+    }
+
+    private static func near(_ value: Any?, _ expected: Double) -> Bool {
+        guard let number = value as? Double else { return false }
+        return abs(number - expected) < 0.0005
+    }
+
+    static func testSegmentRecordsArePureAndFollowSchema() {
+        func word(_ text: String, _ start: Double, _ end: Double) -> TranscriptionWord {
+            TranscriptionWord(text: text, start: start, end: end)
+        }
+        func segment(_ id: Int, _ start: Double, _ end: Double, _ text: String) -> TranscriptionSegment {
+            TranscriptionSegment(id: id, start: start, end: end, text: text, avgLogprob: nil, noSpeechProb: nil)
+        }
+        let value = TranscriptionResult(
+            text: "x", segments: [segment(0, 0, 2, " 大家好"), segment(1, 2.5, 3, "   "), segment(2, 4.2, 6.2, " A/B 測試\n")],
+            words: [word(" 大家好", 0, 0.5), word(" gap", 2.2, 2.4), word(" blank", 2.6, 2.9), word(" A/B", 4.2, 4.6), word("測試", 4.6, 5.0)],
+            language: "zh", duration: 6.2)
+        let records = MeetingSegments.records(chunk: 2, offset: 300.4, result: value)
+        expect(records.count == 2, "blank-text segment is skipped: \(records)")
+        expect(records[0].chunk == 2 && records[0].v == 1, "schema version and chunk number")
+        expect(records[0].start == 300.4 && records[0].end == 302.4, "offset added: \(records[0])")
+        // 300.4 + 4.2 在浮點數是 304.59999999999997，必須收成 304.6。
+        expect(records[1].start == 304.6 && records[1].end == 306.6, "rounded to milliseconds: \(records[1])")
+        expect(records[1].text == "A/B 測試", "text trimmed, newline removed at the ends")
+        // 字級時間：落在 segment 之間空隙的字（gap）歸前一個 segment；屬於被跳過的空白 segment 的字（blank）
+        // 不會出現在任何一行；w 原樣保留（包含前導空白）。
+        expect(records[0].words == [.init(w: " 大家好", s: 300.4, e: 300.9), .init(w: " gap", s: 302.6, e: 302.8)],
+               "words of segment 0: \(String(describing: records[0].words))")
+        expect(!records.contains { $0.words?.contains { $0.w == " blank" } == true }, "word of a skipped blank segment is dropped")
+        expect(records[1].words == [.init(w: " A/B", s: 304.6, e: 305.0), .init(w: "測試", s: 305.0, e: 305.4)], "words of segment 2")
+
+        let raw = records[1].jsonLine()
+        expect(raw == "{\"v\":1,\"chunk\":2,\"start\":304.6,\"end\":306.6,\"text\":\"A/B 測試\",\"words\":[{\"w\":\" A/B\",\"s\":304.6,\"e\":305},{\"w\":\"測試\",\"s\":305,\"e\":305.4}]}",
+               "fixed field order, no slash escaping, minimal numbers: \(raw)")
+        // 特殊字元要被正確跳脫，整行仍是合法 JSON。
+        let tricky = MeetingSegmentRecord(v: 1, chunk: 1, start: 0, end: 1, text: "他說\"好\"\\\t路徑/x", words: nil, failed: nil)
+        expect(json(tricky.jsonLine())["text"] as? String == "他說\"好\"\\\t路徑/x", "escaping round-trips: \(tricky.jsonLine())")
+        expect(!raw.contains("failed"), "failed is omitted when nil")
+
+        let noWords = TranscriptionResult(text: "x", segments: [segment(0, 1, 2, "沒有字級時間")], words: [], language: nil, duration: nil)
+        let plain = MeetingSegments.records(chunk: 1, offset: 0, result: noWords)
+        let plainRaw = plain[0].jsonLine()
+        expect(plainRaw == "{\"v\":1,\"chunk\":1,\"start\":1,\"end\":2,\"text\":\"沒有字級時間\"}", "no words key at all: \(plainRaw)")
+
+        let whole = TranscriptionResult(text: " 只有全文 ", segments: [], words: [], language: nil, duration: 4)
+        let fallback = MeetingSegments.records(chunk: 3, offset: 600, result: whole)
+        expect(fallback.count == 1 && fallback[0].start == 600 && fallback[0].end == 604 && fallback[0].text == "只有全文", "whole-text fallback")
+        expect(MeetingSegments.records(chunk: 1, offset: 0, result: TranscriptionResult(text: " ", segments: [], words: [], language: nil, duration: nil)).isEmpty,
+               "nothing recognised writes no lines")
+
+        let failed = MeetingSegments.failure(chunk: 2, offset: 300.4, duration: 300, reason: "HTTP 429: rate limited")
+        let failedRaw = failed.jsonLine()
+        expect(failedRaw == "{\"v\":1,\"chunk\":2,\"start\":300.4,\"end\":600.4,\"text\":\"\",\"failed\":\"HTTP 429: rate limited\"}", "failed line: \(failedRaw)")
+        expect(MeetingSegments.failure(chunk: 1, offset: 5, duration: 0, reason: "x").end == 5, "unknown length: end == start")
+    }
+
+    // 完整流程：成功、失敗、整段沒內容。段序號 = 段檔名的 NNN（M1 從 001 開始）。
+    static func testSegmentsSidecarForThreeChunks() {
+        let f = Fixture()
+        f.coordinator.start(deviceUID: "mic", language: .default)
+        let c1 = f.recorder.starts[0]
+        f.uptime = 100
+        f.recorder.started(c1)
+        f.uptime = 400
+        f.scheduled[0].action()
+        f.recorder.finish(c1)
+        let c2 = f.recorder.starts[1]
+        f.uptime = 400.4
+        f.recorder.started(c2)
+        let words = [TranscriptionWord(text: " 大家好", start: 0, end: 0.5), TranscriptionWord(text: " Grokbot", start: 0.6, end: 1.2),
+                     TranscriptionWord(text: " yui", start: 4.2, end: 4.5)]
+        var first = result([(0, " 大家好 Grokbot"), (4.2, " yui 說 claudecode")])
+        first = TranscriptionResult(text: first.text, segments: first.segments, words: words, language: "zh", duration: 6)
+        f.transcriber.complete(0, .success(first))
+        f.uptime = 700.4
+        f.scheduled[1].action()
+        f.recorder.finish(c2)
+        let c3 = f.recorder.starts[2]
+        f.uptime = 700.9
+        f.recorder.started(c3)
+        f.transcriber.complete(1, .failure(StubError(message: "Rate limit reached")))
+        f.uptime = 710
+        f.coordinator.stop()
+        f.recorder.finish(c3)
+        f.transcriber.complete(2, .success(TranscriptionResult(text: "", segments: [], words: [], language: nil, duration: nil)))
+
+        let lines = segmentLines(f)
+        expect(lines.count == 3, "2 segments of chunk 1 + 1 failed line for chunk 2, nothing for empty chunk 3: \(lines)")
+        expect(lines[0] == "{\"v\":1,\"chunk\":1,\"start\":0,\"end\":2,\"text\":\"大家好 Grokbot\",\"words\":[{\"w\":\" 大家好\",\"s\":0,\"e\":0.5},{\"w\":\" Grokbot\",\"s\":0.6,\"e\":1.2}]}",
+               "first line exactly: \(lines[0])")
+        let second = json(lines[1]), failed = json(lines[2])
+        expect(second["chunk"] as? Int == 1 && near(second["start"], 4.2) && near(second["end"], 6.2), "second segment: \(lines[1])")
+        expect((second["words"] as? [[String: Any]])?.count == 1, "only its own word")
+        expect(failed["chunk"] as? Int == 2 && near(failed["start"], 300.4) && near(failed["end"], 600.4), "failed line times: \(lines[2])")
+        expect(failed["failed"] as? String == "Rate limit reached" && failed["text"] as? String == "" && failed["words"] == nil, "failed line fields")
+        // 逐字稿的時間與旁路檔同一個 offset（時間軸共用 chunk.offset）。
+        let transcript = f.transcript
+        expect(transcript.contains("[00:00:00] 大家好 Grokbot") && transcript.contains("[00:00:04] yui 說 claudecode"), "transcript.md unchanged by the sidecar")
+        expect(transcript.contains("> ⚠️ [00:05:00] 第 2 段辨識失敗：Rate limit reached。音檔保留：chunk-002.m4a"), "failure marker unchanged")
+        expect(f.coordinator.sidecarFailureCount == 0, "no sidecar failures")
+        expect(!f.exists(c1) && f.exists(c2) && !f.exists(c3), "chunk deletion behaviour unchanged: success deleted, failure kept")
+    }
+
+    // 規則 2：先寫旁路檔，再寫逐字稿。逐字稿寫不進去時，旁路檔仍有這段（多一行比少一行好），
+    // 且不會再補一條 failed（同一段不能既有內容又被標失敗）。
+    static func testSidecarIsWrittenBeforeTranscript() {
+        let f = Fixture()
+        f.coordinator.start(deviceUID: "mic", language: .default)
+        let c1 = f.recorder.starts[0]
+        f.recorder.started(c1)
+        f.uptime = 300
+        f.scheduled[0].action()
+        f.recorder.finish(c1)
+        let transcript = f.store.latestTranscriptURL()!
+        try! FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: transcript.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: transcript.path) }
+        f.transcriber.complete(0, .success(result([(0, "只進得了旁路檔")])))
+        let lines = segmentLines(f)
+        expect(lines.count == 1 && json(lines[0])["text"] as? String == "只進得了旁路檔" && json(lines[0])["failed"] == nil,
+               "sidecar has the segment and no failed line: \(lines)")
+        expect(!f.transcript.contains("只進得了旁路檔"), "transcript.md could not be written")
+        expect(f.exists(c1) && f.coordinator.failedChunkCount == 1, "audio kept and counted as failed, as before")
+    }
+
+    // 旁路檔是盡力而為：寫不進去不能影響逐字稿與刪檔行為，只留下計數。
+    static func testSidecarFailureIsBestEffort() {
+        let f = Fixture()
+        f.coordinator.start(deviceUID: "mic", language: .default)
+        let c1 = f.recorder.starts[0]
+        f.recorder.started(c1)
+        let directory = f.store.latestTranscriptURL()!.deletingLastPathComponent()
+        try! FileManager.default.createDirectory(at: directory.appendingPathComponent("segments.jsonl"), withIntermediateDirectories: false)
+        f.uptime = 300
+        f.scheduled[0].action()
+        f.recorder.finish(c1)
+        f.transcriber.complete(0, .success(result([(0, "逐字稿照寫")])))
+        expect(f.coordinator.sidecarFailureCount == 1, "sidecar failure counted")
+        expect(f.transcript.contains("[00:00:00] 逐字稿照寫"), "transcript still written")
+        expect(!f.exists(c1) && f.coordinator.failedChunkCount == 0, "successful chunk still deleted and not marked failed")
     }
 
     static func testTimestampFormatting() {
