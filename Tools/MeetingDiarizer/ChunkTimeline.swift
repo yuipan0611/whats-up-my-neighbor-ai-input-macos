@@ -6,6 +6,9 @@ import Foundation
 /// 如果只是把各段音訊接起來，後面的時間會一路往前漂（12 段約漂 5 秒），
 /// 說話者辨識的時間就對不上 Groq 逐字稿的時間。
 ///
+/// 警告與錯誤裡的 "manifest entry N" 是該段在 manifest 裡的位置（從 1 起算），**不是**段檔名的編號 NNN
+/// （兩者通常相同，但時間軸不依賴檔名編號：只看 offset）。
+///
 /// 輸入：每段已解碼的 16 kHz 單聲道樣本與 offset。輸出：整場樣本（缺口補 0）。
 /// 純函式，不碰檔案、不碰 sherpa。
 enum ChunkTimeline {
@@ -27,7 +30,7 @@ enum ChunkTimeline {
 
         var description: String {
             switch self {
-            case .invalidOffset(let index, let offset): return "chunk \(index) has an invalid offset (\(offset))"
+            case .invalidOffset(let index, let offset): return "manifest entry \(index + 1) has an invalid offset (\(offset))"
             case .tooLong(let seconds): return "meeting timeline would be \(Int(seconds)) s, over the \(Int(ChunkTimeline.maximumSeconds)) s limit"
             }
         }
@@ -61,9 +64,9 @@ enum ChunkTimeline {
             } else {
                 let skip = samples.count - start
                 if skip >= chunk.samples.count {
-                    warnings.append("chunk \(index) lies entirely inside earlier audio and was dropped")
+                    warnings.append("manifest entry \(index + 1) lies entirely inside earlier audio and was dropped")
                 } else {
-                    warnings.append("chunk \(index) overlaps earlier audio by \(Double(skip) / Double(sampleRate)) s; the overlapping head was dropped")
+                    warnings.append("manifest entry \(index + 1) overlaps earlier audio by \(Double(skip) / Double(sampleRate)) s; the overlapping head was dropped")
                     samples.append(contentsOf: chunk.samples[skip...])
                 }
             }

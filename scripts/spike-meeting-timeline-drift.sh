@@ -4,7 +4,7 @@
 #   用 AMI ES2002a（CC BY 4.0，下載約 40 MB）切 12 段，編成 AAC 44.1 kHz／64 kbps 的 m4a（和會議錄音規格一樣），
 #   以 --manifest 的同一套程式碼串回整場，再和「整場 WAV」逐段做互相關，量三個位置（開頭／中間／結尾）的位移。
 # 通過標準：每個位置 |位移| ≤ 5 毫秒，且解碼後每段的樣本數與編碼前相同。
-# 負對照：故意把第 2 段的 offset 加 50 毫秒，檢查器必須量到約 50 毫秒（證明它看得到 50 毫秒的錯）。
+# 負對照：故意把第 2 段（chunk-002）的 offset 加 50 毫秒，檢查器必須量到約 50 毫秒（證明它看得到 50 毫秒的錯）。
 # 檔名刻意不叫 test-*.sh：要下載 AMI，不放進 test-all.sh／CI。
 set -euo pipefail
 
@@ -37,11 +37,11 @@ for i in range(chunks):
     with wave.open(f"{work}/c{i:02d}.wav", "wb") as o:
         o.setnchannels(1); o.setsampwidth(2); o.setframerate(rate); o.writeframes(data)
     subprocess.run(["afconvert", "-f", "m4af", "-d", "aac@44100", "-c", "1", "-b", "64000",
-                    f"{work}/c{i:02d}.wav", f"{work}/chunk-{i:03d}.m4a"], check=True)
+                    f"{work}/c{i:02d}.wav", f"{work}/chunk-{i + 1:03d}.m4a"], check=True)
     offset = i * (dur + gap); first = round(offset * rate)
     if first > pos: ref.writeframes(b"\x00\x00" * (first - pos)); pos = first
     ref.writeframes(data); pos += len(data) // 2
-    manifest["chunks"].append({"path": f"chunk-{i:03d}.m4a", "offset": offset})
+    manifest["chunks"].append({"path": f"chunk-{i + 1:03d}.m4a", "offset": offset})  # 與 M1 一樣從 chunk-001 起
 ref.close(); json.dump(manifest, open(f"{work}/manifest.json", "w"))
 shifted = json.loads(json.dumps(manifest)); shifted["chunks"][1]["offset"] += 0.05
 json.dump(shifted, open(f"{work}/manifest-shifted.json", "w"))
@@ -85,7 +85,7 @@ for (index, entry) in manifest.chunks.enumerated() {
     let positions = [first + maxLag, first + (length - window) / 2, first + length - window - maxLag]
     let lags = positions.map(lag(at:))
     worst = max(worst, lags.map { abs($0) }.max()!)
-    print(String(format: "%5d  %9.1f  %9.2f  %10.2f  %8.2f", index, entry.offset, lags[0], lags[1], lags[2]))
+    print(String(format: "%5d  %9.1f  %9.2f  %10.2f  %8.2f", index + 1, entry.offset, lags[0], lags[1], lags[2]))
 }
 print(String(format: "worst |lag| = %.2f ms", worst))
 SWIFT
@@ -107,9 +107,9 @@ PY
 "$WORK/checker/drift-checker" "$WORK/manifest-shifted.json" "$WORK/ref.wav" > "$WORK/shifted.txt"
 python3 - "$WORK/shifted.txt" <<'PY'
 import sys
-row = [l.split() for l in open(sys.argv[1]) if l.strip().startswith("1 ")][0]
+row = [l.split() for l in open(sys.argv[1]) if l.strip().startswith("2 ")][0]
 lags = [float(x) for x in row[2:5]]
-print("negative control (chunk 1 offset +50 ms): measured", lags)
+print("negative control (chunk 2 offset +50 ms): measured", lags)
 assert all(abs(abs(v) - 50) <= 2 for v in lags), "the checker cannot see a 50 ms error"
 PY
 print "meeting timeline drift test passed"

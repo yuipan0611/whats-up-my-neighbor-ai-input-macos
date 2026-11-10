@@ -301,6 +301,7 @@ App 以 `Process` 呼叫（**進度提醒**：63 分鐘那次，工具開始處�
 | M1 調整 | `segments.jsonl`、`diarization` 狀態、不刪段檔、啟動時掃描未完成會議 | Tom | 0.5–1 天 |
 | CLI `--manifest` | 讀多個段檔＋offset、補靜音、測試 | Ben | **已完成**（#49）|
 | 對齊器 | 字級／segment 對齊、平滑、合併；純函式＋離線測試 | Ben | **純函式與測試已完成**（#49，未接 App）；真實 Groq 輸出驗證待第一次呼叫 |
+| `segments: incomplete` 對帳 | 階段 1 逐字稿行與 `segments.jsonl` 記錄的比對、對不上標 `Speaker ?`（純函式＋離線測試）| Ben | 0.5 天 |
 | 逐字稿渲染與改名 | 從 `segments.jsonl`＋`speakers.json`＋`speaker_names` 產生 `transcript.md`，備份與原子寫入 | Ben | 0.5 天 |
 | 模型下載器 | 同意提示、進度、SHA256、失敗處理 | Ben | 0.5–1 天 |
 | 打包與簽章 | `build.sh`、重簽、公證驗證 | Senior dev 審查 | 無法估計（需簽章環境）|
@@ -339,15 +340,18 @@ App 以 `Process` 呼叫（**進度提醒**：63 分鐘那次，工具開始處�
 - 段檔的 `offset` 必須和 `MeetingCoordinator.offset(of:)` 給逐字稿用的 `chunk.offset` **同一個值**。M1 用 uptime 算，所以段間的 0.3–0.5 秒縫隙會自然反映在 offset 裡（這就是要補靜音的原因）。
 - `segments.jsonl` 裡的 `start`／`end`／`words[].s／e` = 段 `offset` ＋ Groq 回傳的段內時間。
 
+- **段編號從 1 開始**（與 M1 的檔名 `chunk-001.m4a` 一致，#52 的 `nextIndex` 也從 1 起算）。`segments.jsonl` 的 `chunk` ＝ 檔名裡的 NNN；第一段 `offset` 是 0。
+- **CLI 的 `--manifest` 不依賴編號**：只看每個 entry 的 `path` 與 `offset`，檔名叫什麼都可以，順序也不用排好。唯一出現「第幾段」的地方是警告與錯誤文字裡的 `manifest entry N`，那是該 entry 在 manifest 裡的位置（從 1 起算），不是 `chunk` 編號（通常相同）。
+
 ### A.1 `manifest.json`（`meeting-diarizer --manifest`）
 
 ```json
 {
   "version": 1,
   "chunks": [
-    {"path": "chunk-000.m4a", "offset": 0.0},
-    {"path": "chunk-001.m4a", "offset": 300.4},
-    {"path": "chunk-002.m4a", "offset": 600.9}
+    {"path": "chunk-001.m4a", "offset": 0.0},
+    {"path": "chunk-002.m4a", "offset": 300.4},
+    {"path": "chunk-003.m4a", "offset": 600.9}
   ]
 }
 ```
@@ -387,9 +391,9 @@ CLI 的行為（有測試）：
 **每個 Groq segment 一行**（與 M1 現在「一行逐字稿＝一個 segment」一致），UTF-8，以 `\n` 結尾，空行會被略過。
 
 ```json
-{"v":1,"chunk":1,"start":312.4,"end":318.9,"text":"我們先看下週的時程。","words":[{"w":"我們","s":312.4,"e":312.9},{"w":"先","s":312.9,"e":313.1}]}
-{"v":1,"chunk":1,"start":319.0,"end":322.4,"text":"Then let's confirm with QA."}
-{"v":1,"chunk":2,"start":600.9,"end":900.9,"text":"","failed":"HTTP 429: rate limited"}
+{"v":1,"chunk":2,"start":312.4,"end":318.9,"text":"我們先看下週的時程。","words":[{"w":"我們","s":312.4,"e":312.9},{"w":"先","s":312.9,"e":313.1}]}
+{"v":1,"chunk":2,"start":319.0,"end":322.4,"text":"Then let's confirm with QA."}
+{"v":1,"chunk":3,"start":600.9,"end":900.9,"text":"","failed":"HTTP 429: rate limited"}
 ```
 
 ```json
@@ -400,7 +404,7 @@ CLI 的行為（有測試）：
   "additionalProperties": false,
   "properties": {
     "v": {"const": 1},
-    "chunk": {"type": "integer", "minimum": 0, "description": "與段檔名 chunk-NNN.m4a 的 NNN 相同"},
+    "chunk": {"type": "integer", "minimum": 1, "description": "與段檔名 chunk-NNN.m4a 的 NNN 相同；從 1 起算"},
     "start": {"type": "number", "minimum": 0},
     "end": {"type": "number", "minimum": 0, "description": ">= start"},
     "text": {"type": "string", "description": "Groq 原文（含標點）；失敗行為空字串"},
@@ -422,12 +426,35 @@ CLI 的行為（有測試）：
 ```
 
 寫入規則（Tom 實作時請遵守）：
+0. **`chunk` 從 1 起算**，等於段檔名 `chunk-NNN.m4a` 的 NNN（第一段是 `chunk-001.m4a`、`"chunk":1`、offset 0）。讀取端（`SpeakerAligner`）**不檢查**這個編號，只看時間；編號只用來讓人對照檔案。
 1. **只加不改**：整場期間只 append，不重寫。每行用單次 `write` 加上 `\n`，並在寫完後才刪段檔（開啟說話者辨識時不刪，見 §1）。
 2. 順序：先 append `segments.jsonl`，再 append `transcript.md`。如果中途當機，`segments.jsonl` 多一行比少一行好（`transcript.md` 可以由它重新產生）。
 3. 空白文字的 segment 不寫（M1 目前也略過）；整段沒有辨識到內容時**不寫任何行**。
 4. 失敗的段寫一行 `failed`，`start` 為該段 `offset`、`end` 為 offset＋段長（不知道段長就等於 start）。重新產生逐字稿時它會以 `> ⚠️ [時間] 這段辨識失敗：原因` 保留在原位。
 5. 一行出現解析錯誤時，對齊器會**整份失敗**（不默默丟資料），呼叫端退回純文字逐字稿並標 `diarization: failed`。
 6. `v` 必須是 1；日後欄位增加時 `v` 才變，不要在 v1 偷加必填欄位。
+
+### A.2.1 `transcript.md` frontmatter 的 `segments: complete | incomplete`，M2 怎麼處理
+
+Tom 在 `transcript.md` frontmatter 加的欄位。我讀到的 #52（head 362b17e）還沒有這個欄位，只有 `sidecarFailureCount`（註解寫：旁路檔是盡力而為，寫入失敗不影響逐字稿與刪檔，但會留下計數，之後說話者辨識才知道旁路檔不完整），所以以下**假設**：`complete` ＝ 每個辨識成功或失敗的段都已寫進 `segments.jsonl`；`incomplete` ＝ 至少一次寫入 `segments.jsonl` 失敗（`sidecarFailureCount > 0`），也就是 `transcript.md` 有些行在 `segments.jsonl` 裡沒有對應記錄。若實際定義不同，以 Tom 的為準，請告訴我改這一節。
+
+| `segments` | `segments.jsonl` | M2 的處理 |
+|---|---|---|
+| `complete` | 存在 | 正常辨識與對齊 |
+| `incomplete` | 存在、至少 1 筆記錄 | **照常辨識**；對不上的逐字稿行標 `Speaker ?`（見下）；frontmatter 加 `speakers_note: 部分逐字稿行沒有時間資料，已標 Speaker ?`，逐字稿頂端也加一行同樣的說明 |
+| 沒有這個欄位 | 存在 | 當作 `incomplete`（舊版或不是 M1 寫的會議，無法確定完整）|
+| 任何值 | 不存在或 0 筆 | **不跑說話者辨識**：沒有可對齊的時間資料，辨識只會白花約 13 分鐘（1 小時會議）。`diarization: skipped`、`diarization_reason: no-segments`，並依 §1 的 `skipped` 規則處理音檔 |
+| 任何值 | 有壞行（A.2 規則 5）| `diarization: failed`，退回純文字逐字稿。這與 `incomplete` 不同：`incomplete` 是 M1 **宣告**的缺漏，壞行是檔案本身損毀 |
+
+「對不上的行」的判定（`incomplete` 時才需要；**這一段規則還沒有實作**，`SpeakerAligner` 目前只處理 `segments.jsonl` 這一側，是 §9 的後續工作項目）：
+
+1. 以階段 1 的 `transcript.plain.md`（辨識前的原版）為準，逐行解析 `[hh:mm:ss] 文字`。
+2. 一行與某筆記錄「對得上」＝ 時間戳等於 `floor(record.start)` 的 `hh:mm:ss`，且文字（折成單行、去掉頭尾空白後）相同。
+3. 對不上的逐字稿行 → 依時間戳插入結果，顯示為 `[hh:mm:ss] Speaker ?：文字`，不硬猜；`> ⚠️` 開頭的失敗／無內容標記行原樣保留在原位。
+4. 有記錄但逐字稿裡沒有對應行（例如 `transcript.md` 寫入失敗）→ 照樣輸出（`segments.jsonl` 是資料來源，排序依時間）。
+5. 同一秒內多行：維持原有順序。
+
+為什麼不乾脆整場放棄：`incomplete` 通常只缺一兩段（旁路檔寫入失敗是少見的），其餘行仍能標出說話者；整場放棄等於為了一點缺漏浪費使用者等的 13 分鐘。代價：缺的那幾行是 `Speaker ?`，使用者看得到、也不會被誤導。
 
 ### A.3 CLI 輸出（`meeting-diarizer` 的 stdout）
 
@@ -488,21 +515,21 @@ App 存成 `speakers.json` 時，**原樣存這份輸出**即可（改名時重�
 
 起因：上面 3 段合成音檔量到 30 毫秒位移，離 50 毫秒標準只剩 20 毫秒，要確認會不會隨段數累積。
 
-做法：從 AMI ES2002a（CC BY 4.0）每段取不同位置、各 300 秒，共 12 段；每段轉成 AAC 44.1 kHz／64 kbps 的 m4a；段間 0.4 秒縫隙（offset = 第 i 段 × 300.4 秒），整場 3604.4 秒。對照組是同樣內容、依相同 offset 放好的「整場 WAV」。
+做法：從 AMI ES2002a（CC BY 4.0）每段取不同位置、各 300 秒，共 12 段；每段轉成 AAC 44.1 kHz／64 kbps 的 m4a；段間 0.4 秒縫隙（offset = (第 n 段 − 1) × 300.4 秒，n 從 1 起），整場 3604.4 秒。對照組是同樣內容、依相同 offset 放好的「整場 WAV」。
 
 **(a) 信號層級**（`scripts/spike-meeting-timeline-drift.sh`，不需要 sherpa）：用 `--manifest` 同一套程式碼解碼並串回整場，與整場 WAV 逐段做互相關，每段量開頭／中間／結尾三處（5 秒窗口、搜尋 ±100 毫秒，解析度 1/16 毫秒）。
 
-| 段 | offset（秒）| 開頭 | 中間 | 結尾 |
+| 段（檔名 chunk-001…chunk-012）| offset（秒）| 開頭 | 中間 | 結尾 |
 |---|---|---|---|---|
-| 0–11（12 段全部）| 0.0、300.4、…、3304.4 | 0.00 ms | 0.00 ms | 0.00 ms |
+| 1–12（12 段全部）| 0.0、300.4、…、3304.4 | 0.00 ms | 0.00 ms | 0.00 ms |
 
 - 每段解碼後樣本數都剛好是 4,800,000（= 300 秒 × 16 kHz），AAC 的 2112 個編碼前置樣本（約 48 毫秒）已被 AVAudioFile 正確去除。
-- 負對照：把第 2 段的 offset 加 50 毫秒，檢查器量到 50.0／50.0／50.0 毫秒，所以這個檢查看得到 50 毫秒的錯。
+- 負對照：把第 2 段（`chunk-002`）的 offset 加 50 毫秒，檢查器量到 50.0／50.0／50.0 毫秒，所以這個檢查看得到 50 毫秒的錯。
 - 通過標準：每處 |位移| ≤ 5 毫秒。**實測最大 0.00 毫秒。**
 
 **(b) 端到端**（`meeting-diarizer`，人數 = 4，3604.4 秒）：`--manifest`（12 個 AAC 段檔）對 `--input`（整場 WAV）。每段取 30 秒的說話活動遮罩（10 毫秒一格），找最佳位移：
 
-| 段 | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 |
+| 段 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 最佳位移（ms）| 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | 位移 0 時不一致的格數（共 30000）| 626 | 355 | 402 | 398 | 387 | 535 | 328 | 320 | 382 | 538 | 612 | 362 |

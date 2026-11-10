@@ -123,7 +123,7 @@ if let input = options.input {
         do {
             decoded.append(ChunkTimeline.Chunk(samples: try AudioPCMReader.readMono16k(from: url), offset: entry.offset))
         } catch {
-            warnings.append("chunk \(index) (\(entry.path)) could not be read and is treated as a gap: \(error)")
+            warnings.append("manifest entry \(index + 1) (\(entry.path)) could not be read and is treated as a gap: \(error)")
         }
     }
     if decoded.isEmpty { fail("none of the \(manifest.chunks.count) chunks could be read", code: 4) }

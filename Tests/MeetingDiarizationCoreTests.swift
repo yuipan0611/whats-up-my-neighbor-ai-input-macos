@@ -149,14 +149,14 @@ enum MeetingDiarizationCoreTests {
 
     static func testParseSegmentsJSONL() throws {
         let text = """
-        {"v":1,"chunk":0,"start":1.5,"end":4.0,"text":"你好","words":[{"w":"你","s":1.5,"e":2.0},{"w":"好","s":2.0,"e":2.5}]}
+        {"v":1,"chunk":1,"start":1.5,"end":4.0,"text":"你好","words":[{"w":"你","s":1.5,"e":2.0},{"w":"好","s":2.0,"e":2.5}]}
 
-        {"v":1,"chunk":1,"start":300.4,"end":303.0,"text":"Hello"}
+        {"v":1,"chunk":2,"start":300.4,"end":303.0,"text":"Hello"}
         """
         let records = try SpeakerAligner.parseSegments(jsonl: text)
         check(records.count == 2 && records[0].words?.count == 2 && records[1].words == nil, "records and optional words")
-        for (name, bad) in [("bad json", "{oops"), ("version", #"{"v":2,"chunk":0,"start":0,"end":1,"text":"x"}"#),
-                            ("end before start", #"{"v":1,"chunk":0,"start":5,"end":1,"text":"x"}"#)] {
+        for (name, bad) in [("bad json", "{oops"), ("version", #"{"v":2,"chunk":1,"start":0,"end":1,"text":"x"}"#),
+                            ("end before start", #"{"v":1,"chunk":1,"start":5,"end":1,"text":"x"}"#)] {
             do { _ = try SpeakerAligner.parseSegments(jsonl: bad); check(false, "\(name) should throw") } catch {}
         }
         do {
@@ -169,8 +169,8 @@ enum MeetingDiarizationCoreTests {
 
     static func testAlignSegmentLevelWithoutWords() {
         let segments = [
-            TranscriptSegmentRecord(chunk: 0, start: 0, end: 5, text: "第一句"),
-            TranscriptSegmentRecord(chunk: 0, start: 5, end: 10, text: "第二句")
+            TranscriptSegmentRecord(chunk: 1, start: 0, end: 5, text: "第一句"),
+            TranscriptSegmentRecord(chunk: 1, start: 5, end: 10, text: "第二句")
         ]
         let turns = [SpeakerTurn(start: 0, end: 5, speaker: 0), SpeakerTurn(start: 5, end: 10, speaker: 1)]
         let lines = SpeakerAligner.align(segments: segments, turns: turns)
@@ -189,7 +189,7 @@ enum MeetingDiarizationCoreTests {
         // 超過 1 秒：無法歸屬
         let far = SpeakerAligner.dominantSpeaker(start: 12, end: 13, turns: [SpeakerTurn(start: 0, end: 10, speaker: 2)], maxDistance: 1)
         check(far == nil, "too far means unknown")
-        let lines = SpeakerAligner.align(segments: [TranscriptSegmentRecord(chunk: 0, start: 50, end: 52, text: "沒人說話的地方")], turns: [])
+        let lines = SpeakerAligner.align(segments: [TranscriptSegmentRecord(chunk: 1, start: 50, end: 52, text: "沒人說話的地方")], turns: [])
         check(lines.count == 1 && lines[0].speaker == nil, "no turns at all keeps the line with unknown speaker")
     }
 
@@ -200,7 +200,7 @@ enum MeetingDiarizationCoreTests {
         // 10–20 秒的 segment，15 秒換人，雙方都說了 2 秒以上（超過 minimumRunSeconds）
         let w = words([(" I", 10), (" think", 10.5), (" so", 11), (" yes", 11.5), (" agreed", 12), (" good", 12.5),
                        (" Then", 15), (" let's", 15.5), (" go", 16), (" ahead", 16.5), (" now", 17), (" please", 17.5)])
-        let segment = TranscriptSegmentRecord(chunk: 0, start: 10, end: 18, text: "I think so, yes agreed good. Then let's go ahead now please.", words: w)
+        let segment = TranscriptSegmentRecord(chunk: 1, start: 10, end: 18, text: "I think so, yes agreed good. Then let's go ahead now please.", words: w)
         let lines = SpeakerAligner.align(segments: [segment], turns: [
             SpeakerTurn(start: 10, end: 14.9, speaker: 0), SpeakerTurn(start: 15, end: 18, speaker: 1)
         ])
@@ -212,7 +212,7 @@ enum MeetingDiarizationCoreTests {
 
     static func testAlignKeepsOriginalTextWhenOneSpeaker() {
         let w: [TranscriptSegmentRecord.Word] = [.init(w: " Hello", s: 1, e: 1.5), .init(w: " world", s: 1.5, e: 3)]
-        let segment = TranscriptSegmentRecord(chunk: 0, start: 1, end: 3, text: " Hello, world! ", words: w)
+        let segment = TranscriptSegmentRecord(chunk: 1, start: 1, end: 3, text: " Hello, world! ", words: w)
         let lines = SpeakerAligner.align(segments: [segment], turns: [SpeakerTurn(start: 0, end: 4, speaker: 2)])
         check(lines == [AlignedLine(start: 1, end: 3, speaker: 2, text: "Hello, world!")], "punctuation from the segment text must survive: \(lines)")
     }
@@ -222,7 +222,7 @@ enum MeetingDiarizationCoreTests {
         var w: [TranscriptSegmentRecord.Word] = []
         for index in 0..<6 { w.append(.init(w: " w\(index)", s: Double(index), e: Double(index) + (index == 2 ? 0.2 : 0.9))) }
         let flicker = SpeakerAligner.align(
-            segments: [TranscriptSegmentRecord(chunk: 0, start: 0, end: 6, text: "原文。", words: w)],
+            segments: [TranscriptSegmentRecord(chunk: 1, start: 0, end: 6, text: "原文。", words: w)],
             turns: [SpeakerTurn(start: 0, end: 2, speaker: 0), SpeakerTurn(start: 2, end: 2.2, speaker: 1), SpeakerTurn(start: 2.2, end: 6, speaker: 0)])
         check(flicker.count == 1 && flicker[0].speaker == 0 && flicker[0].text == "原文。", "\(flicker)")
 
@@ -230,7 +230,7 @@ enum MeetingDiarizationCoreTests {
         var w2: [TranscriptSegmentRecord.Word] = []
         for index in 0..<8 { w2.append(.init(w: " v\(index)", s: Double(index), e: Double(index) + 1)) }
         let interjection = SpeakerAligner.align(
-            segments: [TranscriptSegmentRecord(chunk: 0, start: 0, end: 8, text: "原文二。", words: w2)],
+            segments: [TranscriptSegmentRecord(chunk: 1, start: 0, end: 8, text: "原文二。", words: w2)],
             turns: [SpeakerTurn(start: 0, end: 3.7, speaker: 0), SpeakerTurn(start: 3.7, end: 4.3, speaker: 1), SpeakerTurn(start: 4.3, end: 8, speaker: 0)])
         check(interjection.count == 1 && interjection[0].speaker == 0, "short interjection should not split the line: \(interjection)")
     }
@@ -241,7 +241,7 @@ enum MeetingDiarizationCoreTests {
             w.append(.init(w: token, s: Double(index) * 0.6, e: Double(index) * 0.6 + 0.6))
         }
         let lines = SpeakerAligner.align(
-            segments: [TranscriptSegmentRecord(chunk: 0, start: 0, end: 4.8, text: "我們先看時程。好的，沒問題，謝謝。", words: w)],
+            segments: [TranscriptSegmentRecord(chunk: 1, start: 0, end: 4.8, text: "我們先看時程。好的，沒問題，謝謝。", words: w)],
             turns: [SpeakerTurn(start: 0, end: 2.4, speaker: 0), SpeakerTurn(start: 2.4, end: 4.8, speaker: 1)])
         check(lines.map(\.text) == ["我們先看時程", "好的沒問題謝謝"], "\(lines.map(\.text))")
         check(lines.map(\.speaker) == [0, 1], "speakers")
@@ -257,16 +257,16 @@ enum MeetingDiarizationCoreTests {
 
     static func testAlignSkipsEmptyText() {
         let lines = SpeakerAligner.align(
-            segments: [TranscriptSegmentRecord(chunk: 0, start: 0, end: 2, text: "  \n "), TranscriptSegmentRecord(chunk: 0, start: 2, end: 4, text: "有字")],
+            segments: [TranscriptSegmentRecord(chunk: 1, start: 0, end: 2, text: "  \n "), TranscriptSegmentRecord(chunk: 1, start: 2, end: 4, text: "有字")],
             turns: [SpeakerTurn(start: 0, end: 4, speaker: 0)])
         check(lines.map(\.text) == ["有字"], "empty-text segments are dropped")
     }
 
     static func testFailedChunksSurviveAlignment() throws {
         let records = try SpeakerAligner.parseSegments(jsonl: """
-        {"v":1,"chunk":0,"start":0,"end":5,"text":"前面","words":null}
-        {"v":1,"chunk":1,"start":300,"end":600,"text":"","failed":"HTTP 429\\nrate limited"}
-        {"v":1,"chunk":2,"start":600.4,"end":603,"text":"後面"}
+        {"v":1,"chunk":1,"start":0,"end":5,"text":"前面","words":null}
+        {"v":1,"chunk":2,"start":300,"end":600,"text":"","failed":"HTTP 429\\nrate limited"}
+        {"v":1,"chunk":3,"start":600.4,"end":603,"text":"後面"}
         """)
         let lines = SpeakerAligner.align(segments: records, turns: [SpeakerTurn(start: 0, end: 5, speaker: 0), SpeakerTurn(start: 600.4, end: 603, speaker: 1)])
         check(lines.count == 3 && lines[1].failureNote == "HTTP 429\nrate limited" && lines[1].speaker == nil, "failure marker keeps its place: \(lines)")
