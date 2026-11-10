@@ -26,6 +26,7 @@ struct MeetingLine: Equatable {
 /// 因此不可能寫到會議資料夾以外的地方。
 final class MeetingStore {
     static let transcriptFilename = "transcript.md"
+    static let summaryFilename = "summary.md"
 
     /// 預設存在 ~/Documents/Neighbor Meetings，好找，不藏在系統暫存區。
     static var defaultRoot: URL {
@@ -116,6 +117,19 @@ final class MeetingStore {
 
     // MARK: 查詢
 
+    /// 指定逐字稿對應的 summary.md 位置。
+    func summaryURL(for transcriptURL: URL) -> URL {
+        transcriptURL.deletingLastPathComponent().appendingPathComponent(Self.summaryFilename)
+    }
+
+    /// 將會議摘要寫入同一資料夾的 summary.md。
+    @discardableResult
+    func writeSummary(_ text: String, for transcriptURL: URL) throws -> URL {
+        let url = summaryURL(for: transcriptURL)
+        try write(text, to: url)
+        return url
+    }
+
     /// 最近一場有逐字稿的會議。
     func latestTranscriptURL() -> URL? {
         for directory in sessionDirectoriesNewestFirst() {
@@ -123,6 +137,13 @@ final class MeetingStore {
             if fileManager.fileExists(atPath: url.path) { return url }
         }
         return nil
+    }
+
+    /// 最近一場有摘要的會議。
+    func latestSummaryURL() -> URL? {
+        sessionDirectoriesNewestFirst()
+            .first { fileManager.fileExists(atPath: $0.appendingPathComponent(Self.summaryFilename).path) }?
+            .appendingPathComponent(Self.summaryFilename)
     }
 
     /// root 底下的會議資料夾，由新到舊。依「日期時間，再依同分鐘的序號」排序：
