@@ -24,8 +24,15 @@ typeset -a ITEMS=(
   "speaker-embedding.onnx|$GITHUB/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx|aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2"
 )
 
+# MEETING_DIARIZER_SKIP_MODELS=1：只要 sherpa 函式庫與標頭（打包 App 用）。模型不進 App，
+# 由 App 在第一次使用時下載（MeetingDiarizerDownloader），所以打包時不必下載這 35 MB。
+SKIP_MODELS="${MEETING_DIARIZER_SKIP_MODELS:-0}"
+
 for item in "${ITEMS[@]}"; do
   name="${item%%|*}"; rest="${item#*|}"; url="${rest%%|*}"; expected="${rest##*|}"
+  if [[ "$SKIP_MODELS" == 1 && ( "$name" == pyannote-segmentation.tar.bz2 || "$name" == speaker-embedding.onnx ) ]]; then
+    continue
+  fi
   target="$CACHE/$name"
   if [[ -f "$target" ]] && [[ "$(shasum -a 256 "$target" | cut -d' ' -f1)" == "$expected" ]]; then
     continue
@@ -47,11 +54,13 @@ if [[ ! -d "$ASSETS/sherpa" ]]; then
   tar xjf "$CACHE/sherpa-lib.tar.bz2" -C "$ASSETS/sherpa.tmp" --strip-components=1
   mv "$ASSETS/sherpa.tmp" "$ASSETS/sherpa"
 fi
-if [[ ! -f "$ASSETS/models/pyannote-segmentation/model.onnx" ]]; then
-  rm -rf "$ASSETS/models" && mkdir -p "$ASSETS/models/pyannote-segmentation"
-  tar xjf "$CACHE/pyannote-segmentation.tar.bz2" -C "$ASSETS/models/pyannote-segmentation" --strip-components=1
+if [[ "$SKIP_MODELS" != 1 ]]; then
+  if [[ ! -f "$ASSETS/models/pyannote-segmentation/model.onnx" ]]; then
+    rm -rf "$ASSETS/models" && mkdir -p "$ASSETS/models/pyannote-segmentation"
+    tar xjf "$CACHE/pyannote-segmentation.tar.bz2" -C "$ASSETS/models/pyannote-segmentation" --strip-components=1
+  fi
+  cp "$CACHE/speaker-embedding.onnx" "$ASSETS/models/speaker-embedding.onnx"
 fi
-cp "$CACHE/speaker-embedding.onnx" "$ASSETS/models/speaker-embedding.onnx"
 # 預編譯庫不含標頭檔，標頭取自同一個 tag 的原始碼
 mkdir -p "$ASSETS/sherpa/include/sherpa-onnx/c-api"
 cp "$CACHE/c-api.h" "$ASSETS/sherpa/include/sherpa-onnx/c-api/c-api.h"

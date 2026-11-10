@@ -23,7 +23,8 @@ enum MeetingDiarizerLocatorTests {
         try testModelsReadyChecksBothFilesAndSizes()
         testCatalogIsPinnedAndFlagsUnconfirmedLicense()
         testDefaultLocationsAndSupportMessage()
-        print("Meeting diarizer locator tests passed (4 scenarios)")
+        testDownloadTextTellsTheUserWhatTheyAreAgreeingTo()
+        print("Meeting diarizer locator tests passed (5 scenarios)")
     }
 
     static func temporaryDirectory() throws -> URL {
@@ -99,5 +100,20 @@ enum MeetingDiarizerLocatorTests {
         #if arch(arm64)
         expect(MeetingDiarizerSupport.isAppleSilicon, "this test machine is Apple Silicon")
         #endif
+    }
+
+    static func testDownloadTextTellsTheUserWhatTheyAreAgreeingTo() {
+        let directory = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support/tw.panh.FreeVoiceType/models")
+        let message = MeetingDiarizerDownloadText.consentMessage(for: MeetingDiarizerModelCatalog.all, directory: directory)
+        expect(message.contains("2 個模型檔，共約 35.2 MB"), "total size: \(message)")
+        expect(message.contains("pyannote-segmentation-3.0（約 7.0 MB）") && message.contains("CAM++ zh_en 16k（約 28.3 MB）"), "each file and its size")
+        expect(message.contains("SHA256") && message.contains("github.com/k2-fsa/sherpa-onnx"), "source and verification")
+        expect(message.contains("~/Library/Application Support/tw.panh.FreeVoiceType/models"), "location, abbreviated: \(message)")
+        expect(message.contains("發布前必須確認"), "the unconfirmed CAM++ license is shown to the tester")
+        let confirmed = MeetingDiarizerDownloadText.consentMessage(for: [MeetingDiarizerModelCatalog.all[0]], directory: directory)
+        expect(!confirmed.contains("⚠️"), "no warning when every license is confirmed")
+        expect(MeetingDiarizerDownloadText.progressLine(received: 12_300_000, total: 35_239_608, modelName: "x") == "已下載 12.3 MB / 35.2 MB（34%）· x", "progress line")
+        expect(MeetingDiarizerDownloadText.progressLine(received: 5, total: 0, modelName: "x").contains("100%"), "no division by zero")
+        expect(MeetingDiarizerDownloadText.failureMessage(MeetingDiarizerDownloader.Failure.checksumMismatch(model: "m")).contains("重試只會下載缺少的部分"), "retry hint")
     }
 }
