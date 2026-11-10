@@ -129,10 +129,13 @@ enum MeetingSummarizerTests {
         testWhitespaceResponseRejectionAndPreservesPriorSummary()
         testOverlongSingleLineRejection()
         testJobCancellationAbortsPendingTasksAndDropsLateCallbacks()
+        testMeetingSummaryJobConcurrentAccessNoDataRace()
+        testTrackerShutdownCancelsAllJobs()
         testGenerationOrderingPreventsOldJobOverwritingNewSummary()
         testRecordingSessionDetectionBlocksEarlySummarization()
         testInterleavedDictationWithSummaryFailureNeverPresentsModal()
-        print("Meeting summarizer tests passed (23 suites)")
+        testReduceDepthLimitExceededFailsCleanly()
+        print("Meeting summarizer tests passed (26 suites)")
     }
 
     // MARK: - 模型解析與挑選測試
@@ -779,7 +782,58 @@ enum MeetingSummarizerTests {
         expectTrue(!callbackCalled, "已取消之 job 絕不可觸發 completion 回呼")
     }
 
-    // MARK: - Generation 世代逆序防覆寫測試
+    // MARK: - MeetingSummaryJob 多線程併發存取安全測試（ThreadSanitizer 驗證）
+
+    static func testMeetingSummaryJobConcurrentAccessNoDataRace() {
+        let job = MeetingSummaryJob()
+        let group = DispatchGroup()
+        let queue = DispatchQueue(label: "test.concurrent.job", attributes: .concurrent)
+
+        for _ in 0..<50 {
+            group.enter()
+            queue.async {
+                _ = job.isCancelled
+                _ = job.currentTask
+                group.leave()
+            }
+        }
+
+        for _ in 0..<10 {
+            group.enter()
+            queue.async {
+                job.attachTask(nil)
+                group.leave()
+            }
+        }
+
+        group.enter()
+        queue.async {
+            job.cancel()
+            group.leave()
+        }
+
+        group.wait()
+        expectTrue(job.isCancelled, "job 最終應為已取消")
+    }
+
+    // MARK: - Tracker 關閉時取消所有工作測試
+
+    static func testTrackerShutdownCancelsAllJobs() {
+        let tracker = MeetingSummaryTracker()
+        let url1 = URL(fileURLWithPath: "/test1")
+        let url2 = URL(fileURLWithPath: "/test2")
+
+        let job1 = tracker.registerJob(for: url1)
+        let job2 = tracker.registerJob(for: url2)
+        expectTrue(tracker.isBusy, "有 active jobs 時 tracker 應為 busy")
+
+        tracker.cancelAll()
+        expectTrue(job1.isCancelled, "cancelAll 應取消 job1")
+        expectTrue(job2.isCancelled, "cancelAll 應取消 job2")
+        expectTrue(!tracker.isBusy, "cancelAll 後 tracker 不應為 busy")
+    }
+
+    // MARK: - Generation 世代逆序防覆寫測試（直接測試 Production 型別 MeetingSummaryTracker）
 
     static func testGenerationOrderingPreventsOldJobOverwritingNewSummary() {
         let tempDir = FileManager.default.temporaryDirectory
@@ -788,23 +842,36 @@ enum MeetingSummarizerTests {
 
         let store = MeetingStore(root: tempDir)
         let session = try! store.beginSession(startedAt: Date(), language: "zh-TW", chunkSeconds: 300)
+        let transcriptURL = session.transcriptURL
 
-        // 模擬兩個併發工作：Gen 1 (舊) 與 Gen 2 (新)
-        let currentGeneration = 2 // 目前最新為 Gen 2
+        // 使用 Production 實際之 MeetingSummaryTracker
+        let tracker = MeetingSummaryTracker()
 
-        // Gen 2 先完成寫入
+        // 模擬兩次摘要請求：Job 1 (舊) 與 Job 2 (新)
+        let job1 = tracker.registerJob(for: transcriptURL)
+        expect(job1.generation, 1)
+
+        let job2 = tracker.registerJob(for: transcriptURL)
+        expect(job2.generation, 2)
+        expectTrue(job1.isCancelled, "註冊新工作時應自動取消舊工作")
+
+        // 模擬 Job 2 先完成並通過驗證寫入
         let v2Summary = "## 摘要\n這是 Generation 2 的新摘要"
-        try! store.writeSummary(v2Summary, for: session.transcriptURL)
+        let job2Valid = tracker.validateAndComplete(job: job2)
+        expectTrue(job2Valid, "最新世代 Job 2 應驗證通過")
+        try! store.writeSummary(v2Summary, for: transcriptURL)
 
-        // Gen 1 晚完成，檢查 generation 是否匹配
-        let gen1FinishedGeneration = 1
+        // 模擬 Job 1 晚到完成
         let v1Summary = "## 摘要\n這是 Generation 1 的舊摘要"
+        let job1Valid = tracker.validateAndComplete(job: job1)
+        expectTrue(!job1Valid, "已取消或非最新世代之 Job 1 絕不可驗證通過")
 
-        if gen1FinishedGeneration == currentGeneration {
-            try! store.writeSummary(v1Summary, for: session.transcriptURL)
+        if job1Valid {
+            try! store.writeSummary(v1Summary, for: transcriptURL)
         }
-        // 核心斷言：Gen 1 晚到結果不准寫入，檔案仍為 V2
-        let currentFile = try! String(contentsOf: store.summaryURL(for: session.transcriptURL), encoding: .utf8)
+
+        // 核心斷言：Job 1 晚到結果絕不准寫入，檔案仍為 V2
+        let currentFile = try! String(contentsOf: store.summaryURL(for: transcriptURL), encoding: .utf8)
         expect(currentFile, v2Summary)
     }
 
@@ -838,60 +905,101 @@ enum MeetingSummarizerTests {
         expectTrue(!MeetingSummarizer.isRecordingSession(transcript: completedTranscript), "已完成的會議不應判定為 recording")
     }
 
-    // MARK: - 交錯情境測試（摘要失敗絕不打斷聽寫）
+    // MARK: - 交錯情境測試（直接測試 Production 型別 MeetingSummaryPresentationPolicy）
 
     static func testInterleavedDictationWithSummaryFailureNeverPresentsModal() {
-        var modalPresented = false
-        var notificationPosted = false
-        var menuTitleUpdated = ""
-
-        let mockShowAlert: (String) -> Void = { _ in
-            modalPresented = true
-        }
-        let mockPostNotification: (String) -> Void = { _ in
-            notificationPosted = true
-        }
-        let mockUpdateMenu: (String) -> Void = { title in
-            menuTitleUpdated = title
-        }
-
-        func handleSummaryResult(
-            error: Error,
-            manualTrigger: Bool,
-            isDictating: Bool
-        ) {
-            let failureTitle = "摘要失敗：429，點此重試"
-            mockUpdateMenu(failureTitle)
-            if manualTrigger {
-                if !isDictating {
-                    mockShowAlert("會議摘要產生失敗：\(error.localizedDescription)")
-                }
-            } else {
-                // 自動流程：絕不彈出 modal，只發送通知
-                mockPostNotification("會議摘要產生失敗：\(error.localizedDescription)")
-            }
-        }
-
         let error429 = MeetingSummarizer.error(from: nil, statusCode: 429)
 
         // 情境 1：自動摘要失敗時，使用者正在聽寫 (isDictating = true)
-        handleSummaryResult(error: error429, manualTrigger: false, isDictating: true)
-        expectTrue(!modalPresented, "自動摘要失敗在聽寫中絕不允許彈出 modal 視窗")
-        expectTrue(notificationPosted, "自動摘要失敗應送出不搶焦點之系統通知")
-        expect(menuTitleUpdated, "摘要失敗：429，點此重試")
-
-        // 重設狀態
-        modalPresented = false
-        notificationPosted = false
+        let d1 = MeetingSummaryPresentationPolicy.decidePresentation(
+            isSuccess: false,
+            manualTrigger: false,
+            isDictating: true,
+            error: error429
+        )
+        expectTrue(!d1.shouldShowAlert, "自動摘要失敗在聽寫中絕不允許彈出 modal 視窗")
+        expectTrue(d1.shouldPostNotification, "自動摘要失敗應送出不搶焦點之系統通知")
+        expectTrue(!d1.shouldOpenFileViewer, "失敗絕不可打開 Finder")
+        expect(d1.menuTitle, "摘要失敗：429，點此重試")
 
         // 情境 2：自動摘要失敗時，使用者未聽寫 (isDictating = false)
-        handleSummaryResult(error: error429, manualTrigger: false, isDictating: false)
-        expectTrue(!modalPresented, "自動摘要失敗即使未在聽寫中亦絕不可彈出 modal 視窗")
-        expectTrue(notificationPosted, "應送出系統通知")
+        let d2 = MeetingSummaryPresentationPolicy.decidePresentation(
+            isSuccess: false,
+            manualTrigger: false,
+            isDictating: false,
+            error: error429
+        )
+        expectTrue(!d2.shouldShowAlert, "自動摘要失敗即使未在聽寫中亦絕不可彈出 modal 視窗")
+        expectTrue(d2.shouldPostNotification, "應送出系統通知")
+        expect(d2.menuTitle, "摘要失敗：429，點此重試")
 
         // 情境 3：手動觸發失敗，但使用者隨即開始聽寫 (isDictating = true)
-        modalPresented = false
-        handleSummaryResult(error: error429, manualTrigger: true, isDictating: true)
-        expectTrue(!modalPresented, "使用者在聽寫中時，手動觸發失敗亦不得彈窗中斷聽寫")
+        let d3 = MeetingSummaryPresentationPolicy.decidePresentation(
+            isSuccess: false,
+            manualTrigger: true,
+            isDictating: true,
+            error: error429
+        )
+        expectTrue(!d3.shouldShowAlert, "使用者在聽寫中時，手動觸發失敗亦不得彈窗中斷聽寫")
+        expectTrue(!d3.shouldPostNotification, "手動觸發不在聽寫中彈窗，由選單標題提示")
+        expect(d3.menuTitle, "摘要失敗：429，點此重試")
+
+        // 情境 4：手動觸發成功且未在聽寫
+        let d4 = MeetingSummaryPresentationPolicy.decidePresentation(
+            isSuccess: true,
+            manualTrigger: true,
+            isDictating: false
+        )
+        expectTrue(!d4.shouldShowAlert, "成功時不應彈出 alert")
+        expectTrue(d4.shouldOpenFileViewer, "手動觸發成功應開啟 Finder 選取檔案")
+        expectTrue(!d4.shouldPostNotification, "手動觸發成功不重複發送系統通知")
+        expect(d4.menuTitle, "為最近一次會議產生摘要")
+
+        // 情境 5：自動摘要成功
+        let d5 = MeetingSummaryPresentationPolicy.decidePresentation(
+            isSuccess: true,
+            manualTrigger: false,
+            isDictating: false
+        )
+        expectTrue(!d5.shouldShowAlert, "成功時不應彈出 alert")
+        expectTrue(!d5.shouldOpenFileViewer, "自動摘要成功絕不可自動開啟 Finder 搶焦點")
+        expectTrue(d5.shouldPostNotification, "自動摘要成功應發出系統通知")
+        expect(d5.menuTitle, "為最近一次會議產生摘要")
+    }
+
+    // MARK: - Reduce 深度上限與收斂保證測試
+
+    static func testReduceDepthLimitExceededFailsCleanly() {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [OfflineMeetingProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let summaries = [
+            "## 摘要\n- 第一段重點",
+            "## 摘要\n- 第二段重點"
+        ]
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var capturedError: Error?
+
+        // 模擬已達深度上限 (currentDepth: 3 >= maxReduceDepth: 3)
+        MeetingSummarizer.reduceSummaries(
+            summaries: summaries,
+            model: "llama-3.3-70b-versatile",
+            apiKey: "mock-key",
+            session: session,
+            currentDepth: 3
+        ) { result in
+            if case .failure(let error) = result {
+                capturedError = error
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        guard let error = capturedError else {
+            fatalError("超限 depth 應觸發錯誤")
+        }
+        expectTrue(error.localizedDescription.contains("會議分段摘要彙整層數超過上限（最多 3 層）"), "錯誤訊息應提示層數超過上限")
     }
 }

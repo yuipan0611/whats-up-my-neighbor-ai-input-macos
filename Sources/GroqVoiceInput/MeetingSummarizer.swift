@@ -3,13 +3,31 @@ import Foundation
 /// 代表一個正在執行或已排程的會議摘要工作。
 /// 集中管理 /models、各分段 Map 與 Reduce 的 URLSessionTask，
 /// 支援隨時取消（cancel），取消後立即中止當前請求並捨棄晚到的回呼。
+///
+/// Thread Safety：
+/// 所有對 `_isCancelled` 與 `_currentTask` 的讀寫均受 `lock` 保護，
+/// `cancel()` 在鎖內設定旗標並取出 task，解鎖後才呼叫 `task.cancel()`，
+/// 避免持鎖呼叫外部程式碼並杜絕 ThreadSanitizer data race。
 final class MeetingSummaryJob {
     let id: UUID
     let transcriptURL: URL
     let generation: Int
-    private(set) var isCancelled: Bool = false
+
     private let lock = NSLock()
-    private weak var currentTask: URLSessionTask?
+    private var _isCancelled: Bool = false
+    private weak var _currentTask: URLSessionTask?
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return _isCancelled
+    }
+
+    var currentTask: URLSessionTask? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _currentTask
+    }
 
     init(id: UUID = UUID(), transcriptURL: URL = URL(fileURLWithPath: "/"), generation: Int = 1) {
         self.id = id
@@ -19,21 +37,136 @@ final class MeetingSummaryJob {
 
     func attachTask(_ task: URLSessionTask?) {
         lock.lock()
-        defer { lock.unlock() }
-        guard !isCancelled else {
-            task?.cancel()
-            return
+        let cancelled = _isCancelled
+        if !cancelled {
+            _currentTask = task
         }
-        currentTask = task
+        lock.unlock()
+
+        if cancelled {
+            task?.cancel()
+        }
     }
 
     func cancel() {
         lock.lock()
+        guard !_isCancelled else {
+            lock.unlock()
+            return
+        }
+        _isCancelled = true
+        let taskToCancel = _currentTask
+        _currentTask = nil
+        lock.unlock()
+
+        taskToCancel?.cancel()
+    }
+}
+
+/// 會議摘要工作追蹤與世代管理器（Thread-safe，Production 實際使用型別）。
+final class MeetingSummaryTracker {
+    private let lock = NSLock()
+    private var activeJobs: [URL: MeetingSummaryJob] = [:]
+    private var generations: [URL: Int] = [:]
+
+    var isBusy: Bool {
+        lock.lock()
         defer { lock.unlock() }
-        guard !isCancelled else { return }
-        isCancelled = true
-        currentTask?.cancel()
-        currentTask = nil
+        return !activeJobs.isEmpty
+    }
+
+    /// 註冊新工作：若有舊工作則自動取消，並指派遞增之 generation
+    func registerJob(for url: URL) -> MeetingSummaryJob {
+        lock.lock()
+        defer { lock.unlock() }
+        activeJobs[url]?.cancel()
+        let nextGen = (generations[url] ?? 0) + 1
+        generations[url] = nextGen
+        let job = MeetingSummaryJob(transcriptURL: url, generation: nextGen)
+        activeJobs[url] = job
+        return job
+    }
+
+    /// 檢驗完成之工作是否仍為最新世代（非最新或已取消者回傳 false）
+    func validateAndComplete(job: MeetingSummaryJob) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !job.isCancelled else { return false }
+        guard generations[job.transcriptURL] == job.generation else {
+            return false
+        }
+        if activeJobs[job.transcriptURL]?.id == job.id {
+            activeJobs.removeValue(forKey: job.transcriptURL)
+        }
+        return true
+    }
+
+    /// 取消所有進行中的工作（如 App shutdown）
+    func cancelAll() {
+        lock.lock()
+        let jobsToCancel = Array(activeJobs.values)
+        activeJobs.removeAll()
+        lock.unlock()
+
+        for job in jobsToCancel {
+            job.cancel()
+        }
+    }
+}
+
+/// 會議摘要呈現決策策略（純邏輯型別，Production 與測試共用）。
+enum MeetingSummaryPresentationPolicy {
+    struct Decision: Equatable {
+        let shouldShowAlert: Bool
+        let shouldOpenFileViewer: Bool
+        let shouldPostNotification: Bool
+        let menuTitle: String
+    }
+
+    /// 根據觸發方式、聽寫狀態與結果，決定呈現方式（絕不在自動流程或聽寫中搶焦點）。
+    static func decidePresentation(
+        isSuccess: Bool,
+        manualTrigger: Bool,
+        isDictating: Bool,
+        error: Error? = nil
+    ) -> Decision {
+        if isSuccess {
+            let showFinder = manualTrigger && !isDictating
+            let notify = !manualTrigger
+            return Decision(
+                shouldShowAlert: false,
+                shouldOpenFileViewer: showFinder,
+                shouldPostNotification: notify,
+                menuTitle: "為最近一次會議產生摘要"
+            )
+        } else {
+            let menuTitle = summarizeFailureMenuTitle(for: error)
+            let showAlert = manualTrigger && !isDictating
+            let notify = !manualTrigger
+            return Decision(
+                shouldShowAlert: showAlert,
+                shouldOpenFileViewer: false,
+                shouldPostNotification: notify,
+                menuTitle: menuTitle
+            )
+        }
+    }
+
+    static func summarizeFailureMenuTitle(for error: Error?) -> String {
+        guard let error else { return "摘要失敗，點此重試" }
+        let msg = error.localizedDescription
+        if msg.contains("429") || msg.contains("額度或速率限制") {
+            return "摘要失敗：429，點此重試"
+        } else if msg.contains("401") {
+            return "摘要失敗：401，點此重試"
+        } else if msg.contains("403") {
+            return "摘要失敗：403，點此重試"
+        } else if msg.contains("413") {
+            return "摘要失敗：413，點此重試"
+        } else if msg.contains("逾時") {
+            return "摘要失敗：逾時，點此重試"
+        }
+        return "摘要失敗，點此重試"
     }
 }
 
@@ -59,6 +192,9 @@ enum MeetingSummarizer {
     /// 3. 將單次提示詞長度控制在 12,000 字元內可確保推論在 context 視窗內保持最高專注度、避免輸出被截斷，
     ///    並大幅降低觸發速率限制的機率，為回傳格式保留充裕的 token 輸出空間。
     static let maxChunkCharacterCount: Int = 12_000
+
+    /// Reduce 彙整遞迴深度上限（最多 3 層），保證分層合併收斂並防範無限迴圈。
+    static let maxReduceDepth: Int = 3
 
     /// 單段或短稿系統提示詞：防提示詞注入、零幻覺、時間戳回查、四固定欄位
     static let systemPrompt = """
@@ -225,7 +361,7 @@ enum MeetingSummarizer {
     /// 將逐字稿正文依 [hh:mm:ss] 段落邊界切塊，確保每一塊不超過 `maxChunkSize`。
     /// 規範：
     /// 1. 絕不將任何一行切成兩半。
-    /// 2. 若有單行長度超過 `maxChunkSize`，明確拋出「逐字稿單行過長，暫不支援。」錯誤，拒絕直接發出不合規請求。
+    /// 2. 若有單行長度超過 `maxChunkCharacterCount`（12,000 字元），明確拋出「逐字稿單行過長，暫不支援。」錯誤，拒絕直接發出不合規請求。
     static func splitTranscriptIntoChunks(
         _ text: String,
         maxChunkSize: Int = maxChunkCharacterCount
@@ -437,13 +573,14 @@ enum MeetingSummarizer {
         }
     }
 
-    /// 遞迴/分層執行 Reduce 合併
+    /// 遞迴/分層執行 Reduce 合併（最多 3 層深度上限，並保證每層摘要數嚴格遞減）
     static func reduceSummaries(
         summaries: [String],
         model: String,
         apiKey: String,
         session: URLSession,
         job: MeetingSummaryJob? = nil,
+        currentDepth: Int = 0,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
         if let job, job.isCancelled { return }
@@ -453,6 +590,11 @@ enum MeetingSummarizer {
         }
         if summaries.count == 1 {
             completion(.success(summaries[0]))
+            return
+        }
+
+        guard currentDepth < maxReduceDepth else {
+            completion(.failure(VoiceTypeError.message("會議分段摘要彙整層數超過上限（最多 3 層），暫不支援。")))
             return
         }
 
@@ -470,10 +612,12 @@ enum MeetingSummarizer {
         } else {
             // 分層合併（Hierarchical Reduce）
             let groups = groupSummariesForReduce(summaries, maxCount: maxChunkCharacterCount)
-            if groups.count == 1 && groups[0].count == summaries.count {
-                completion(.failure(VoiceTypeError.message("會議分段摘要彙整內容過長，暫不支援。")))
+            // 核心保證：每一層的輸出群組數必須嚴格小於輸入數量，確保向後收斂，防止無限迴圈
+            guard groups.count < summaries.count else {
+                completion(.failure(VoiceTypeError.message("會議分段摘要彙整內容過長且無法有效收斂，暫不支援。")))
                 return
             }
+
             var intermediateSummaries: [String] = []
             func processNextBatch(index: Int) {
                 if let job, job.isCancelled { return }
@@ -484,6 +628,7 @@ enum MeetingSummarizer {
                         apiKey: apiKey,
                         session: session,
                         job: job,
+                        currentDepth: currentDepth + 1,
                         completion: completion
                     )
                     return
@@ -531,6 +676,7 @@ enum MeetingSummarizer {
                     apiKey: apiKey,
                     session: session,
                     job: job,
+                    currentDepth: 0,
                     completion: completion
                 )
                 return
