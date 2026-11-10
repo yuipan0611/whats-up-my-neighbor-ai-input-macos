@@ -14,6 +14,7 @@ swiftc \
   "$ROOT/Sources/GroqVoiceInput/GroqTranscriptionClient.swift" \
   "$ROOT/Sources/GroqVoiceInput/MeetingAudio.swift" \
   "$ROOT/Sources/GroqVoiceInput/MeetingStore.swift" \
+  "$ROOT/Sources/GroqVoiceInput/MeetingDiarizationFiles.swift" \
   "$ROOT/Sources/GroqVoiceInput/MeetingCoordinator.swift" \
   "$ROOT/Sources/GroqVoiceInput/MeetingGroqTranscriber.swift" \
   "$ROOT/Tests/MeetingTests.swift" \

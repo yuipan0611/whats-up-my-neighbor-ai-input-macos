@@ -31,6 +31,8 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     /// 說話者辨識的 CLI／模型位置（Ben 的 coordinator 注入用；功能預設關閉，這裡不呼叫它）。
     let meetingDiarizerLocator: MeetingDiarizerLocator = BundledMeetingDiarizerLocator()
     private var meetingTimer: Timer?
+    /// 第一次需要時才建立；功能關閉時永遠是 nil。
+    private var meetingDiarizationCoordinator: MeetingDiarizationCoordinator?
     private var catConfiguration = CatConfiguration.load()
     private var recordingCatImage: NSImage? {
         guard catConfiguration.image == nil, let original = NekoAppearance.catImage else { return NekoAppearance.catImage }
@@ -97,7 +99,8 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
                     let base = language.primary.transcriptionPrompt
                     return self?.vocabularyLearning.prompt(base: base) ?? base
                 }),
-            store: meetingStore)
+            store: meetingStore,
+            retainAudio: { [weak self] in self?.settings.meetingDiarizationEnabled ?? false })
         coordinator.onStatusChange = { [weak self] status in self?.renderMeetingStatus(status) }
         coordinator.onError = { [weak self] message in self?.showMeetingError(message) }
         coordinator.onFinished = { [weak self] url, failed in self?.meetingFinished(url, failedChunks: failed) }
@@ -212,6 +215,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         correctionMonitor.stop()
         dictation.shutdown()
         meeting.shutdown()
+        meetingDiarizationCoordinator?.cancel()
         meetingTimer?.invalidate()
         if let clipboardPermissionObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(clipboardPermissionObserver)
@@ -243,6 +247,8 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             "toggleMeetingFromMenu": #selector(toggleMeetingFromMenu),
             "openMeetingFolder": #selector(openMeetingFolder),
             "copyLatestMeetingTranscript": #selector(copyLatestMeetingTranscript),
+            "toggleMeetingDiarization": #selector(toggleMeetingDiarization),
+            "deleteMeetingAudio": #selector(deleteMeetingAudio),
             "selectOutputMode": #selector(selectOutputMode(_:)),
             "showLanguageDialog": #selector(showLanguageDialog),
             "showTextSettingsDialog": #selector(showTextSettingsDialog),
@@ -267,6 +273,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         statusMenu.updateNekoPosition(nekoHUD.position)
         statusMenu.updateCatCoat(catConfiguration.appearance.preset)
         updateRelayMenu()
+        statusMenu.updateMeetingDiarization(enabled: settings.meetingDiarizationEnabled)
         renderDictationState(.idle)
     }
 
@@ -1092,6 +1099,90 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.activateFileViewerSelecting([url])
         if failedChunks > 0 {
             showMeetingNotice("逐字稿已存好，但有 \(failedChunks) 段辨識失敗，音檔已保留在同一個資料夾，逐字稿裡有標出位置。")
+        }
+        // 說話者辨識只在這場會議開始時開關是開的（音檔有保留）才會接著做。
+        if meeting.audioRetained { diarizationCoordinator().begin(transcriptURL: url) }
+    }
+
+    // MARK: 會議說話者辨識（實驗，預設關閉）
+
+    private func diarizationCoordinator() -> MeetingDiarizationCoordinator {
+        if let meetingDiarizationCoordinator { return meetingDiarizationCoordinator }
+        let coordinator = MeetingDiarizationCoordinator(
+            store: meetingStore, locator: UnavailableMeetingDiarizerLocator(), runner: ProcessDiarizerRunner(),
+            modelsDirectory: { nil },
+            askSpeakerCount: { [weak self] last, completion in completion(self?.askSpeakerCount(last: last)) },
+            loadLastChoice: { [weak self] in SpeakerCountChoice(stored: self?.settings.meetingDiarizationSpeakerCount) },
+            saveLastChoice: { [weak self] in self?.settings.meetingDiarizationSpeakerCount = $0.stored })
+        coordinator.onPhaseChange = { [weak self] _ in self?.renderDiarizationStatus() }
+        coordinator.onFinished = { [weak self] _, _ in self?.renderDiarizationStatus() }
+        meetingDiarizationCoordinator = coordinator
+        return coordinator
+    }
+
+    @objc private func toggleMeetingDiarization() {
+        if settings.meetingDiarizationEnabled {
+            settings.meetingDiarizationEnabled = false
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "開啟會議說話者辨識（實驗）？"
+            alert.informativeText = "開啟後，之後的會議錄音檔會保留到說話者辨識完成才刪除；辨識失敗時會一直保留，直到你從選單刪除。關閉時維持原本「辨識成功就刪音檔」。"
+            alert.addButton(withTitle: "開啟")
+            alert.addButton(withTitle: "取消")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            settings.meetingDiarizationEnabled = true
+        }
+        statusMenu.updateMeetingDiarization(enabled: settings.meetingDiarizationEnabled)
+    }
+
+    @objc private func deleteMeetingAudio() {
+        _ = meetingDiarizationCoordinator?.deleteRetainedAudio()
+        renderDiarizationStatus()
+    }
+
+    /// 會議剛結束，使用者選說話人數。回傳 nil = 略過。
+    private func askSpeakerCount(last: SpeakerCountChoice?) -> SpeakerCountChoice? {
+        NSApp.activate(ignoringOtherApps: true)
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 160, height: 26), pullsDown: false)
+        for count in SpeakerCountChoice.supportedCounts { popup.addItem(withTitle: "\(count) 人") }
+        popup.addItem(withTitle: "不確定")
+        switch last ?? .count(2) {
+        case .count(let n): popup.selectItem(at: n - SpeakerCountChoice.supportedCounts.lowerBound)
+        case .auto: popup.selectItem(at: SpeakerCountChoice.supportedCounts.count)
+        }
+        let alert = NSAlert()
+        alert.messageText = "這場會議有幾個人說話？"
+        alert.informativeText = "知道人數時分得比較準；選「不確定」會自動估計，可能不準。"
+        alert.accessoryView = popup
+        alert.addButton(withTitle: "開始辨識")
+        alert.addButton(withTitle: "略過")
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let index = popup.indexOfSelectedItem
+        return index >= SpeakerCountChoice.supportedCounts.count
+            ? .auto : .count(SpeakerCountChoice.supportedCounts.lowerBound + index)
+    }
+
+    private func renderDiarizationStatus() {
+        guard let coordinator = meetingDiarizationCoordinator else {
+            statusMenu.updateMeetingDiarizationStatus(statusTitle: nil, canDeleteAudio: false)
+            return
+        }
+        switch coordinator.phase {
+        case .asking, .preparing:
+            statusMenu.updateMeetingDiarizationStatus(statusTitle: "說話者辨識準備中…", canDeleteAudio: false)
+        case .running(let done, let total):
+            let percent = total > 0 ? min(100, done * 100 / total) : 0
+            statusMenu.updateMeetingDiarizationStatus(statusTitle: "說話者辨識中 \(percent)%", canDeleteAudio: false)
+        case .idle:
+            switch coordinator.retainedAudio?.state {
+            case .failed?:
+                statusMenu.updateMeetingDiarizationStatus(statusTitle: "說話者辨識失敗，音檔保留中", canDeleteAudio: true)
+            case .some:
+                statusMenu.updateMeetingDiarizationStatus(statusTitle: "音檔保留中（未辨識說話者）", canDeleteAudio: true)
+            case nil:
+                statusMenu.updateMeetingDiarizationStatus(statusTitle: nil, canDeleteAudio: false)
+            }
         }
     }
 

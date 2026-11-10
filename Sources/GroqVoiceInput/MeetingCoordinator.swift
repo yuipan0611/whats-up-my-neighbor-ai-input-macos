@@ -61,12 +61,17 @@ final class MeetingCoordinator {
     private let uptime: () -> TimeInterval
     private let schedule: (TimeInterval, @escaping () -> Void) -> Void
     private let chunkSeconds: TimeInterval
+    /// 說話者辨識開啟時為 true：辨識成功後**不刪**段檔，並在會議結束時寫 `manifest.json`。
+    /// 每場會議開始時讀一次；預設 false = 與沒有說話者辨識功能時完全相同。
+    private let retainAudioSetting: () -> Bool
 
     private(set) var state: MeetingState = .idle
     private(set) var failedChunkCount = 0
     /// `segments.jsonl` 寫入失敗的次數。旁路檔是盡力而為：失敗不影響逐字稿與刪檔，
     /// 但會留下計數，之後說話者辨識才知道這場的旁路檔不完整。
     private(set) var sidecarFailureCount = 0
+    /// 這場會議是否保留了音檔（說話者辨識用）。會議結束後由呼叫端決定要不要接著辨識。
+    private(set) var audioRetained = false
     var onStatusChange: ((MeetingStatus) -> Void)?
     /// 無法繼續的錯誤（建不了資料夾、錄音器啟動失敗）。單段辨識失敗不走這裡，
     /// 只會標在逐字稿裡並反映在 `failedChunkCount`。
@@ -86,10 +91,12 @@ final class MeetingCoordinator {
     private var inFlight: PendingChunk?
     private var inFlightToken: DictationCancellable?
     private var totalChunkCount = 0
+    private var manifestChunks: [(index: Int, offset: TimeInterval)] = []
 
     init(
         recorder: DictationRecording, transcriber: MeetingTranscribing, store: MeetingStore,
         chunkSeconds: TimeInterval = MeetingCoordinator.defaultChunkSeconds,
+        retainAudio: @escaping () -> Bool = { false },
         now: @escaping () -> Date = Date.init,
         uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
         schedule: @escaping (TimeInterval, @escaping () -> Void) -> Void = { delay, action in
@@ -100,6 +107,7 @@ final class MeetingCoordinator {
         self.transcriber = transcriber
         self.store = store
         self.chunkSeconds = chunkSeconds
+        self.retainAudioSetting = retainAudio
         self.now = now
         self.uptime = uptime
         self.schedule = schedule
@@ -139,6 +147,7 @@ final class MeetingCoordinator {
         self.language = language
         self.deviceUID = deviceUID
         resetCounters()
+        audioRetained = retainAudioSetting()
         state = .starting
         notify()
         startNextChunk()
@@ -248,6 +257,7 @@ final class MeetingCoordinator {
             try? FileManager.default.removeItem(at: url)
         } else {
             totalChunkCount += 1
+            manifestChunks.append((chunk.index, offset))
             queue.append(PendingChunk(index: chunk.index, url: url, offset: offset, duration: duration))
             pumpQueue()
         }
@@ -294,7 +304,7 @@ final class MeetingCoordinator {
             appendSidecar(MeetingSegments.records(chunk: chunk.index, offset: chunk.offset, result: value), session)
             do {
                 try store.appendChunk(session, offset: chunk.offset, lines: lines(from: value, offset: chunk.offset))
-                try? FileManager.default.removeItem(at: chunk.url)
+                if !audioRetained { try? FileManager.default.removeItem(at: chunk.url) }
             } catch {
                 // 旁路檔已經有這段的內容，不再補失敗行（否則同一段會有內容又有 failed）。
                 record(failure: "寫入逐字稿失敗（\(error.localizedDescription)）", index: chunk.index,
@@ -342,6 +352,11 @@ final class MeetingCoordinator {
     private func finishIfDrained() {
         guard state == .draining, stopRequested, current == nil, queue.isEmpty, inFlight == nil,
               let session else { return }
+        if audioRetained {
+            // 寫不出 manifest 就當作沒有保留：呼叫端不會啟動說話者辨識，音檔仍留在資料夾裡。
+            do { try store.writeManifest(directory: session.directory, chunks: manifestChunks) }
+            catch { audioRetained = false }
+        }
         do {
             try store.endSession(session, endedAt: now(), chunks: totalChunkCount, failedChunks: failedChunkCount,
                                 segmentsComplete: sidecarFailureCount == 0)
@@ -370,6 +385,8 @@ final class MeetingCoordinator {
         failedChunkCount = 0
         sidecarFailureCount = 0
         totalChunkCount = 0
+        manifestChunks = []
+        audioRetained = false
     }
 
     private func notify() { onStatusChange?(status) }

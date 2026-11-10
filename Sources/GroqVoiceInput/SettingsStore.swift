@@ -38,6 +38,8 @@ final class SettingsStore {
         static let clipboardHotKeyModifiers = "clipboardHotKeyModifiers"
         static let preferredInputDeviceUID = "preferredInputDeviceUID"
         static let desktopPetReleased = "desktopPetReleased"
+        static let meetingDiarizationEnabled = "meetingDiarizationEnabled"
+        static let meetingDiarizationSpeakerCount = "meetingDiarizationSpeakerCount"
     }
 
     private let defaults: UserDefaults
@@ -49,6 +51,18 @@ final class SettingsStore {
     func loadDesktopPetReleased() -> Bool { defaults.bool(forKey: Keys.desktopPetReleased) }
 
     func saveDesktopPetReleased(_ value: Bool) { defaults.set(value, forKey: Keys.desktopPetReleased) }
+
+    /// 會議說話者辨識（實驗）。預設關閉；關閉時 App 的會議行為與沒有這個功能時完全相同。
+    var meetingDiarizationEnabled: Bool {
+        get { defaults.bool(forKey: Keys.meetingDiarizationEnabled) }
+        set { defaults.set(newValue, forKey: Keys.meetingDiarizationEnabled) }
+    }
+
+    /// 上次選的說話人數（0 = 不確定）。沒有紀錄回傳 nil。
+    var meetingDiarizationSpeakerCount: Int? {
+        get { defaults.object(forKey: Keys.meetingDiarizationSpeakerCount) as? Int }
+        set { defaults.set(newValue, forKey: Keys.meetingDiarizationSpeakerCount) }
+    }
 
     func loadHotKey() -> HotKeyShortcut {
         storedHotKey(codeKey: Keys.hotKeyCode, modifiersKey: Keys.hotKeyModifiers)

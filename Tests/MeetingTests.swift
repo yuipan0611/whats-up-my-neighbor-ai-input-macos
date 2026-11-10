@@ -80,7 +80,7 @@ private final class Fixture {
     var statuses: [MeetingStatus] = []
     let coordinator: MeetingCoordinator
 
-    init() {
+    init(retainAudio: Bool = false) {
         directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MeetingTests-\(UUID().uuidString)", isDirectory: true)
         store = MeetingStore(root: directory, timeZone: TimeZone(identifier: "UTC")!)
@@ -91,6 +91,7 @@ private final class Fixture {
         var schedule: (TimeInterval, @escaping () -> Void) -> Void = { _, _ in }
         coordinator = MeetingCoordinator(
             recorder: recorder, transcriber: transcriber, store: store,
+            retainAudio: { retainAudio },
             now: { Date(timeIntervalSince1970: 1_800_000_000) },
             uptime: { clock() },
             schedule: { delay, action in schedule(delay, action) })
@@ -143,7 +144,9 @@ enum MeetingTests {
         testStaleRecorderCallbacksAreIgnored()
         testShutdownMarksUnfinishedChunks()
         testCannotStartWhileRecorderBusyOrActive()
-        print("Meeting tests passed (19 scenarios)")
+        testRetainAudioKeepsChunksAndWritesManifest()
+        testDefaultNeverWritesManifestOrKeepsSuccessfulChunks()
+        print("Meeting tests passed (21 scenarios)")
     }
 
     // MARK: segments.jsonl
@@ -260,6 +263,52 @@ enum MeetingTests {
         expect(f.coordinator.sidecarFailureCount == 0, "no sidecar failures")
         expect(transcript.contains("audio: aac-44100-mono-64k\nsegments: complete\n"), "complete sidecar is declared in frontmatter")
         expect(!f.exists(c1) && f.exists(c2) && !f.exists(c3), "chunk deletion behaviour unchanged: success deleted, failure kept")
+    }
+
+    // 說話者辨識開關打開：成功的段也保留，會議結束時寫 manifest.json（offset 與 segments.jsonl 同一個時間軸）。
+    static func testRetainAudioKeepsChunksAndWritesManifest() {
+        let f = Fixture(retainAudio: true)
+        f.coordinator.start(deviceUID: "mic", language: .default)
+        let c1 = f.recorder.starts[0]
+        f.uptime = 100
+        f.recorder.started(c1)
+        f.uptime = 400
+        f.scheduled[0].action()
+        f.recorder.finish(c1)
+        let c2 = f.recorder.starts[1]
+        f.uptime = 400.4
+        f.recorder.started(c2)
+        f.transcriber.complete(0, .success(result([(0, "第一段")])))
+        f.uptime = 500
+        f.coordinator.stop()
+        f.recorder.finish(c2)
+        f.transcriber.complete(1, .failure(StubError(message: "Rate limit reached")))
+
+        expect(f.coordinator.audioRetained, "audio retained is reported")
+        expect(f.exists(c1) && f.exists(c2), "successful chunk 1 is kept; failed chunk 2 is kept as before")
+        let dir = c1.deletingLastPathComponent()
+        let data = try? Data(contentsOf: dir.appendingPathComponent("manifest.json"))
+        let manifest = data.flatMap { try? JSONDecoder().decode(MeetingDiarizationManifest.self, from: $0) }
+        expect(manifest == MeetingDiarizationManifest(version: 1, chunks: [
+            .init(path: "chunk-001.m4a", offset: 0), .init(path: "chunk-002.m4a", offset: 300.4)]),
+               "manifest lists both chunks with relative paths and offsets: \(String(describing: manifest))")
+        expect(f.finished.count == 1, "meeting still finishes normally")
+    }
+
+    // 預設（功能關閉）：行為與沒有這個功能時完全相同——成功即刪、沒有 manifest。
+    static func testDefaultNeverWritesManifestOrKeepsSuccessfulChunks() {
+        let f = Fixture()
+        f.coordinator.start(deviceUID: "mic", language: .default)
+        let c1 = f.recorder.starts[0]
+        f.uptime = 100
+        f.recorder.started(c1)
+        f.coordinator.stop()
+        f.uptime = 200
+        f.recorder.finish(c1)
+        f.transcriber.complete(0, .success(result([(0, "只有一段")])))
+        expect(!f.coordinator.audioRetained, "not retained by default")
+        expect(!f.exists(c1), "successful chunk deleted")
+        expect(!f.exists(c1.deletingLastPathComponent().appendingPathComponent("manifest.json")), "no manifest")
     }
 
     // 規則 2：先寫旁路檔，再寫逐字稿。逐字稿寫不進去時，旁路檔仍有這段（多一行比少一行好），

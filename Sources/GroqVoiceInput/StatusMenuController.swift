@@ -22,6 +22,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private(set) var retryMenuItem: NSMenuItem!
     private(set) var cancelMenuItem: NSMenuItem!
     private(set) var meetingToggleMenuItem: NSMenuItem!
+    private(set) var meetingDiarizationToggleMenuItem: NSMenuItem!
+    private(set) var meetingDiarizationStatusMenuItem: NSMenuItem!
+    private(set) var meetingDeleteAudioMenuItem: NSMenuItem!
     private(set) var modeMenuItems: [TextOutputMode: NSMenuItem] = [:]
     private var nekoPositionItems: [NekoHUDPosition: NSMenuItem] = [:]
     private var catCoatItems: [String: NSMenuItem] = [:]
@@ -67,6 +70,18 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         let meetingCopy = NSMenuItem(title: "複製最近一次逐字稿", action: actions["copyLatestMeetingTranscript"], keyEquivalent: "")
         meetingCopy.target = target
         menu.addItem(meetingCopy)
+        meetingDiarizationToggleMenuItem = NSMenuItem(title: "會議說話者辨識（實驗）", action: actions["toggleMeetingDiarization"], keyEquivalent: "")
+        meetingDiarizationToggleMenuItem.target = target
+        menu.addItem(meetingDiarizationToggleMenuItem)
+        // 以下兩項平常隱藏：只有說話者辨識進行中、或辨識沒成功而音檔還在時才出現。
+        meetingDiarizationStatusMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        meetingDiarizationStatusMenuItem.isEnabled = false
+        meetingDiarizationStatusMenuItem.isHidden = true
+        menu.addItem(meetingDiarizationStatusMenuItem)
+        meetingDeleteAudioMenuItem = NSMenuItem(title: "刪除這場會議的音檔", action: actions["deleteMeetingAudio"], keyEquivalent: "")
+        meetingDeleteAudioMenuItem.target = target
+        meetingDeleteAudioMenuItem.isHidden = true
+        menu.addItem(meetingDeleteAudioMenuItem)
         menu.addItem(NSMenuItem.separator())
 
         clipboardPickerMenuItem = NSMenuItem(title: "剪貼簿歷史", action: actions["showClipboardPicker"], keyEquivalent: "")
@@ -200,6 +215,17 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(quit)
         menu.delegate = self
         statusItem.menu = menu
+    }
+
+    func updateMeetingDiarization(enabled: Bool) {
+        meetingDiarizationToggleMenuItem?.state = enabled ? .on : .off
+    }
+
+    /// `statusTitle` 為 nil 時隱藏狀態列；`canDeleteAudio` 控制「刪除這場會議的音檔」是否出現。
+    func updateMeetingDiarizationStatus(statusTitle: String?, canDeleteAudio: Bool) {
+        meetingDiarizationStatusMenuItem?.title = statusTitle ?? ""
+        meetingDiarizationStatusMenuItem?.isHidden = statusTitle == nil
+        meetingDeleteAudioMenuItem?.isHidden = !canDeleteAudio
     }
 
     func updateMeeting(title: String, enabled: Bool) {
