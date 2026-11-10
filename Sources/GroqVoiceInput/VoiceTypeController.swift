@@ -1052,9 +1052,8 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             showMeetingNotice("還沒有會議記錄。")
             return
         }
-        // 直接寫入系統剪貼簿，不經剪貼簿歷史：整場會議逐字稿不該被存進歷史清單。
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        // 帶 TransientType 標記，剪貼簿歷史監看會略過；否則整場逐字稿會被收進歷史並寫到磁碟。
+        if !MeetingClipboard.copy(text) { NSSound.beep() }
     }
 
     private func renderMeetingStatus(_ status: MeetingStatus) {
