@@ -22,11 +22,11 @@ enum GroqModelSelector {
     static let endpoint = URL(string: "https://api.groq.com/openai/v1/models")!
     static let timeoutInterval: TimeInterval = 30
 
-    /// 預設推薦優先順序（可由外部自訂替換，絕不寫死為單一模型）
+    /// 預設推薦優先順序（可由外部自訂替換，絕不寫死為單一模型；不包含 preview 模型）
     static let defaultPreferences: [String] = [
-        "llama-3.3-70b-versatile",
         "openai/gpt-oss-120b",
-        "openai/gpt-oss-20b"
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant"
     ]
 
     /// 從 Groq /models API 回傳的 JSON Data 解析模型清單（純函式）。
