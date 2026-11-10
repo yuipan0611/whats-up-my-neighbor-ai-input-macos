@@ -8,6 +8,7 @@ swiftc -swift-version 5 \
   "$ROOT/Sources/GroqVoiceInput/TextPostProcessor.swift" \
   "$ROOT/Sources/GroqVoiceInput/DictationCoordinator.swift" \
   "$ROOT/Sources/GroqVoiceInput/GroqTranscriptionClient.swift" \
+  "$ROOT/Sources/GroqVoiceInput/MeetingAudio.swift" \
   "$ROOT/Sources/GroqVoiceInput/MeetingStore.swift" \
   "$ROOT/Sources/GroqVoiceInput/MeetingCoordinator.swift" \
   "$ROOT/Sources/GroqVoiceInput/MeetingGroqTranscriber.swift" \
