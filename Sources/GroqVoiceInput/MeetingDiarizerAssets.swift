@@ -24,7 +24,7 @@ struct MeetingDiarizerModel: Equatable {
     /// 安裝後的模型檔 SHA256 與大小。`modelsReady()` 只比對大小（便宜）；下載時兩者都驗。
     let installedSHA256: String
     let installedBytes: Int64
-    /// 發布前必須確認的授權事項；nil 表示已確認。
+    /// 授權說明（顯示在下載同意視窗，完整文字見 docs/THIRD-PARTY-MODELS.md）；nil 表示不顯示。
     let licenseNote: String?
 }
 
@@ -41,9 +41,8 @@ enum MeetingDiarizerModelCatalog {
             installPath: "pyannote-segmentation/model.onnx",
             installedSHA256: "220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079",
             installedBytes: 5_992_913,
-            // Ben 的 S1 報告：tarball 內 LICENSE 為 MIT（Copyright 2022 CNRS）；這是轉出版本的授權聲明，
-            // 不是與 pyannote 確認過的結論。
-            licenseNote: nil),
+            // tarball 內 LICENSE 為 MIT（Copyright 2022 CNRS）；這是 sherpa-onnx 轉出版本隨附的授權聲明。
+            licenseNote: "MIT（pyannote-segmentation-3.0，Copyright 2022 CNRS；sherpa-onnx 轉出版本隨附 LICENSE）"),
         MeetingDiarizerModel(
             name: "3D-Speaker CAM++ zh_en 16k",
             // 網址裡的 "recongition" 拼字就是 sherpa-onnx release tag 的名稱，不是筆誤。
@@ -54,10 +53,10 @@ enum MeetingDiarizerModelCatalog {
             installPath: "speaker-embedding.onnx",
             installedSHA256: "aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2",
             installedBytes: 28_281_164,
-            // ⚠️ 發布前必須確認：CAM++ zh_en 的授權尚未查證（3D-Speaker 程式庫是 Apache-2.0，
-            // 但 sherpa-onnx 的 release 說明每個模型有自己的授權，ModelScope 頁面沒查到授權欄）。
-            // 這是阻擋正式發布的事項；原型與測試版可以先用。備案見 docs/spikes/2026-11-diarization-s1.md §3。
-            licenseNote: "CAM++ zh_en 聲紋模型授權尚未確認（發布前必須確認）"),
+            // 授權已確認：ModelScope 官方 API（https://modelscope.cn/api/v1/models/iic/speech_campplus_sv_zh_en_16k-common_advanced)
+            // 的 License 欄位為 Apache License 2.0（模型 README frontmatter 同，最後更新 2024-06-24）；
+            // 3D-Speaker 主 repo 也是 Apache-2.0。sherpa-onnx 的 ONNX 檔由這個模型轉換而來。
+            licenseNote: "Apache License 2.0（3D-Speaker／ModelScope iic/speech_campplus_sv_zh_en_16k-common_advanced；ONNX 版本由 sherpa-onnx 轉換）"),
     ]
 
     static var totalDownloadBytes: Int64 { all.reduce(0) { $0 + $1.downloadBytes } }
