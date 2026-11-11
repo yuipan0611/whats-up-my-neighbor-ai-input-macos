@@ -69,6 +69,20 @@ What's up my neighbor 是輕量的原生 macOS 選單列語音輸入 App。在�
 
 從黑貓選單點「檢查更新…」即可安裝 **1.4.7（build 1014）**，直接在桌面測試這兩項功能；[更新與桌面驗收步驟](docs/QA_CLIPBOARD_CAT.md)。
 
+## 九種花色，挑一隻陪你
+
+從選單列的「選擇貓咪花色」挑選，桌面貓與錄音浮窗會一起換色，並記住上次選擇。
+
+<p align="center">
+  <img src="docs/media/screenshots/desktop-cat-coats.png" alt="九種內建桌面貓花色：原版黑貓、黑貓、白貓、灰貓、橘虎斑、賓士貓、三花貓、玳瑁貓與重點色貓" width="780"><br>
+  <sub>原版黑貓 · 黑貓 · 白貓 · 灰貓 · 橘虎斑 · 賓士貓 · 三花貓 · 玳瑁貓 · 重點色貓</sub>
+</p>
+
+<p align="center">
+  <img src="docs/media/screenshots/recording-cat-coats.png" alt="九種花色的 Mac 錄音浮窗" width="820"><br>
+  <sub>同一組花色，也會出現在錄音浮窗。</sub>
+</p>
+
 ## 操作畫面
 
 <p align="center">
