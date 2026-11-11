@@ -525,7 +525,10 @@ enum MeetingSummarizer {
               let firstChoice = choices.first else {
             throw VoiceTypeError.message("Groq 未回傳有效摘要文字。")
         }
-        if let finishReason = firstChoice["finish_reason"] as? String, finishReason != "stop" {
+        guard let finishReason = firstChoice["finish_reason"] as? String else {
+            throw VoiceTypeError.message("Groq 摘要生成未完整結束（finish_reason 缺漏、無效或非字串）。")
+        }
+        guard finishReason == "stop" else {
             if finishReason == "length" {
                 throw VoiceTypeError.message("Groq 摘要內容超出最大 Token 上限被截斷（finish_reason: length）。")
             } else {
@@ -611,53 +614,120 @@ enum MeetingSummarizer {
         }
     }
 
-    /// 解析 HTTP 429 速率限制重試等待秒數：
-    /// 依序讀取 Retry-After、x-ratelimit-reset-tokens、x-ratelimit-reset-requests
-    static func parseRateLimitWaitInterval(from response: HTTPURLResponse?) -> TimeInterval? {
-        guard let response else { return nil }
-
-        // 優先讀取 Retry-After（秒數）
-        for (key, value) in response.allHeaderFields {
-            let keyStr = String(describing: key).lowercased()
-            let valStr = String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
-            if keyStr == "retry-after" {
-                if let seconds = Double(valStr), seconds > 0 {
-                    return seconds
-                }
+    /// 從 HTTPURLResponse 中安全以不分大小寫取得指定 header 值
+    private static func headerValue(for field: String, in response: HTTPURLResponse) -> String? {
+        if #available(macOS 10.15, *) {
+            if let val = response.value(forHTTPHeaderField: field) {
+                let trimmed = val.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
             }
         }
-
-        // 次之讀取 x-ratelimit-reset-tokens 或 x-ratelimit-reset-requests
-        for (key, value) in response.allHeaderFields {
-            let keyStr = String(describing: key).lowercased()
-            let valStr = String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
-            if keyStr == "x-ratelimit-reset-tokens" || keyStr == "x-ratelimit-reset-requests" {
-                if let parsed = parseTimeString(valStr), parsed > 0 {
-                    return parsed
-                }
+        let lower = field.lowercased()
+        for (k, v) in response.allHeaderFields {
+            if String(describing: k).lowercased() == lower {
+                let trimmed = String(describing: v).trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
             }
         }
-
         return nil
     }
 
-    /// 解析時間字串（如 "6.25s", "600ms", "12s", "12"）為 TimeInterval 秒數
+    /// 解析 HTTP 429 速率限制重試等待秒數：
+    /// 1. 優先讀取 Retry-After（秒數或複合時間字串）。
+    /// 2. 若無 Retry-After，檢視 x-ratelimit-remaining-tokens 或 x-ratelimit-remaining-requests，
+    ///    若其中之一為 0，則採用對應的 reset 時間標頭；
+    /// 3. 若皆為 0、皆非 0 或無法判定，取兩者中較大（保守）之等待秒數。
+    static func parseRateLimitWaitInterval(from response: HTTPURLResponse?) -> TimeInterval? {
+        guard let response else { return nil }
+
+        // 優先讀取 Retry-After
+        if let retryAfterStr = headerValue(for: "Retry-After", in: response) {
+            if let seconds = parseTimeString(retryAfterStr), seconds > 0 {
+                return seconds
+            }
+        }
+
+        let remainingTokensStr = headerValue(for: "x-ratelimit-remaining-tokens", in: response)
+        let remainingRequestsStr = headerValue(for: "x-ratelimit-remaining-requests", in: response)
+        let resetTokensStr = headerValue(for: "x-ratelimit-reset-tokens", in: response)
+        let resetRequestsStr = headerValue(for: "x-ratelimit-reset-requests", in: response)
+
+        let resetTokens = resetTokensStr.flatMap { parseTimeString($0) }
+        let resetRequests = resetRequestsStr.flatMap { parseTimeString($0) }
+
+        let remainingTokensIsZero = (remainingTokensStr.flatMap { Int($0) } == 0)
+        let remainingRequestsIsZero = (remainingRequestsStr.flatMap { Int($0) } == 0)
+
+        if remainingTokensIsZero && !remainingRequestsIsZero {
+            if let resetTokens, resetTokens > 0 { return resetTokens }
+        } else if remainingRequestsIsZero && !remainingTokensIsZero {
+            if let resetRequests, resetRequests > 0 { return resetRequests }
+        }
+
+        // 若皆為 0、皆非 0 或無 remaining 標頭，取有效者中之最大值（保守等待）
+        switch (resetTokens, resetRequests) {
+        case let (.some(t), .some(r)):
+            let chosen = max(t, r)
+            return chosen > 0 ? chosen : nil
+        case let (.some(t), .none):
+            return t > 0 ? t : nil
+        case let (.none, .some(r)):
+            return r > 0 ? r : nil
+        case (.none, .none):
+            return nil
+        }
+    }
+
+    /// 解析時間字串為 TimeInterval 秒數。
+    /// 支援 Groq 官方規格（如 "2m59.56s", "1m2.5s", "4m19.2s", "36.45s", "500ms", "60s", "12", "1h2m3s"）
     static func parseTimeString(_ str: String) -> TimeInterval? {
         let trimmed = str.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if trimmed.hasSuffix("ms") {
-            let numPart = trimmed.dropLast(2)
-            if let ms = Double(numPart) {
-                return ms / 1000.0
-            }
-        } else if trimmed.hasSuffix("s") {
-            let numPart = trimmed.dropLast(1)
-            if let s = Double(numPart) {
-                return s
-            }
-        } else if let val = Double(trimmed) {
-            return val
+        guard !trimmed.isEmpty else { return nil }
+
+        // 純數字（視為秒數）
+        if let directSeconds = Double(trimmed), directSeconds >= 0 {
+            return directSeconds
         }
-        return nil
+
+        // 依序比對 (數值, 單位)，單位支援 h, m (分), s, ms (毫秒)
+        guard let regex = try? NSRegularExpression(pattern: #"(\d+(?:\.\d+)?)\s*(ms|h|m|s)"#, options: .caseInsensitive) else {
+            return nil
+        }
+        let nsString = trimmed as NSString
+        let matches = regex.matches(in: trimmed, options: [], range: NSRange(location: 0, length: nsString.length))
+        guard !matches.isEmpty else { return nil }
+
+        var totalSeconds: TimeInterval = 0
+        var matchedLength = 0
+
+        for match in matches {
+            guard match.numberOfRanges == 3 else { return nil }
+            let numStr = nsString.substring(with: match.range(at: 1))
+            let unitStr = nsString.substring(with: match.range(at: 2)).lowercased()
+            guard let val = Double(numStr) else { return nil }
+
+            switch unitStr {
+            case "h":
+                totalSeconds += val * 3600.0
+            case "m":
+                totalSeconds += val * 60.0
+            case "s":
+                totalSeconds += val
+            case "ms":
+                totalSeconds += val / 1000.0
+            default:
+                return nil
+            }
+            matchedLength += match.range.length
+        }
+
+        // 確保非空白字元均匹配，不允許夾帶無效字元
+        let stripped = trimmed.filter { !$0.isWhitespace }
+        if matchedLength < stripped.count {
+            return nil
+        }
+
+        return totalSeconds >= 0 ? totalSeconds : nil
     }
 
     /// 將網路層錯誤轉換為獨立清晰之訊息（特別是逾時）

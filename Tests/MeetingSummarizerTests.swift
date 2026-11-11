@@ -284,7 +284,8 @@ enum MeetingSummarizerTests {
               "message": {
                 "role": "assistant",
                 "content": "\(mockContent.replacingOccurrences(of: "\n", with: "\\n"))"
-              }
+              },
+              "finish_reason": "stop"
             }
           ]
         }
@@ -326,7 +327,8 @@ enum MeetingSummarizerTests {
               "message": {
                 "role": "assistant",
                 "content": "## 摘要\n- [00:00:15] 會議決策。\n\n## 決議\n- 未提及\n\n## 待辦\n- 未提及\n\n## 未解決問題\n- 未提及"
-              }
+              },
+              "finish_reason": "stop"
             }
           ]
         }
@@ -518,7 +520,7 @@ enum MeetingSummarizerTests {
         """#
         let chatResponseJSON = #"""
         {
-          "choices": [{"message": {"role": "assistant", "content": "## 摘要\n- 短稿摘要內容。"}}]
+          "choices": [{"message": {"role": "assistant", "content": "## 摘要\n- 短稿摘要內容。"}, "finish_reason": "stop"}]
         }
         """#
 
@@ -567,13 +569,13 @@ enum MeetingSummarizerTests {
 
         // 準備 N (2) 個 map 回應與 1 個 reduce 回應
         let mapResponse1 = """
-        {"choices":[{"message":{"role":"assistant","content":"## 摘要\\n- [00:01:00] 討論模組一。"}}]}
+        {"choices":[{"message":{"role":"assistant","content":"## 摘要\\n- [00:01:00] 討論模組一。"},"finish_reason":"stop"}]}
         """
         let mapResponse2 = """
-        {"choices":[{"message":{"role":"assistant","content":"## 摘要\\n- [00:02:00] 討論模組二。"}}]}
+        {"choices":[{"message":{"role":"assistant","content":"## 摘要\\n- [00:02:00] 討論模組二。"},"finish_reason":"stop"}]}
         """
         let reduceResponse = """
-        {"choices":[{"message":{"role":"assistant","content":"## 摘要\\n- [00:01:00] 討論模組一。\\n- [00:02:00] 討論模組二。\\n\\n## 決議\\n- 未提及\\n\\n## 待辦\\n- 未提及\\n\\n## 未解決問題\\n- 未提及"}}]}
+        {"choices":[{"message":{"role":"assistant","content":"## 摘要\\n- [00:01:00] 討論模組一。\\n- [00:02:00] 討論模組二。\\n\\n## 決議\\n- 未提及\\n\\n## 待辦\\n- 未提及\\n\\n## 未解決問題\\n- 未提及"},"finish_reason":"stop"}]}
         """
 
         OfflineMeetingProtocol.reset(
@@ -1236,7 +1238,7 @@ enum MeetingSummarizerTests {
         expectTrue(llamaJson["max_completion_tokens"] == nil, "非 gpt-oss 模型不應包含 max_completion_tokens")
     }
 
-    /// 驗證 finish_reason 非 "stop"（如 "length"）嚴格報錯並拒絕覆寫既有摘要
+    /// 驗證 finish_reason 非 "stop"（如 "length"、缺漏、null、型別錯誤）嚴格報錯並拒絕覆寫既有摘要
     static func testFinishReasonValidationAndPreservesPriorSummary() {
         // 情境 1：parseChatContent 遇到 finish_reason == "length" 拋出錯誤
         let lengthJSON = #"""
@@ -1258,7 +1260,23 @@ enum MeetingSummarizerTests {
         }
         expectTrue(threwLength, "finish_reason=length 應拋出錯誤")
 
-        // 情境 2：parseChatContent 遇到 finish_reason == "stop" 正常通過
+        // 情境 2：finish_reason 缺漏、null 或型別錯誤
+        let missingReasonJSON = #"{"choices":[{"message":{"content":"TRUNCATED_REPLACEMENT"}}]}"#
+        let nullReasonJSON = #"{"choices":[{"finish_reason":null,"message":{"content":"TRUNCATED_REPLACEMENT"}}]}"#
+        let wrongTypeReasonJSON = #"{"choices":[{"finish_reason":123,"message":{"content":"TRUNCATED_REPLACEMENT"}}]}"#
+
+        for (label, json) in [("missing", missingReasonJSON), ("null", nullReasonJSON), ("wrong type", wrongTypeReasonJSON)] {
+            var threw = false
+            do {
+                _ = try MeetingSummarizer.parseChatContent(data: Data(json.utf8))
+            } catch {
+                threw = true
+                expectTrue(error.localizedDescription.contains("finish_reason"), "應提示 finish_reason 錯誤（\(label)）")
+            }
+            expectTrue(threw, "finish_reason 為 \(label) 時必須拋出錯誤")
+        }
+
+        // 情境 3：parseChatContent 遇到 finish_reason == "stop" 正常通過
         let stopJSON = #"""
         {
           "choices": [
@@ -1272,7 +1290,7 @@ enum MeetingSummarizerTests {
         let content = try! MeetingSummarizer.parseChatContent(data: Data(stopJSON.utf8))
         expect(content, "## 摘要\n- [00:01:00] 完整的內容")
 
-        // 情境 3：端到端生成遇到 finish_reason == "length" 時失敗，既有 summary.md 完好保留
+        // 情境 4：端到端生成遇到 finish_reason 缺漏（或 non-stop）時失敗，既有 summary.md 完好保留不被覆寫
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try! FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -1289,7 +1307,7 @@ enum MeetingSummarizerTests {
 
         OfflineMeetingProtocol.reset(
             modelsJSON: #"{"data":[{"id":"openai/gpt-oss-120b","active":true,"context_window":131072}]}"#,
-            chatJSON: lengthJSON,
+            chatJSON: missingReasonJSON,
             statusCode: 200
         )
 
@@ -1307,61 +1325,88 @@ enum MeetingSummarizerTests {
         }
         semaphore.wait()
 
-        expectTrue(capturedError != nil, "finish_reason=length 端到端生成應回報失敗")
+        expectTrue(capturedError != nil, "finish_reason 缺漏端到端生成應回報失敗")
         let summaryOnDisk = try! String(contentsOf: summaryURL, encoding: .utf8)
         expect(summaryOnDisk, priorSummary)
     }
 
-    /// 驗證 HTTP 429 速率限制標頭解析（Retry-After 與 x-ratelimit-reset-tokens）
+    /// 驗證 HTTP 429 速率限制標頭解析（Retry-After 優先級、剩餘額度挑選、保守取大、複合時間字串）
     static func testRateLimitHeaderParsing() {
-        // Retry-After 整數秒
-        let resp1 = HTTPURLResponse(
-            url: URL(string: "https://api.groq.com")!,
+        let groqBase = URL(string: "https://api.groq.com")!
+
+        // 1. Retry-After 優先於其他所有標頭
+        let respPriority = HTTPURLResponse(
+            url: groqBase,
             statusCode: 429,
             httpVersion: "HTTP/1.1",
-            headerFields: ["Retry-After": "6"]
+            headerFields: [
+                "Retry-After": "4.5",
+                "x-ratelimit-reset-tokens": "60s",
+                "x-ratelimit-reset-requests": "30s"
+            ]
         )
-        expect(MeetingSummarizer.parseRateLimitWaitInterval(from: resp1), 6.0)
+        expect(MeetingSummarizer.parseRateLimitWaitInterval(from: respPriority), 4.5)
 
-        // Retry-After 浮點數
-        let resp2 = HTTPURLResponse(
-            url: URL(string: "https://api.groq.com")!,
+        // 2. 雙 header：remaining-tokens == 0，挑選 reset-tokens
+        let respTokensZero = HTTPURLResponse(
+            url: groqBase,
             statusCode: 429,
             httpVersion: "HTTP/1.1",
-            headerFields: ["retry-after": "2.5"]
+            headerFields: [
+                "x-ratelimit-remaining-tokens": "0",
+                "x-ratelimit-reset-tokens": "45s",
+                "x-ratelimit-remaining-requests": "100",
+                "x-ratelimit-reset-requests": "2s"
+            ]
         )
-        expect(MeetingSummarizer.parseRateLimitWaitInterval(from: resp2), 2.5)
+        expect(MeetingSummarizer.parseRateLimitWaitInterval(from: respTokensZero), 45.0)
 
-        // x-ratelimit-reset-tokens 帶 "s"
-        let resp3 = HTTPURLResponse(
-            url: URL(string: "https://api.groq.com")!,
+        // 3. 雙 header：remaining-requests == 0，挑選 reset-requests
+        let respReqsZero = HTTPURLResponse(
+            url: groqBase,
             statusCode: 429,
             httpVersion: "HTTP/1.1",
-            headerFields: ["x-ratelimit-reset-tokens": "8.25s"]
+            headerFields: [
+                "x-ratelimit-remaining-tokens": "5000",
+                "x-ratelimit-reset-tokens": "2s",
+                "x-ratelimit-remaining-requests": "0",
+                "x-ratelimit-reset-requests": "30s"
+            ]
         )
-        expect(MeetingSummarizer.parseRateLimitWaitInterval(from: resp3), 8.25)
+        expect(MeetingSummarizer.parseRateLimitWaitInterval(from: respReqsZero), 30.0)
 
-        // x-ratelimit-reset-tokens 帶 "ms"
-        let resp4 = HTTPURLResponse(
-            url: URL(string: "https://api.groq.com")!,
-            statusCode: 429,
-            httpVersion: "HTTP/1.1",
-            headerFields: ["x-ratelimit-reset-tokens": "600ms"]
-        )
-        expect(MeetingSummarizer.parseRateLimitWaitInterval(from: resp4), 0.6)
+        // 4. 雙 header：無法判斷 remaining 或兩者皆 0 時，取較大值（保守等待，避免 1s 覆蓋 60s）
+        for i in 0..<20 {
+            let respBoth = HTTPURLResponse(
+                url: groqBase,
+                statusCode: 429,
+                httpVersion: "HTTP/1.1",
+                headerFields: [
+                    "x-ratelimit-reset-tokens": "60s",
+                    "x-ratelimit-reset-requests": "1s",
+                    "x-noise": "\(i)"
+                ]
+            )
+            expect(MeetingSummarizer.parseRateLimitWaitInterval(from: respBoth), 60.0)
+        }
 
-        // x-ratelimit-reset-requests
-        let resp5 = HTTPURLResponse(
-            url: URL(string: "https://api.groq.com")!,
-            statusCode: 429,
-            httpVersion: "HTTP/1.1",
-            headerFields: ["x-ratelimit-reset-requests": "15s"]
-        )
-        expect(MeetingSummarizer.parseRateLimitWaitInterval(from: resp5), 15.0)
+        // 5. 複合時間字串解析（Groq 官方規格支援 h, m, s, ms）
+        expect(MeetingSummarizer.parseTimeString("1m2.5s"), 62.5)
+        expect(MeetingSummarizer.parseTimeString("2m59.56s"), 179.56)
+        expect(MeetingSummarizer.parseTimeString("4m19.2s"), 259.2)
+        expect(MeetingSummarizer.parseTimeString("36.45s"), 36.45)
+        expect(MeetingSummarizer.parseTimeString("500ms"), 0.5)
+        expect(MeetingSummarizer.parseTimeString("60s"), 60.0)
+        expect(MeetingSummarizer.parseTimeString("1h"), 3600.0)
+        expect(MeetingSummarizer.parseTimeString("1h2m3s"), 3723.0)
+        expect(MeetingSummarizer.parseTimeString("12"), 12.0)
+        expect(MeetingSummarizer.parseTimeString("12.5"), 12.5)
+        expectTrue(MeetingSummarizer.parseTimeString("invalid") == nil, "無效字串應為 nil")
+        expectTrue(MeetingSummarizer.parseTimeString("10s extra") == nil, "夾帶額外文字應為 nil")
 
-        // 無 header 回傳 nil
+        // 6. 無相關標頭回傳 nil
         let respNone = HTTPURLResponse(
-            url: URL(string: "https://api.groq.com")!,
+            url: groqBase,
             statusCode: 429,
             httpVersion: "HTTP/1.1",
             headerFields: [:]
