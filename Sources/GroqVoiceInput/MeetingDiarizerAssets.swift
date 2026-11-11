@@ -1,0 +1,109 @@
+import Foundation
+
+/// 說話者辨識需要的兩個模型：清單、安裝位置與「是否已就緒」的檢查。
+/// 下載與驗證在 `MeetingDiarizerDownloader`；這裡只有純資料與檔案檢查，不碰網路。
+///
+/// 模型不進 repo、不進安裝包：第一次使用會議說話者辨識時，徵求使用者同意後才下載
+/// （安裝包因此不「散布」模型，授權風險最小，也不增加安裝包大小）。
+struct MeetingDiarizerModel: Equatable {
+    enum Source: Equatable {
+        /// 下載的檔案就是模型本身。
+        case file
+        /// 下載的是 tar.bz2；`member` 是壓縮檔內要取出的檔案路徑。
+        case archive(member: String)
+    }
+
+    let name: String
+    let url: URL
+    let source: Source
+    /// 下載檔（壓縮檔或模型檔）的 SHA256 與大小。
+    let downloadSHA256: String
+    let downloadBytes: Int64
+    /// 安裝到 models 資料夾之後的相對路徑（meeting-diarizer 的 `--models` 目錄內的位置）。
+    let installPath: String
+    /// 安裝後的模型檔 SHA256 與大小。`modelsReady()` 只比對大小（便宜）；下載時兩者都驗。
+    let installedSHA256: String
+    let installedBytes: Int64
+    /// 發布前必須確認的授權事項；nil 表示已確認。
+    let licenseNote: String?
+}
+
+enum MeetingDiarizerModelCatalog {
+    /// 網址、雜湊與大小以 `scripts/fetch-meeting-diarizer-assets.sh`（Ben，#49）為準；
+    /// 安裝後檔案的雜湊／大小是用同一份下載解開後量得。release tag 是可變的，所以雜湊寫死在程式裡。
+    static let all: [MeetingDiarizerModel] = [
+        MeetingDiarizerModel(
+            name: "pyannote-segmentation-3.0",
+            url: URL(string: "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2")!,
+            source: .archive(member: "sherpa-onnx-pyannote-segmentation-3-0/model.onnx"),
+            downloadSHA256: "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",
+            downloadBytes: 6_958_444,
+            installPath: "pyannote-segmentation/model.onnx",
+            installedSHA256: "220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079",
+            installedBytes: 5_992_913,
+            // Ben 的 S1 報告：tarball 內 LICENSE 為 MIT（Copyright 2022 CNRS）；這是轉出版本的授權聲明，
+            // 不是與 pyannote 確認過的結論。
+            licenseNote: nil),
+        MeetingDiarizerModel(
+            name: "3D-Speaker CAM++ zh_en 16k",
+            // 網址裡的 "recongition" 拼字就是 sherpa-onnx release tag 的名稱，不是筆誤。
+            url: URL(string: "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx")!,
+            source: .file,
+            downloadSHA256: "aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2",
+            downloadBytes: 28_281_164,
+            installPath: "speaker-embedding.onnx",
+            installedSHA256: "aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2",
+            installedBytes: 28_281_164,
+            // ⚠️ 發布前必須確認：CAM++ zh_en 的授權尚未查證（3D-Speaker 程式庫是 Apache-2.0，
+            // 但 sherpa-onnx 的 release 說明每個模型有自己的授權，ModelScope 頁面沒查到授權欄）。
+            // 這是阻擋正式發布的事項；原型與測試版可以先用。備案見 docs/spikes/2026-11-diarization-s1.md §3。
+            licenseNote: "CAM++ zh_en 聲紋模型授權尚未確認（發布前必須確認）"),
+    ]
+
+    static var totalDownloadBytes: Int64 { all.reduce(0) { $0 + $1.downloadBytes } }
+}
+
+struct MeetingDiarizerAssets {
+    let modelsDirectory: URL
+    /// 需要的模型。正式環境永遠是 `MeetingDiarizerModelCatalog.all`；測試才會換成小檔案。
+    let models: [MeetingDiarizerModel]
+    private let fileManager: FileManager
+
+    /// 預設：~/Library/Application Support/tw.panh.FreeVoiceType/models
+    /// （與 CatConfiguration 同一個 App 資料夾，以 bundle id 命名，不受顯示名稱更改影響）。
+    static var defaultModelsDirectory: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("tw.panh.FreeVoiceType", isDirectory: true)
+            .appendingPathComponent("models", isDirectory: true)
+    }
+
+    init(modelsDirectory: URL = MeetingDiarizerAssets.defaultModelsDirectory,
+         models: [MeetingDiarizerModel] = MeetingDiarizerModelCatalog.all,
+         fileManager: FileManager = .default) {
+        self.modelsDirectory = modelsDirectory
+        self.models = models
+        self.fileManager = fileManager
+    }
+
+    func installedURL(for model: MeetingDiarizerModel) -> URL {
+        modelsDirectory.appendingPathComponent(model.installPath)
+    }
+
+    /// 兩個模型都已安裝，且大小與預期相同（不重算雜湊：這個檢查會在選單開啟時呼叫）。
+    func modelsReady() -> Bool {
+        models.allSatisfy { isInstalled($0) }
+    }
+
+    func isInstalled(_ model: MeetingDiarizerModel) -> Bool {
+        let path = installedURL(for: model).path
+        guard let attributes = try? fileManager.attributesOfItem(atPath: path),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              let size = attributes[.size] as? NSNumber else { return false }
+        return size.int64Value == model.installedBytes
+    }
+
+    /// 還沒安裝的模型（下載器只會下載這些）。
+    func missingModels() -> [MeetingDiarizerModel] {
+        models.filter { !isInstalled($0) }
+    }
+}
