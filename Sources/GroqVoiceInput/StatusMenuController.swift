@@ -22,6 +22,8 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private(set) var retryMenuItem: NSMenuItem!
     private(set) var cancelMenuItem: NSMenuItem!
     private(set) var meetingToggleMenuItem: NSMenuItem!
+    private(set) var summarizeLatestMeetingMenuItem: NSMenuItem!
+    private(set) var autoSummaryMenuItem: NSMenuItem!
     private(set) var modeMenuItems: [TextOutputMode: NSMenuItem] = [:]
     private var nekoPositionItems: [NekoHUDPosition: NSMenuItem] = [:]
     private var catCoatItems: [String: NSMenuItem] = [:]
@@ -67,6 +69,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         let meetingCopy = NSMenuItem(title: "複製最近一次逐字稿", action: actions["copyLatestMeetingTranscript"], keyEquivalent: "")
         meetingCopy.target = target
         menu.addItem(meetingCopy)
+        summarizeLatestMeetingMenuItem = NSMenuItem(title: "為最近一次會議產生摘要", action: actions["summarizeLatestMeeting"], keyEquivalent: "")
+        summarizeLatestMeetingMenuItem.target = target
+        menu.addItem(summarizeLatestMeetingMenuItem)
+        autoSummaryMenuItem = NSMenuItem(title: "自動產生會議摘要", action: actions["toggleAutoSummary"], keyEquivalent: "")
+        autoSummaryMenuItem.target = target
+        menu.addItem(autoSummaryMenuItem)
         menu.addItem(NSMenuItem.separator())
 
         clipboardPickerMenuItem = NSMenuItem(title: "剪貼簿歷史", action: actions["showClipboardPicker"], keyEquivalent: "")
@@ -205,6 +213,15 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     func updateMeeting(title: String, enabled: Bool) {
         meetingToggleMenuItem?.title = title
         meetingToggleMenuItem?.isEnabled = enabled
+    }
+
+    func updateAutoSummary(enabled: Bool) {
+        autoSummaryMenuItem?.state = enabled ? .on : .off
+    }
+
+    func updateSummarizeLatestMeeting(title: String, enabled: Bool) {
+        summarizeLatestMeetingMenuItem?.title = title
+        summarizeLatestMeetingMenuItem?.isEnabled = enabled
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
