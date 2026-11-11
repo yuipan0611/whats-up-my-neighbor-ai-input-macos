@@ -94,10 +94,11 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             transcriber: MeetingGroqTranscriber(
                 readAPIKey: { [weak self] in self?.credentials.readAPIKey() },
                 makePrompt: { [weak self] language in
-                    let base = language.primary.transcriptionPrompt
+                    let base = MeetingGroqTranscriber.basePrompt(for: language.primary)
                     return self?.vocabularyLearning.prompt(base: base) ?? base
                 }),
-            store: meetingStore)
+            store: meetingStore,
+            vocabularyTerms: { [weak self] in self?.vocabularyStore.entries.filter(\.isEnabled).map(\.term) ?? [] })
         coordinator.onStatusChange = { [weak self] status in self?.renderMeetingStatus(status) }
         coordinator.onError = { [weak self] message in self?.showMeetingError(message) }
         coordinator.onFinished = { [weak self] url, failed in self?.meetingFinished(url, failedChunks: failed) }
