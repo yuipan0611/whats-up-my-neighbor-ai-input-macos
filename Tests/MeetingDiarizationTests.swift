@@ -182,15 +182,20 @@ enum MeetingDiarizationTests {
         testStartupScanAcrossProcesses()
         testCoordinatorHoldsAndReleasesTheOwnerLock()
         testQuitCancelIsSilent()
+        testLockFileIsStableAndNeverDeleted()
+        testLockSurvivesReleaseSoAnOpenedDescriptorStillExcludesNewOwners()
         testDialogTexts()
         testRealProcessRunner()
-        print("MeetingDiarization tests passed (27 scenarios)")
+        print("MeetingDiarization tests passed (29 scenarios)")
     }
 
     /// 在會議資料夾寫一個擁有者檔但不持鎖（模擬「擁有者行程已經結束」或「別的行程」）。
     static func plantOwner(in directory: URL, pid: Int32, start: Double? = nil) {
         let record = DiarizationOwnerRecord(v: 1, pid: pid, processStart: start, instance: "test", createdAt: 0)
         try! JSONEncoder().encode(record).write(to: directory.appendingPathComponent(DiarizationOwnerLock.filename))
+        if !FileManager.default.fileExists(atPath: directory.appendingPathComponent(DiarizationOwnerLock.lockFilename).path) {
+            FileManager.default.createFile(atPath: directory.appendingPathComponent(DiarizationOwnerLock.lockFilename).path, contents: Data())
+        }
     }
 
     // MARK: 純函式
@@ -707,7 +712,7 @@ enum MeetingDiarizationTests {
             try! f.store.setFrontmatter([("diarization", "running")], transcriptURL: f.transcriptURL)
             return f
         }
-        // 沒有擁有者檔：不動（無法確定沒有人在處理）。
+        // 沒有鎖檔也沒有擁有者檔：不動（無法確定沒有人在處理）。
         let none = fresh("none")
         expect(none.store.markInterruptedDiarizations().isEmpty && none.store.diarizationState(for: none.transcriptURL) == .running, "no owner file: left alone")
         // 擁有者行程還活著（pid 是自己，沒人持鎖）：不動。
@@ -722,6 +727,7 @@ enum MeetingDiarizationTests {
         held.release(deleteFile: true)
         // 檔案壞掉：不動。
         let corrupt = fresh("corrupt")
+        plantOwner(in: corrupt.directory, pid: deadPID)
         try! Data("not json".utf8).write(to: corrupt.directory.appendingPathComponent(DiarizationOwnerLock.filename))
         expect(corrupt.store.markInterruptedDiarizations().isEmpty, "unreadable owner record: left alone")
         // pid 已不存在：標 interrupted，並清掉擁有者檔。
@@ -776,6 +782,50 @@ enum MeetingDiarizationTests {
         expect(!exists(ownerFile), "finished job: owner file removed")
         f.succeed(1)
         expect(!exists(second.directory.appendingPathComponent(DiarizationOwnerLock.filename)), "second finished: owner file removed")
+    }
+
+    /// 鎖檔固定存在、永遠不刪：放鎖、完成、掃描接手、刪音檔、SafeFileRemoval 都不能動它。
+    static func testLockFileIsStableAndNeverDeleted() {
+        let dir = tempDir("LockStable"); defer { try? FileManager.default.removeItem(at: dir) }
+        let lockURL = dir.appendingPathComponent(DiarizationOwnerLock.lockFilename)
+        func inode() -> UInt64? { var s = stat(); return stat(lockURL.path, &s) == 0 ? UInt64(s.st_ino) : nil }
+        let first = DiarizationOwnerLock.acquire(in: dir, instance: "a")!
+        let ino = inode()
+        expect(ino != nil && exists(dir.appendingPathComponent(DiarizationOwnerLock.filename)), "lock file and owner record exist")
+        first.release(deleteFile: true)
+        expect(inode() == ino && !exists(dir.appendingPathComponent(DiarizationOwnerLock.filename)), "release clears the owner record but keeps the very same lock file")
+        let second = DiarizationOwnerLock.acquire(in: dir, instance: "b")!
+        second.release(deleteFile: false)
+        expect(inode() == ino && exists(dir.appendingPathComponent(DiarizationOwnerLock.filename)), "release without delete keeps the owner record (queued jobs)")
+        // 掃描接手（擁有者已死）之後鎖檔還在、inode 不變。
+        plantOwner(in: dir, pid: deadPID)
+        let claimed = DiarizationOwnerLock.claimIfAbandoned(in: dir)
+        expect(claimed != nil, "abandoned owner is claimed")
+        claimed?.release(deleteFile: true)
+        expect(inode() == ino, "claiming and releasing never replaces the lock file")
+        // 刪音檔與 SafeFileRemoval 不會刪它（它不是音檔、不是 manifest、不是暫存）。
+        try! Data([1]).write(to: dir.appendingPathComponent("chunk-001.m4a"))
+        let store = MeetingStore(root: dir.deletingLastPathComponent())
+        expect(store.deleteAudio(directory: dir) == 1 && inode() == ino, "deleteAudio leaves diarization.lock alone")
+        expect(SafeFileRemoval.removeRegularFile(dir.appendingPathComponent("chunk-001.m4a"), within: dir) == false, "sanity: nothing left to remove")
+        expect(inode() == ino, "lock file still the same inode")
+        // 刪音檔會自己的規則：只認 chunk-NNN.m4a 與 manifest.json。
+        expect(!"diarization.lock".hasSuffix(".m4a") && "diarization.lock" != MeetingStore.manifestFilename, "name is outside the deletable set")
+    }
+
+    /// Codex 的競態：有人已經 open 了鎖檔、還沒 flock；持鎖者放鎖後它鎖到同一個 inode，
+    /// 新的 acquire 必須失敗（鎖檔沒有被 unlink 換成新 inode）。
+    static func testLockSurvivesReleaseSoAnOpenedDescriptorStillExcludesNewOwners() {
+        let dir = tempDir("LockRace"); defer { try? FileManager.default.removeItem(at: dir) }
+        let first = DiarizationOwnerLock.acquire(in: dir, instance: "first")!
+        let early = open(dir.appendingPathComponent(DiarizationOwnerLock.lockFilename).path, O_RDWR | O_NOFOLLOW)   // 已 open、還沒 flock
+        expect(early >= 0, "another process had already opened the lock file")
+        first.release(deleteFile: true)
+        expect(flock(early, LOCK_EX | LOCK_NB) == 0, "it locks the same (never unlinked) inode")
+        expect(DiarizationOwnerLock.acquire(in: dir, instance: "third") == nil, "a new acquire must fail while that lock is held: no double ownership")
+        expect(DiarizationOwnerLock.claimIfAbandoned(in: dir) == nil, "and the scan cannot take it either")
+        flock(early, LOCK_UN); close(early)
+        expect(DiarizationOwnerLock.acquire(in: dir, instance: "fourth") != nil, "free again once released")
     }
 
     // App 結束：取消不發任何回呼（不啟動摘要、不更新選單），但狀態與音檔照寫照留。
