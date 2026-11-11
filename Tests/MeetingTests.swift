@@ -187,6 +187,7 @@ enum MeetingTests {
         expect(started.hasPrefix("---\nstarted: 2027-01-15T08:00:00Z\nended: in-progress\n"), "frontmatter at start")
         expect(started.contains("status: recording") && started.contains("# 會議記錄 2027-01-15 08:00"), "title")
         expect(session.directory.lastPathComponent == "2027-01-15_0800", "folder name")
+        expect(started.contains("chunk_seconds: 300\naudio: aac-44100-mono-64k\n"), "audio format recorded in frontmatter")
 
         try f.store.appendChunk(session, offset: 0, lines: [
             MeetingLine(offset: 0, text: "第一句，含 Grokbot 與 yui"),

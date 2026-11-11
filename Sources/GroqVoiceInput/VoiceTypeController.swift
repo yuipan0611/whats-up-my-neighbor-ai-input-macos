@@ -26,7 +26,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     private let recordingStore = TemporaryRecordingStore()
     private let micRecorder = PinnedMicrophoneRecorder()
     /// 會議記錄專用的第二個錄音器實例，不與聽寫共用。
-    private let meetingRecorder = PinnedMicrophoneRecorder()
+    private let meetingRecorder = PinnedMicrophoneRecorder(audioSettings: MeetingAudio.settings)
     private let meetingStore = MeetingStore()
     private var meetingTimer: Timer?
     private var catConfiguration = CatConfiguration.load()
