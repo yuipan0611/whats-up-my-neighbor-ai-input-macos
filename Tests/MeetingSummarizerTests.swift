@@ -8,6 +8,9 @@ private final class OfflineMeetingProtocol: URLProtocol {
     static var mockChatResponseJSON: String = ""
     static var mockChatResponses: [String] = []
     static var mockStatusCode: Int = 200
+    static var mockStatusCodes: [Int] = []
+    static var mockHeaderFields: [String: String] = ["Content-Type": "application/json"]
+    static var mockHeaderFieldsSequence: [[String: String]] = []
     static var mockError: Error?
     static var capturedRequests: [URLRequest] = []
 
@@ -16,6 +19,9 @@ private final class OfflineMeetingProtocol: URLProtocol {
         chatJSON: String = "",
         chatResponses: [String] = [],
         statusCode: Int = 200,
+        statusCodes: [Int] = [],
+        headerFields: [String: String] = ["Content-Type": "application/json"],
+        headerFieldsSequence: [[String: String]] = [],
         error: Error? = nil
     ) {
         lock.lock()
@@ -24,6 +30,9 @@ private final class OfflineMeetingProtocol: URLProtocol {
         mockChatResponseJSON = chatJSON
         mockChatResponses = chatResponses
         mockStatusCode = statusCode
+        mockStatusCodes = statusCodes
+        mockHeaderFields = headerFields
+        mockHeaderFieldsSequence = headerFieldsSequence
         mockError = error
         capturedRequests.removeAll()
     }
@@ -34,7 +43,8 @@ private final class OfflineMeetingProtocol: URLProtocol {
     override func startLoading() {
         Self.lock.lock()
         Self.capturedRequests.append(request)
-        let statusCode = Self.mockStatusCode
+        let statusCode: Int
+        let headerFields: [String: String]
         let customError = Self.mockError
         let url = request.url!
         let responseData: Data
@@ -46,8 +56,12 @@ private final class OfflineMeetingProtocol: URLProtocol {
         }
 
         if url.path.hasSuffix("/models") {
+            statusCode = Self.mockStatusCode
+            headerFields = Self.mockHeaderFields
             responseData = Data(Self.mockModelsJSON.utf8)
         } else if url.path.hasSuffix("/chat/completions") {
+            statusCode = !Self.mockStatusCodes.isEmpty ? Self.mockStatusCodes.removeFirst() : Self.mockStatusCode
+            headerFields = !Self.mockHeaderFieldsSequence.isEmpty ? Self.mockHeaderFieldsSequence.removeFirst() : Self.mockHeaderFields
             if !Self.mockChatResponses.isEmpty {
                 let next = Self.mockChatResponses.removeFirst()
                 responseData = Data(next.utf8)
@@ -55,6 +69,8 @@ private final class OfflineMeetingProtocol: URLProtocol {
                 responseData = Data(Self.mockChatResponseJSON.utf8)
             }
         } else {
+            statusCode = 404
+            headerFields = ["Content-Type": "application/json"]
             responseData = Data(#"{"error":{"message":"未知 endpoint"}}"#.utf8)
         }
         Self.lock.unlock()
@@ -63,7 +79,7 @@ private final class OfflineMeetingProtocol: URLProtocol {
             url: url,
             statusCode: statusCode,
             httpVersion: "HTTP/1.1",
-            headerFields: ["Content-Type": "application/json"]
+            headerFields: headerFields
         )!
 
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -135,7 +151,14 @@ enum MeetingSummarizerTests {
         testRecordingSessionDetectionBlocksEarlySummarization()
         testInterleavedDictationWithSummaryFailureNeverPresentsModal()
         testReduceDepthLimitExceededFailsCleanly()
-        print("Meeting summarizer tests passed (26 suites)")
+        testGptOssModelParameters()
+        testFinishReasonValidationAndPreservesPriorSummary()
+        testRateLimitHeaderParsing()
+        testRateLimit429RetrySuccess()
+        testRateLimit429RetryCancellation()
+        testChunkThresholdReducedTo3500()
+        testSystemPromptConstraints()
+        print("Meeting summarizer tests passed (33 suites)")
     }
 
     // MARK: - 模型解析與挑選測試
@@ -1001,5 +1024,317 @@ enum MeetingSummarizerTests {
             fatalError("超限 depth 應觸發錯誤")
         }
         expectTrue(error.localizedDescription.contains("會議分段摘要彙整層數超過上限（最多 3 層）"), "錯誤訊息應提示層數超過上限")
+    }
+
+    // MARK: - P1 / P2 實測修復驗證測試
+
+    /// 驗證 gpt-oss 系列模型在 Request Body 包含 reasoning_effort: "low" 與 max_completion_tokens: 3500
+    static func testGptOssModelParameters() {
+        // 情境 1：openai/gpt-oss-120b
+        let ossData = try! MeetingSummarizer.makeRequestBody(
+            model: "openai/gpt-oss-120b",
+            system: "sys",
+            user: "usr"
+        )
+        let ossJson = try! JSONSerialization.jsonObject(with: ossData) as! [String: Any]
+        expect(ossJson["model"] as? String, "openai/gpt-oss-120b")
+        expect(ossJson["reasoning_effort"] as? String, "low")
+        expect(ossJson["max_completion_tokens"] as? Int, 3500)
+
+        // 情境 2：一般模型如 llama-3.3-70b-versatile 不應帶有上述推理參數
+        let llamaData = try! MeetingSummarizer.makeRequestBody(
+            model: "llama-3.3-70b-versatile",
+            system: "sys",
+            user: "usr"
+        )
+        let llamaJson = try! JSONSerialization.jsonObject(with: llamaData) as! [String: Any]
+        expect(llamaJson["model"] as? String, "llama-3.3-70b-versatile")
+        expectTrue(llamaJson["reasoning_effort"] == nil, "非 gpt-oss 模型不應包含 reasoning_effort")
+        expectTrue(llamaJson["max_completion_tokens"] == nil, "非 gpt-oss 模型不應包含 max_completion_tokens")
+    }
+
+    /// 驗證 finish_reason 非 "stop"（如 "length"）嚴格報錯並拒絕覆寫既有摘要
+    static func testFinishReasonValidationAndPreservesPriorSummary() {
+        // 情境 1：parseChatContent 遇到 finish_reason == "length" 拋出錯誤
+        let lengthJSON = #"""
+        {
+          "choices": [
+            {
+              "message": {"role": "assistant", "content": "## 摘要\n- [00:01:00] 殘缺的內容"},
+              "finish_reason": "length"
+            }
+          ]
+        }
+        """#
+        var threwLength = false
+        do {
+            _ = try MeetingSummarizer.parseChatContent(data: Data(lengthJSON.utf8))
+        } catch {
+            threwLength = true
+            expectTrue(error.localizedDescription.contains("finish_reason: length"), "應包含 finish_reason: length 提示")
+        }
+        expectTrue(threwLength, "finish_reason=length 應拋出錯誤")
+
+        // 情境 2：parseChatContent 遇到 finish_reason == "stop" 正常通過
+        let stopJSON = #"""
+        {
+          "choices": [
+            {
+              "message": {"role": "assistant", "content": "## 摘要\n- [00:01:00] 完整的內容"},
+              "finish_reason": "stop"
+            }
+          ]
+        }
+        """#
+        let content = try! MeetingSummarizer.parseChatContent(data: Data(stopJSON.utf8))
+        expect(content, "## 摘要\n- [00:01:00] 完整的內容")
+
+        // 情境 3：端到端生成遇到 finish_reason == "length" 時失敗，既有 summary.md 完好保留
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try! FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let store = MeetingStore(root: tempDir)
+        let transcriptURL = tempDir.appendingPathComponent("2026-11-12-140000.md")
+        try! "--- status: stopped ---\n[00:00:10] Alice: 討論測試。".write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let priorSummary = "---\nmodel: old-model\ngenerated_at: 2026-11-12T13:00:00Z\n---\n\n## 摘要\n- 舊的珍貴摘要"
+        let summaryURL = try! store.writeSummary(priorSummary, for: transcriptURL)
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [OfflineMeetingProtocol.self]
+        let session = URLSession(configuration: config)
+
+        OfflineMeetingProtocol.reset(
+            modelsJSON: #"{"data":[{"id":"openai/gpt-oss-120b","active":true,"context_window":131072}]}"#,
+            chatJSON: lengthJSON,
+            statusCode: 200
+        )
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var capturedError: Error?
+        MeetingSummarizer.generateSummary(
+            transcript: "[00:00:10] Alice: 討論測試。",
+            apiKey: "mock-key",
+            session: session
+        ) { result in
+            if case .failure(let err) = result {
+                capturedError = err
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        expectTrue(capturedError != nil, "finish_reason=length 端到端生成應回報失敗")
+        let summaryOnDisk = try! String(contentsOf: summaryURL, encoding: .utf8)
+        expect(summaryOnDisk, priorSummary)
+    }
+
+    /// 驗證 HTTP 429 速率限制標頭解析（Retry-After 與 x-ratelimit-reset-tokens）
+    static func testRateLimitHeaderParsing() {
+        // Retry-After 整數秒
+        let resp1 = HTTPURLResponse(
+            url: URL(string: "https://api.groq.com")!,
+            statusCode: 429,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Retry-After": "6"]
+        )
+        expect(MeetingSummarizer.parseRateLimitWaitInterval(from: resp1), 6.0)
+
+        // Retry-After 浮點數
+        let resp2 = HTTPURLResponse(
+            url: URL(string: "https://api.groq.com")!,
+            statusCode: 429,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["retry-after": "2.5"]
+        )
+        expect(MeetingSummarizer.parseRateLimitWaitInterval(from: resp2), 2.5)
+
+        // x-ratelimit-reset-tokens 帶 "s"
+        let resp3 = HTTPURLResponse(
+            url: URL(string: "https://api.groq.com")!,
+            statusCode: 429,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["x-ratelimit-reset-tokens": "8.25s"]
+        )
+        expect(MeetingSummarizer.parseRateLimitWaitInterval(from: resp3), 8.25)
+
+        // x-ratelimit-reset-tokens 帶 "ms"
+        let resp4 = HTTPURLResponse(
+            url: URL(string: "https://api.groq.com")!,
+            statusCode: 429,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["x-ratelimit-reset-tokens": "600ms"]
+        )
+        expect(MeetingSummarizer.parseRateLimitWaitInterval(from: resp4), 0.6)
+
+        // x-ratelimit-reset-requests
+        let resp5 = HTTPURLResponse(
+            url: URL(string: "https://api.groq.com")!,
+            statusCode: 429,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["x-ratelimit-reset-requests": "15s"]
+        )
+        expect(MeetingSummarizer.parseRateLimitWaitInterval(from: resp5), 15.0)
+
+        // 無 header 回傳 nil
+        let respNone = HTTPURLResponse(
+            url: URL(string: "https://api.groq.com")!,
+            statusCode: 429,
+            httpVersion: "HTTP/1.1",
+            headerFields: [:]
+        )
+        expectTrue(MeetingSummarizer.parseRateLimitWaitInterval(from: respNone) == nil, "無標頭時應回傳 nil")
+    }
+
+    /// 驗證收到 429 帶 Retry-After 時，進入等待、通知選單狀態，並在重試後成功
+    static func testRateLimit429RetrySuccess() {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [OfflineMeetingProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let chatSuccessJSON = #"""
+        {
+          "choices": [
+            {
+              "message": {"role": "assistant", "content": "## 摘要\n- 重試後成功"},
+              "finish_reason": "stop"
+            }
+          ]
+        }
+        """#
+
+        // 第一次 429（Retry-After: 3 秒），第二次 200 成功
+        OfflineMeetingProtocol.reset(
+            modelsJSON: #"{"data":[{"id":"openai/gpt-oss-120b","active":true,"context_window":131072}]}"#,
+            chatResponses: [
+                #"{"error":{"message":"Rate limit reached"}}"#,
+                chatSuccessJSON
+            ],
+            statusCodes: [429, 200],
+            headerFieldsSequence: [
+                ["Content-Type": "application/json", "Retry-After": "3"],
+                ["Content-Type": "application/json"]
+            ]
+        )
+
+        var statusUpdates: [String] = []
+        var scheduledDelays: [TimeInterval] = []
+
+        // 注入自訂立即執行的 DelayScheduler，記錄排程延遲
+        let immediateScheduler: MeetingSummarizer.DelayScheduler = { delay, block in
+            scheduledDelays.append(delay)
+            let item = DispatchWorkItem(block: block)
+            DispatchQueue.global().async(execute: item)
+            return item
+        }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var capturedResult: Result<String, Error>?
+        MeetingSummarizer.generateSummary(
+            transcript: "[00:00:10] Bob: 討論測試。",
+            apiKey: "mock-key",
+            session: session,
+            delayScheduler: immediateScheduler,
+            statusHandler: { status in
+                statusUpdates.append(status)
+            }
+        ) { result in
+            capturedResult = result
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        guard let result = capturedResult, case .success(let markdown) = result else {
+            fatalError("429 重試後應成功")
+        }
+        expectTrue(markdown.contains("重試後成功"), "Markdown 應包含重試後內容")
+        expectTrue(scheduledDelays.contains(3.0), "應排程 3 秒之延遲")
+        expectTrue(statusUpdates.contains("等待 Groq 額度，約 3 秒"), "應通知選單『等待 Groq 額度，約 3 秒』")
+        expectTrue(statusUpdates.contains("正在產生會議摘要…"), "重試發出時應更新選單為『正在產生會議摘要…』")
+    }
+
+    /// 驗證 429 等待期間工作被取消時，等待立即中止，不再發送第二次請求
+    static func testRateLimit429RetryCancellation() {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [OfflineMeetingProtocol.self]
+        let session = URLSession(configuration: config)
+
+        // 第一次請求返回 429
+        OfflineMeetingProtocol.reset(
+            modelsJSON: #"{"data":[{"id":"openai/gpt-oss-120b","active":true,"context_window":131072}]}"#,
+            statusCodes: [429],
+            headerFieldsSequence: [["Content-Type": "application/json", "Retry-After": "10"]]
+        )
+
+        let tracker = MeetingSummaryTracker()
+        let testURL = URL(fileURLWithPath: "/tmp/fake-transcript.md")
+        let job = tracker.registerJob(for: testURL)
+
+        var didExecuteWorkItem = false
+        // 模擬排程器：不立即執行，等待呼叫
+        let manualScheduler: MeetingSummarizer.DelayScheduler = { delay, block in
+            let item = DispatchWorkItem {
+                didExecuteWorkItem = true
+                block()
+            }
+            return item
+        }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        MeetingSummarizer.generateSummary(
+            transcript: "[00:00:10] Bob: 討論測試。",
+            apiKey: "mock-key",
+            session: session,
+            job: job,
+            delayScheduler: manualScheduler
+        ) { _ in
+            semaphore.signal()
+        }
+
+        // 等待 models 取得並發出第一次 chat 收到 429
+        let deadline = Date().addingTimeInterval(2.0)
+        while job.pendingWorkItem == nil && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+
+        expectTrue(job.pendingWorkItem != nil, "應已有 pendingWorkItem")
+        expectTrue(!job.pendingWorkItem!.isCancelled, "尚未取消前 workItem 應有效")
+
+        // 呼叫 cancel()（例如 App 退出或被新工作覆蓋）
+        job.cancel()
+
+        expectTrue(job.isCancelled, "job 應標記為已取消")
+        expectTrue(job.pendingWorkItem == nil, "cancel 後 pendingWorkItem 應被清理")
+        expectTrue(!didExecuteWorkItem, "已取消的等待項目絕不可被執行")
+    }
+
+    /// 驗證長會議分段門檻已調降為 3,500 字元
+    static func testChunkThresholdReducedTo3500() {
+        expect(MeetingSummarizer.maxChunkCharacterCount, 3500)
+
+        // 3,000 字元逐字稿：單一 chunk
+        let shortText = String(repeating: "測試語句與技術名詞討論。\n", count: 230)
+        expectTrue(shortText.count > 2500 && shortText.count <= 3500, "長度應在 3500 以內")
+        let shortChunks = try! MeetingSummarizer.splitTranscriptIntoChunks(shortText)
+        expect(shortChunks.count, 1)
+
+        // 4,000 字元逐字稿：應切分為多個 chunks
+        let longText = String(repeating: "測試語句與技術名詞討論。\n", count: 300)
+        expectTrue(longText.count > 3500, "長度應超過 3500")
+        let longChunks = try! MeetingSummarizer.splitTranscriptIntoChunks(longText)
+        expectTrue(longChunks.count > 1, "超過 3500 字元應分段")
+    }
+
+    /// 驗證提示詞中嚴格約束期限照原文不補年份，且待辦事項不重複進決議
+    static func testSystemPromptConstraints() {
+        let prompt = MeetingSummarizer.systemPrompt
+        expectTrue(prompt.contains("待辦事項之期限必須嚴格照逐字稿原文填寫"), "應約束期限照逐字稿原文")
+        expectTrue(prompt.contains("禁止補上年份"), "應明確禁止補上年份")
+        expectTrue(prompt.contains("待辦工作事項請勿重複列入決議區塊"), "應約束待辦事項勿重複列入決議")
+
+        let reducePrompt = MeetingSummarizer.reduceSystemPrompt
+        expectTrue(reducePrompt.contains("待辦事項之期限必須嚴格照分段摘要原文填寫"), "Reduce 階段應約束期限照原文")
+        expectTrue(reducePrompt.contains("嚴禁自行補上年份"), "Reduce 階段應嚴禁補年份")
+        expectTrue(reducePrompt.contains("待辦工作事項請勿重複列入決議區塊"), "Reduce 階段應約束待辦事項勿重複列入決議")
     }
 }
