@@ -8,6 +8,48 @@ struct MeetingSession: Equatable {
     let chunkSeconds: Int
     let audio: String
     var transcriptURL: URL { directory.appendingPathComponent(MeetingStore.transcriptFilename) }
+    var segmentsURL: URL { directory.appendingPathComponent(MeetingStore.segmentsFilename) }
+}
+
+/// `segments.jsonl` 的一行（schema v1，見 docs/spikes/2026-11-diarization-m2-design.md 附錄 A.2）。
+/// 輸出順序固定：v、chunk、start、end、text、words、failed（JSONEncoder 的鍵順序不固定，所以手寫）。
+/// 時間單位是「整場會議的相對秒數」，已四捨五入到毫秒。
+struct MeetingSegmentRecord: Equatable {
+    struct Word: Equatable {
+        let w: String
+        let s: Double
+        let e: Double
+    }
+
+    let v: Int
+    let chunk: Int
+    let start: Double
+    let end: Double
+    let text: String
+    /// 只在 Groq 真的回傳字級時間時才有；nil 時整個欄位省略。
+    let words: [Word]?
+    /// 這一段辨識失敗的原因；有值時 text 為空、沒有 words。
+    let failed: String?
+
+    /// 單行 JSON（不含結尾換行）。字串與數字都交給 JSONEncoder 轉義／格式化，不自己拼跳脫。
+    func jsonLine() -> String {
+        var fields = ["\"v\":\(Self.atom(v))", "\"chunk\":\(Self.atom(chunk))",
+                      "\"start\":\(Self.atom(start))", "\"end\":\(Self.atom(end))",
+                      "\"text\":\(Self.atom(text))"]
+        if let words {
+            let items = words.map { "{\"w\":\(Self.atom($0.w)),\"s\":\(Self.atom($0.s)),\"e\":\(Self.atom($0.e))}" }
+            fields.append("\"words\":[\(items.joined(separator: ","))]")
+        }
+        if let failed { fields.append("\"failed\":\(Self.atom(failed))") }
+        return "{" + fields.joined(separator: ",") + "}"
+    }
+
+    private static func atom<T: Encodable>(_ value: T) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes]
+        guard let data = try? encoder.encode(value) else { return "null" }
+        return String(decoding: data, as: UTF8.self)
+    }
 }
 
 /// 逐字稿裡的一行：已經換算成「整場會議」的相對秒數。
@@ -26,6 +68,8 @@ struct MeetingLine: Equatable {
 /// 因此不可能寫到會議資料夾以外的地方。
 final class MeetingStore {
     static let transcriptFilename = "transcript.md"
+    /// 說話者辨識用的旁路檔：每個 segment 一行 JSON，只 append。
+    static let segmentsFilename = "segments.jsonl"
 
     /// 預設存在 ~/Documents/Neighbor Meetings，好找，不藏在系統暫存區。
     static var defaultRoot: URL {
@@ -68,11 +112,14 @@ final class MeetingStore {
 
     /// 重寫 frontmatter（結束時間與段數），正文不動。可重複呼叫，不會壞檔。
     /// `status`：`completed` 正常結束；`interrupted` 是 App 在會議中被關閉。
+    /// `segmentsComplete`：`segments.jsonl` 是否完整。旁路檔寫入失敗過就傳 false，frontmatter 會寫
+    /// `segments: incomplete`，之後的說話者辨識讀得到。
     func endSession(_ session: MeetingSession, endedAt: Date, chunks: Int, failedChunks: Int,
-                    status: String = "completed") throws {
+                    status: String = "completed", segmentsComplete: Bool = true) throws {
         let current = try String(contentsOf: session.transcriptURL, encoding: .utf8)
         let body = Self.bodyAfterFrontmatter(current)
-        let text = frontmatter(session, ended: endedAt, chunks: chunks, failed: failedChunks, status: status)
+        let text = frontmatter(session, ended: endedAt, chunks: chunks, failed: failedChunks, status: status,
+                               segmentsComplete: segmentsComplete)
             + body
         try write(text, to: session.transcriptURL)
     }
@@ -104,6 +151,21 @@ final class MeetingStore {
             for line in lines { text += "[\(Self.timestamp(line.offset))] \(Self.oneLine(line.text))\n" }
         }
         try append(text + "\n", to: session.transcriptURL)
+    }
+
+    /// 把一段的 segment 記錄 append 到 `segments.jsonl`（一次 write，每行以 `\n` 結尾）。
+    /// 檔案在第一次寫入時才建立；沒有記錄時什麼都不做。
+    func appendSegments(_ session: MeetingSession, records: [MeetingSegmentRecord]) throws {
+        guard !records.isEmpty else { return }
+        var data = Data()
+        for record in records { data.append(Data((record.jsonLine() + "\n").utf8)) }
+        if !fileManager.fileExists(atPath: session.segmentsURL.path) {
+            try Data().write(to: session.segmentsURL)
+        }
+        let handle = try FileHandle(forWritingTo: session.segmentsURL)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: data)
     }
 
     /// 辨識失敗：在逐字稿標出來。`audioKept` 為 true 時說明保留的檔名。
@@ -181,7 +243,7 @@ final class MeetingStore {
     }
 
     private func frontmatter(_ session: MeetingSession, ended: Date?, chunks: Int,
-                             failed: Int, status: String) -> String {
+                             failed: Int, status: String, segmentsComplete: Bool = true) -> String {
         let iso = ISO8601DateFormatter()
         iso.timeZone = timeZone
         iso.formatOptions = [.withInternetDateTime]
@@ -195,6 +257,7 @@ final class MeetingStore {
         failed_chunks: \(failed)
         chunk_seconds: \(session.chunkSeconds)
         audio: \(session.audio)
+        segments: \(segmentsComplete ? "complete" : "incomplete")
         chunk_gap: 每段錄音之間會有約 0.3–0.5 秒沒有錄到（錄音器停止再重新啟動）
         timestamps: 每行時間為「整場會議的相對時間」，一行對應 Whisper 的一個 segment，不一定剛好是一句
         ---

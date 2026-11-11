@@ -45,6 +45,8 @@ final class MeetingCoordinator {
         let index: Int
         let url: URL
         let offset: TimeInterval
+        /// 這段實際錄了多久（單調時鐘量到的）。只用來填 segments.jsonl 失敗行的 end。
+        let duration: TimeInterval
     }
 
     static let defaultChunkSeconds: TimeInterval = 300
@@ -63,6 +65,9 @@ final class MeetingCoordinator {
 
     private(set) var state: MeetingState = .idle
     private(set) var failedChunkCount = 0
+    /// `segments.jsonl` 寫入失敗的次數。旁路檔是盡力而為：失敗不影響逐字稿與刪檔，
+    /// 但會留下計數，之後說話者辨識才知道這場的旁路檔不完整。
+    private(set) var sidecarFailureCount = 0
     var onStatusChange: ((MeetingStatus) -> Void)?
     /// 無法繼續的錯誤（建不了資料夾、錄音器啟動失敗）。單段辨識失敗不走這裡，
     /// 只會標在逐字稿裡並反映在 `failedChunkCount`。
@@ -165,16 +170,19 @@ final class MeetingCoordinator {
         inFlightToken?.cancel()
         recorder.shutdown()
         if let current {
+            let elapsedInChunk = current.startedUptime.map { max(0, uptime() - $0) } ?? 0
             record(failure: "App 結束時正在錄音，音檔可能不完整", index: current.index,
-                   offset: offset(of: current), audioKept: true)
+                   offset: offset(of: current), duration: elapsedInChunk, audioKept: true)
         }
         var abandoned = queue
         if let inFlight { abandoned.insert(inFlight, at: 0) }
         for chunk in abandoned {
-            record(failure: "App 結束前尚未辨識", index: chunk.index, offset: chunk.offset, audioKept: true)
+            record(failure: "App 結束前尚未辨識", index: chunk.index, offset: chunk.offset,
+                   duration: chunk.duration, audioKept: true)
         }
         try? store.endSession(session, endedAt: now(), chunks: totalChunkCount,
-                              failedChunks: failedChunkCount, status: "interrupted")
+                              failedChunks: failedChunkCount, status: "interrupted",
+                              segmentsComplete: sidecarFailureCount == 0)
         current = nil
         queue = []
         inFlight = nil
@@ -238,12 +246,12 @@ final class MeetingCoordinator {
             try? FileManager.default.removeItem(at: url)
             totalChunkCount += 1
             record(failure: "錄音檔不可用（\(error.localizedDescription)）", index: chunk.index,
-                   offset: offset, audioKept: false)
+                   offset: offset, duration: duration, audioKept: false)
         } else if stopRequested && duration < Self.minimumChunkSeconds {
             try? FileManager.default.removeItem(at: url)
         } else {
             totalChunkCount += 1
-            queue.append(PendingChunk(index: chunk.index, url: url, offset: offset))
+            queue.append(PendingChunk(index: chunk.index, url: url, offset: offset, duration: duration))
             pumpQueue()
         }
 
@@ -284,16 +292,21 @@ final class MeetingCoordinator {
         inFlightToken = nil
         switch result {
         case .success(let value):
+            // 順序（設計文件附錄 A.2 規則 2）：先 segments.jsonl，再 transcript.md，最後才刪段檔。
+            // 當機時旁路檔多一行比少一行好，逐字稿可以由它重新產生。
+            appendSidecar(MeetingSegments.records(chunk: chunk.index, offset: chunk.offset, result: value,
+                                                    clean: { [self] in clean($0) }), session)
             do {
                 try store.appendChunk(session, offset: chunk.offset, lines: lines(from: value, offset: chunk.offset))
                 try? FileManager.default.removeItem(at: chunk.url)
             } catch {
+                // 旁路檔已經有這段的內容，不再補失敗行（否則同一段會有內容又有 failed）。
                 record(failure: "寫入逐字稿失敗（\(error.localizedDescription)）", index: chunk.index,
-                       offset: chunk.offset, audioKept: true)
+                       offset: chunk.offset, duration: chunk.duration, audioKept: true, writeSidecar: false)
             }
         case .failure(let error):
             record(failure: error.localizedDescription, index: chunk.index,
-                   offset: chunk.offset, audioKept: true)
+                   offset: chunk.offset, duration: chunk.duration, audioKept: true)
         }
         pumpQueue()
         finishIfDrained()
@@ -320,10 +333,19 @@ final class MeetingCoordinator {
         return whole.isEmpty ? [] : [MeetingLine(offset: offset, text: whole)]
     }
 
-    private func record(failure reason: String, index: Int, offset: TimeInterval, audioKept: Bool) {
+    private func record(failure reason: String, index: Int, offset: TimeInterval, duration: TimeInterval,
+                        audioKept: Bool, writeSidecar: Bool = true) {
         failedChunkCount += 1
         guard let session else { return }
+        if writeSidecar {
+            appendSidecar([MeetingSegments.failure(chunk: index, offset: offset, duration: duration, reason: reason)], session)
+        }
         try? store.markChunkFailed(session, index: index, offset: offset, reason: reason, audioKept: audioKept)
+    }
+
+    private func appendSidecar(_ records: [MeetingSegmentRecord], _ session: MeetingSession) {
+        do { try store.appendSegments(session, records: records) }
+        catch { sidecarFailureCount += 1 }
     }
 
     private func offset(of chunk: Chunk) -> TimeInterval {
@@ -335,7 +357,8 @@ final class MeetingCoordinator {
         guard state == .draining, stopRequested, current == nil, queue.isEmpty, inFlight == nil,
               let session else { return }
         do {
-            try store.endSession(session, endedAt: now(), chunks: totalChunkCount, failedChunks: failedChunkCount)
+            try store.endSession(session, endedAt: now(), chunks: totalChunkCount, failedChunks: failedChunkCount,
+                                segmentsComplete: sidecarFailureCount == 0)
         } catch {
             onError?("無法完成逐字稿：\(error.localizedDescription)")
         }
@@ -359,8 +382,65 @@ final class MeetingCoordinator {
         inFlight = nil
         inFlightToken = nil
         failedChunkCount = 0
+        sidecarFailureCount = 0
         totalChunkCount = 0
     }
 
     private func notify() { onStatusChange?(status) }
+}
+
+/// 把辨識結果換成 `segments.jsonl` 的記錄（純函式）。
+///
+/// 規則（設計文件附錄 A.2）：每個 Groq segment 一行；文字為空的 segment 不寫；整段沒有內容時
+/// 不寫任何行；`chunk` 是段檔名 chunk-NNN.m4a 的 NNN；時間 = 段 offset ＋ 段內時間，四捨五入到毫秒。
+/// 字級時間（`words`）只在 Groq 真的回傳時才附上，`w` 原樣保留（包含 Whisper 的前導空白）。
+enum MeetingSegments {
+    /// `clean`：和 transcript.md 同一個文字處理（簡轉繁、標點、詞庫）。`text` 存處理後的版本，
+    /// 讓人讀的兩份檔案一致；`words` 是 Groq 原始字級對齊資料，保持原樣。
+    static func records(chunk: Int, offset: TimeInterval, result: TranscriptionResult,
+                        clean: (String) -> String = { $0 }) -> [MeetingSegmentRecord] {
+        let segments = result.segments
+        var records: [MeetingSegmentRecord] = []
+        for (position, segment) in segments.enumerated() {
+            let text = clean(segment.text.trimmingCharacters(in: .whitespacesAndNewlines))
+            guard !text.isEmpty else { continue }
+            let start = offset + segment.start
+            records.append(MeetingSegmentRecord(
+                v: 1, chunk: chunk, start: round3(start), end: round3(max(start, offset + segment.end)),
+                text: text, words: words(for: position, in: segments, all: result.words, offset: offset), failed: nil))
+        }
+        if !records.isEmpty { return records }
+        // 沒有 segment 但有全文：和逐字稿一樣當成單一一行。
+        let whole = clean(result.text.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard !whole.isEmpty else { return [] }
+        let end = offset + max(0, result.duration ?? 0)
+        return [MeetingSegmentRecord(v: 1, chunk: chunk, start: round3(offset), end: round3(end),
+                                     text: whole, words: nil, failed: nil)]
+    }
+
+    /// 失敗的段：start = 該段 offset，end = offset + 段長（不知道就等於 start）。
+    static func failure(chunk: Int, offset: TimeInterval, duration: TimeInterval, reason: String) -> MeetingSegmentRecord {
+        MeetingSegmentRecord(v: 1, chunk: chunk, start: round3(offset),
+                             end: round3(offset + max(0, duration)),
+                             text: "", words: nil, failed: reason)
+    }
+
+    /// Groq 的字級時間是一整串，沒有分段。每個字歸給「起點不晚於它的最後一個 segment」；
+    /// 落在第一個 segment 之前的字歸第一個，落在 segment 之間空隙的字歸前一個。
+    private static func words(for position: Int, in segments: [TranscriptionSegment],
+                              all words: [TranscriptionWord], offset: TimeInterval) -> [MeetingSegmentRecord.Word]? {
+        guard !words.isEmpty else { return nil }
+        let starts = segments.map(\.start)
+        var mine: [MeetingSegmentRecord.Word] = []
+        for word in words {
+            var owner = 0
+            for (index, start) in starts.enumerated() where start <= word.start + 0.0005 { owner = index }
+            guard owner == position else { continue }
+            mine.append(.init(w: word.text, s: round3(offset + word.start),
+                              e: round3(max(offset + word.start, offset + word.end))))
+        }
+        return mine.isEmpty ? nil : mine
+    }
+
+    private static func round3(_ value: Double) -> Double { (value * 1000).rounded() / 1000 }
 }
