@@ -59,6 +59,7 @@ final class MeetingCoordinator {
     private let uptime: () -> TimeInterval
     private let schedule: (TimeInterval, @escaping () -> Void) -> Void
     private let chunkSeconds: TimeInterval
+    private let vocabularyTerms: () -> [String]
 
     private(set) var state: MeetingState = .idle
     private(set) var failedChunkCount = 0
@@ -85,6 +86,7 @@ final class MeetingCoordinator {
     init(
         recorder: DictationRecording, transcriber: MeetingTranscribing, store: MeetingStore,
         chunkSeconds: TimeInterval = MeetingCoordinator.defaultChunkSeconds,
+        vocabularyTerms: @escaping () -> [String] = { [] },
         now: @escaping () -> Date = Date.init,
         uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
         schedule: @escaping (TimeInterval, @escaping () -> Void) -> Void = { delay, action in
@@ -95,6 +97,7 @@ final class MeetingCoordinator {
         self.transcriber = transcriber
         self.store = store
         self.chunkSeconds = chunkSeconds
+        self.vocabularyTerms = vocabularyTerms
         self.now = now
         self.uptime = uptime
         self.schedule = schedule
@@ -297,13 +300,23 @@ final class MeetingCoordinator {
         notify()
     }
 
+    /// 逐行寫入前，套用與聽寫相同的 `TextPostProcessor`，但固定用純逐字模式：
+    /// 簡轉繁、標點正規化、空白整理、詞庫大小寫修正；不刪語助詞（會議逐字稿要保留原話）。
+    /// 聽寫的「中文數字轉阿拉伯」是使用者設定，會議不套用，避免改動數字與日期。
+    private func clean(_ raw: String) -> String {
+        TextPostProcessor.process(
+            raw, mode: .verbatim, vocabulary: vocabularyTerms(),
+            applyChineseRules: language.primary.usesChineseTextRules,
+            convertChineseNumerals: false)
+    }
+
     private func lines(from result: TranscriptionResult, offset: TimeInterval) -> [MeetingLine] {
         let fromSegments = result.segments.compactMap { segment -> MeetingLine? in
-            let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = clean(segment.text)
             return text.isEmpty ? nil : MeetingLine(offset: offset + segment.start, text: text)
         }
         if !fromSegments.isEmpty { return fromSegments }
-        let whole = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let whole = clean(result.text)
         return whole.isEmpty ? [] : [MeetingLine(offset: offset, text: whole)]
     }
 
