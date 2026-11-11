@@ -103,7 +103,29 @@ enum MeetingGroqTranscriberTests {
         testCancelWhileRequestInFlightDropsCallback()
         testCancelAfterBackgroundCompletionDropsCallback()
         testCancelBeforeBackgroundWorkStartsSendsNothing()
-        print("Meeting Groq transcriber tests passed (5 scenarios, fake HTTP, no real key)")
+        testAllBossVocabularyTermsFitMeetingPrompt()
+        print("Meeting Groq transcriber tests passed (6 scenarios, fake HTTP, no real key)")
+    }
+
+    // 老闆的 5 個常用詞（含最長的 DeepseekHarness）都要進得了會議的 prompt，且不超過 200 bytes。
+    // 對照組：聽寫的中文說明（138 bytes）放同樣 5 個詞會被擠掉至少一個——這就是實測發現的問題。
+    static func testAllBossVocabularyTermsFitMeetingPrompt() {
+        let suite = "MeetingPrompt-" + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = MacVocabularyStore(defaults: defaults)
+        let terms = ["Grokbot", "yui", "Stack", "claudecode", "DeepseekHarness"]
+        for term in terms { _ = try? store.add(term: term) }
+        expect(store.entries.count == 5, "5 terms stored")
+
+        let meeting = store.buildPrompt(baseInstruction: MeetingGroqTranscriber.basePrompt(for: .traditionalChinese))
+        expect(meeting.includedEntryIDs.count == 5, "all 5 terms included, got \(meeting.includedEntryIDs.count)")
+        for term in terms { expect(meeting.text.contains(term), "\(term) in meeting prompt") }
+        expect(meeting.text.utf8.count <= MacVocabularyStore.maximumPromptUTF8ByteCount, "within 200 bytes")
+
+        let dictation = store.buildPrompt(baseInstruction: LanguageOption.traditionalChinese.transcriptionPrompt)
+        expect(dictation.includedEntryIDs.count < 5, "control: dictation base still drops a term")
+        expect(LanguageOption.traditionalChinese.transcriptionPrompt.utf8.count == 138, "dictation prompt untouched")
     }
 
     // 背景完成後必須回到 main；請求內容要是 verbose_json＋詞庫 prompt。

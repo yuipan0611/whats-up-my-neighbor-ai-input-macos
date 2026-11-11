@@ -31,6 +31,16 @@ private final class PendingMeetingRequest: DictationCancellable {
 /// 會議專用的 Groq 辨識：用 `.verboseWithWords` 拿 segment 時間，其餘沿用
 /// `GroqTranscriptionClient`（逾時、模型、temperature 都不改）。
 struct MeetingGroqTranscriber: MeetingTranscribing {
+    /// 會議用的基本說明。聽寫的中文說明有 138 bytes，加上詞庫 200 bytes 的上限，
+    /// 只放得下約 4 個詞；會議改用短版（約 60 bytes），讓詞庫有 140 bytes 可用。
+    /// 其他語言沿用聽寫的說明（本來就短）。聽寫的提示詞不動。
+    static func basePrompt(for language: LanguageOption) -> String {
+        switch language {
+        case .traditionalChinese: return "繁體中文口述，台灣字形與自然標點，中英混用。"
+        default: return language.transcriptionPrompt
+        }
+    }
+
     let readAPIKey: () -> String?
     /// 在主執行緒呼叫（詞庫學習資料只能在主執行緒讀）。
     let makePrompt: (LanguageSettings) -> String
