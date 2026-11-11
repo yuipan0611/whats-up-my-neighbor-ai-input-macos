@@ -190,10 +190,15 @@ struct DiarizationOwnerRecord: Codable, Equatable {
     let createdAt: Double
 }
 
-/// 會議資料夾裡的 `diarization.owner`：辨識工作開始（或排進佇列）時由該實例建立，記錄 pid、行程啟動時間、
-/// 實例 UUID，並對檔案持有 `flock(LOCK_EX)` 直到工作結束。行程死掉（含當機）時系統自動放鎖。
-/// 啟動掃描只有在「拿得到鎖、而且記錄的 pid 已經不存在」時才會把狀態標成 `interrupted`。
+/// 辨識工作的擁有權，分成兩個檔案（都在會議資料夾裡）：
+/// - `diarization.lock`：**固定存在、永遠不刪**，只用來 `flock(LOCK_EX)`。鎖的 inode 不變，所以不會出現
+///   「有人 open 了舊檔、鎖到被 unlink 的 inode，同時新的 acquire 鎖住新檔」造成兩個持鎖者的競態。
+/// - `diarization.owner`：擁有者資訊（pid、行程啟動時間、實例 UUID），只在持鎖狀態下寫入與清除。
+/// 工作開始（或排進佇列）時由該實例取得鎖並寫 owner，到終態才清掉 owner 並放鎖；行程死掉（含當機）時
+/// 系統自動放鎖，owner 留著。啟動掃描只有在「拿得到鎖、owner 可讀、而且記錄的 pid 已經不存在」時才標 `interrupted`。
+/// 任何清理流程（`SafeFileRemoval`、`deleteAudio`、掃描）都不刪 `diarization.lock`。
 final class DiarizationOwnerLock {
+    static let lockFilename = "diarization.lock"
     static let filename = "diarization.owner"
 
     let directory: URL
@@ -204,41 +209,59 @@ final class DiarizationOwnerLock {
         self.fd = fd
     }
 
-    private static func path(_ directory: URL) -> String { directory.appendingPathComponent(filename).path }
+    private static func lockPath(_ directory: URL) -> String { directory.appendingPathComponent(lockFilename).path }
+    private static func ownerURL(_ directory: URL) -> URL { directory.appendingPathComponent(filename) }
 
-    /// 建立擁有者檔並持鎖。別的行程持鎖（同一場會議已有人在處理）或建不出來時回傳 nil。
-    static func acquire(in directory: URL, instance: String,
-                        pid: Int32 = getpid(), now: Date = Date()) -> DiarizationOwnerLock? {
-        let descriptor = open(path(directory), O_RDWR | O_CREAT | O_NOFOLLOW, 0o600)
-        guard descriptor >= 0 else { return nil }
-        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { close(descriptor); return nil }
-        let record = DiarizationOwnerRecord(v: 1, pid: pid, processStart: ProcessIdentity.startTime(pid: pid),
-                                            instance: instance, createdAt: now.timeIntervalSince1970)
-        if let data = try? JSONEncoder().encode(record) {
-            ftruncate(descriptor, 0)
-            _ = data.withUnsafeBytes { pwrite(descriptor, $0.baseAddress, data.count, 0) }
+    /// 開啟（`create` 時不存在就建立）鎖檔並取得 `flock`，取得後用 `fstat(fd)` 與 `stat(path)` 比對 inode，
+    /// 不一致（檔案在中間被換掉）就關掉重試。有人持鎖回傳 nil。
+    private static func lockedDescriptor(in directory: URL, create: Bool) -> Int32? {
+        for _ in 0..<5 {
+            let flags = O_RDWR | O_NOFOLLOW | (create ? O_CREAT : 0)
+            let descriptor = open(lockPath(directory), flags, 0o600)
+            guard descriptor >= 0 else { return nil }
+            guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { close(descriptor); return nil }
+            var opened = stat(), current = stat()
+            if fstat(descriptor, &opened) == 0, stat(lockPath(directory), &current) == 0,
+               opened.st_dev == current.st_dev, opened.st_ino == current.st_ino {
+                return descriptor
+            }
+            close(descriptor)   // 鎖到的不是路徑現在指的那個檔案：重試
         }
-        return DiarizationOwnerLock(directory: directory, fd: descriptor)
+        return nil
     }
 
-    /// 啟動掃描用：只有在擁有者檔存在、記錄可讀、拿得到鎖、而且擁有者行程已經不在時，回傳（持有鎖的）物件。
-    static func claimIfAbandoned(in directory: URL) -> DiarizationOwnerLock? {
-        let descriptor = open(path(directory), O_RDWR | O_NOFOLLOW)
-        guard descriptor >= 0 else { return nil }
-        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { close(descriptor); return nil }   // 有人持鎖 = 還活著
-        let data = (try? Data(contentsOf: directory.appendingPathComponent(filename))) ?? Data()
-        guard let record = try? JSONDecoder().decode(DiarizationOwnerRecord.self, from: data),
-              !ProcessIdentity.isSameProcessAlive(pid: record.pid, recordedStart: record.processStart) else {
-            close(descriptor)
+    /// 取得鎖並寫 owner。別的行程持鎖（同一場會議已有人在處理）或建不出來時回傳 nil。
+    static func acquire(in directory: URL, instance: String,
+                        pid: Int32 = getpid(), now: Date = Date()) -> DiarizationOwnerLock? {
+        guard let descriptor = lockedDescriptor(in: directory, create: true) else { return nil }
+        let record = DiarizationOwnerRecord(v: 1, pid: pid, processStart: ProcessIdentity.startTime(pid: pid),
+                                            instance: instance, createdAt: now.timeIntervalSince1970)
+        guard let data = try? JSONEncoder().encode(record),
+              (try? data.write(to: ownerURL(directory), options: .atomic)) != nil else {
+            flock(descriptor, LOCK_UN); close(descriptor)
             return nil
         }
         return DiarizationOwnerLock(directory: directory, fd: descriptor)
     }
 
-    /// 放鎖。`deleteFile`：工作到終態時刪掉擁有者檔；佇列被丟掉時保留（記錄的 pid 之後會死，下次啟動掃描才能標成 interrupted）。
+    /// 啟動掃描用：鎖檔存在、拿得到鎖、owner 記錄可讀、而且擁有者行程已經不在時，回傳（持有鎖的）物件。
+    /// 沒有鎖檔（從來沒有人處理過）、有人持鎖、owner 缺失或壞掉、擁有者還活著，一律回傳 nil。
+    static func claimIfAbandoned(in directory: URL) -> DiarizationOwnerLock? {
+        guard let descriptor = lockedDescriptor(in: directory, create: false) else { return nil }
+        let data = (try? Data(contentsOf: ownerURL(directory))) ?? Data()
+        guard let record = try? JSONDecoder().decode(DiarizationOwnerRecord.self, from: data),
+              !ProcessIdentity.isSameProcessAlive(pid: record.pid, recordedStart: record.processStart) else {
+            flock(descriptor, LOCK_UN); close(descriptor)
+            return nil
+        }
+        return DiarizationOwnerLock(directory: directory, fd: descriptor)
+    }
+
+    /// 放鎖。`deleteFile`：工作到終態時清掉 owner；佇列被丟掉時保留（記錄的 pid 之後會死，
+    /// 下次啟動掃描才能把它們標成 interrupted）。**鎖檔本身永遠不刪。** owner 的清除在持鎖時進行。
     func release(deleteFile: Bool) {
         guard fd >= 0 else { return }
-        if deleteFile { unlink(Self.path(directory)) }   // 先刪檔再放鎖，掃描不會看到「無鎖但檔案還在」的空窗
+        if deleteFile { unlink(Self.ownerURL(directory).path) }
         flock(fd, LOCK_UN)
         close(fd)
         fd = -1
