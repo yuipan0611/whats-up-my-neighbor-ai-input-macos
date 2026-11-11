@@ -80,7 +80,7 @@ private final class Fixture {
     var statuses: [MeetingStatus] = []
     let coordinator: MeetingCoordinator
 
-    init(retainAudio: Bool = false) {
+    init(retainAudio: Bool = false, vocabularyTerms: @escaping () -> [String] = { [] }) {
         directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MeetingTests-\(UUID().uuidString)", isDirectory: true)
         store = MeetingStore(root: directory, timeZone: TimeZone(identifier: "UTC")!)
@@ -92,6 +92,7 @@ private final class Fixture {
         coordinator = MeetingCoordinator(
             recorder: recorder, transcriber: transcriber, store: store,
             retainAudio: { retainAudio },
+            vocabularyTerms: vocabularyTerms,
             now: { Date(timeIntervalSince1970: 1_800_000_000) },
             uptime: { clock() },
             schedule: { delay, action in schedule(delay, action) })
@@ -146,7 +147,8 @@ enum MeetingTests {
         testCannotStartWhileRecorderBusyOrActive()
         testRetainAudioKeepsChunksAndWritesManifest()
         testDefaultNeverWritesManifestOrKeepsSuccessfulChunks()
-        print("Meeting tests passed (21 scenarios)")
+        testTranscriptGoesThroughVerbatimPostProcessing()
+        print("Meeting tests passed (22 scenarios)")
     }
 
     // MARK: segments.jsonl
@@ -452,6 +454,38 @@ enum MeetingTests {
     }
 
     // 3 段正常切段；第 2 段辨識失敗，第 3 段照常寫入；時間軸包含切段縫隙。
+    // 會議逐字稿要經過與聽寫相同的 TextPostProcessor（純逐字）：簡轉繁、全形標點、詞庫大小寫；
+    // 但不能刪語助詞，也不能把中文數字改成阿拉伯數字。
+    static func testTranscriptGoesThroughVerbatimPostProcessing() {
+        let f = Fixture(vocabularyTerms: { ["Grokbot", "DeepseekHarness"] })
+        _ = f.coordinator.start(deviceUID: "mic", language: .default)
+        let c1 = f.recorder.starts[0]
+        f.recorder.started(c1)
+        f.uptime = 10
+        _ = f.coordinator.stop()
+        f.recorder.finish(c1)
+        f.transcriber.complete(0, .success(result([
+            (0, "大家好,今天开会,软件已经好了"),
+            (3, "grokbot 說 deepseekharness 嗯，然後三個人")
+        ])))
+        let text = f.transcript
+        expect(text.contains("[00:00:00] 大家好，今天開會，軟件已經好了"), "simplified + halfwidth comma fixed: \(text)")
+        expect(text.contains("[00:00:03] Grokbot 說 DeepseekHarness 嗯，然後三個人"),
+               "vocabulary casing applied, fillers and numerals untouched: \(text)")
+        expect(!text.contains("开") && !text.contains("大家好,"), "no raw segment text leaks")
+        // segments.jsonl：text 與 transcript.md 同一份處理後文字；words 保持 Groq 原樣（不簡轉繁、不改大小寫）。
+        let value = TranscriptionResult(
+            text: "x", segments: [TranscriptionSegment(id: 0, start: 0, end: 2, text: "开会,grokbot", avgLogprob: nil, noSpeechProb: nil)],
+            words: [TranscriptionWord(text: "开会", start: 0, end: 0.5)], language: "zh", duration: 2)
+        let records = MeetingSegments.records(chunk: 1, offset: 0, result: value,
+                                              clean: { TextPostProcessor.process($0, mode: .verbatim, vocabulary: ["Grokbot"]) })
+        expect(records.count == 1 && records[0].text == "開會，Grokbot", "sidecar text cleaned: \(records)")
+        expect(records[0].words == [.init(w: "开会", s: 0, e: 0.5)], "words untouched: \(String(describing: records[0].words))")
+        let lines = segmentLines(f)
+        expect(lines.count == 2 && lines[0].contains("\"text\":\"大家好，今天開會，軟件已經好了\""),
+               "coordinator writes cleaned text to segments.jsonl: \(lines)")
+    }
+
     static func testThreeChunksWithFailureInTheMiddle() {
         let f = Fixture()
         expect(f.coordinator.start(deviceUID: "mic", language: .default), "start")

@@ -14,6 +14,8 @@ swiftc -swift-version 5 \
   "$ROOT/Sources/GroqVoiceInput/SafeFileRemoval.swift" \
   "$ROOT/Sources/GroqVoiceInput/MeetingCoordinator.swift" \
   "$ROOT/Sources/GroqVoiceInput/MeetingGroqTranscriber.swift" \
+  "$ROOT/Sources/GroqVoiceInput/VocabularySyncModels.swift" \
+  "$ROOT/Sources/GroqVoiceInput/MacVocabularyStore.swift" \
   "$ROOT/Tests/MeetingGroqTranscriberTests.swift" \
   -o "$OUTPUT"
 exec "$OUTPUT"
