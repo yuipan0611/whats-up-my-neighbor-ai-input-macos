@@ -80,7 +80,7 @@ private final class Fixture {
     var statuses: [MeetingStatus] = []
     let coordinator: MeetingCoordinator
 
-    init() {
+    init(vocabularyTerms: @escaping () -> [String] = { [] }) {
         directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MeetingTests-\(UUID().uuidString)", isDirectory: true)
         store = MeetingStore(root: directory, timeZone: TimeZone(identifier: "UTC")!)
@@ -91,6 +91,7 @@ private final class Fixture {
         var schedule: (TimeInterval, @escaping () -> Void) -> Void = { _, _ in }
         coordinator = MeetingCoordinator(
             recorder: recorder, transcriber: transcriber, store: store,
+            vocabularyTerms: vocabularyTerms,
             now: { Date(timeIntervalSince1970: 1_800_000_000) },
             uptime: { clock() },
             schedule: { delay, action in schedule(delay, action) })
@@ -139,7 +140,8 @@ enum MeetingTests {
         testStaleRecorderCallbacksAreIgnored()
         testShutdownMarksUnfinishedChunks()
         testCannotStartWhileRecorderBusyOrActive()
-        print("Meeting tests passed (15 scenarios)")
+        testTranscriptGoesThroughVerbatimPostProcessing()
+        print("Meeting tests passed (16 scenarios)")
     }
 
     static func testTimestampFormatting() {
@@ -237,6 +239,27 @@ enum MeetingTests {
     }
 
     // 3 段正常切段；第 2 段辨識失敗，第 3 段照常寫入；時間軸包含切段縫隙。
+    // 會議逐字稿要經過與聽寫相同的 TextPostProcessor（純逐字）：簡轉繁、全形標點、詞庫大小寫；
+    // 但不能刪語助詞，也不能把中文數字改成阿拉伯數字。
+    static func testTranscriptGoesThroughVerbatimPostProcessing() {
+        let f = Fixture(vocabularyTerms: { ["Grokbot", "DeepseekHarness"] })
+        _ = f.coordinator.start(deviceUID: "mic", language: .default)
+        let c1 = f.recorder.starts[0]
+        f.recorder.started(c1)
+        f.uptime = 10
+        _ = f.coordinator.stop()
+        f.recorder.finish(c1)
+        f.transcriber.complete(0, .success(result([
+            (0, "大家好,今天开会,软件已经好了"),
+            (3, "grokbot 說 deepseekharness 嗯，然後三個人")
+        ])))
+        let text = f.transcript
+        expect(text.contains("[00:00:00] 大家好，今天開會，軟件已經好了"), "simplified + halfwidth comma fixed: \(text)")
+        expect(text.contains("[00:00:03] Grokbot 說 DeepseekHarness 嗯，然後三個人"),
+               "vocabulary casing applied, fillers and numerals untouched: \(text)")
+        expect(!text.contains("开") && !text.contains("大家好,"), "no raw segment text leaks")
+    }
+
     static func testThreeChunksWithFailureInTheMiddle() {
         let f = Fixture()
         expect(f.coordinator.start(deviceUID: "mic", language: .default), "start")
