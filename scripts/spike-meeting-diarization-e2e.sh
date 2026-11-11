@@ -36,6 +36,7 @@ swiftc -swift-version 5 \
   "$ROOT/Sources/GroqVoiceInput/MeetingStore.swift" \
   "$ROOT/Sources/GroqVoiceInput/SpeakerAligner.swift" \
   "$ROOT/Sources/GroqVoiceInput/MeetingDiarizationFiles.swift" \
+  "$ROOT/Sources/GroqVoiceInput/SafeFileRemoval.swift" \
   "$ROOT/Sources/GroqVoiceInput/MeetingDiarizationCoordinator.swift" \
   "$ROOT/Sources/GroqVoiceInput/MeetingDiarizerProcess.swift" \
   "$ROOT/Sources/GroqVoiceInput/MeetingAudio.swift" \

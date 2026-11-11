@@ -102,8 +102,13 @@ struct MeetingDiarizerAssets {
     }
 
     /// 磁碟上有沒有任何已安裝的模型檔（不看大小；「刪除模型」選單用）。
+    /// 只算「一般檔案」且在 models 資料夾底下：同名的資料夾、symlink、外部路徑都不算。
     var hasInstalledFiles: Bool {
-        models.contains { fileManager.fileExists(atPath: installedURL(for: $0).path) }
+        models.contains { isOwnedRegularFile(installedURL(for: $0)) }
+    }
+
+    private func isOwnedRegularFile(_ url: URL) -> Bool {
+        SafeFileRemoval.isConfined(url, within: modelsDirectory) && SafeFileRemoval.kind(of: url) == .regularFile
     }
 
     /// 「刪除說話者辨識模型」只有在功能關閉、沒有辨識進行中、而且確實有檔案時才能用。
@@ -111,28 +116,28 @@ struct MeetingDiarizerAssets {
         !featureEnabled && !diarizationBusy && hasInstalledFiles
     }
 
-    /// 刪除已安裝的模型檔與下載中斷留下的 `.download-*` 暫存資料夾。只刪這份清單裡的檔案與暫存，
-    /// 不遞迴刪整個 models 資料夾（裡面若有別的東西不動）；子資料夾與 models 資料夾本身在空了之後才移除。
-    /// 回傳刪掉的模型檔數。
+    /// 刪除已安裝的模型檔與下載中斷留下的暫存資料夾。**只刪自己的東西**（見 `SafeFileRemoval`）：
+    /// 模型檔必須是 models 資料夾底下的一般檔案（同名資料夾、symlink、經過 symlink 的路徑都跳過）；
+    /// 暫存只刪符合 `.download-<UUID>` 命名且內容都認得的；資料夾只在空了之後用 rmdir 移除，絕不遞迴。
+    /// models 資料夾本身是 symlink 時什麼都不刪。回傳刪掉的模型檔數。
     @discardableResult
     func deleteInstalledModels() -> Int {
+        guard SafeFileRemoval.kind(of: modelsDirectory) == .directory else { return 0 }
         var removed = 0
         for model in models {
             let url = installedURL(for: model)
-            if (try? fileManager.removeItem(at: url)) != nil { removed += 1 }
-            removeIfEmpty(url.deletingLastPathComponent())
+            if SafeFileRemoval.removeRegularFile(url, within: modelsDirectory) { removed += 1 }
+            let parent = url.deletingLastPathComponent()
+            if parent.standardizedFileURL != modelsDirectory.standardizedFileURL {
+                SafeFileRemoval.removeEmptyDirectory(parent, within: modelsDirectory)
+            }
         }
         let names = (try? fileManager.contentsOfDirectory(atPath: modelsDirectory.path)) ?? []
-        for name in names where name.hasPrefix(".download-") {
-            try? fileManager.removeItem(at: modelsDirectory.appendingPathComponent(name))
+        for name in names where SafeFileRemoval.isStagingName(name) {
+            SafeFileRemoval.removeOwnedStaging(modelsDirectory.appendingPathComponent(name), within: modelsDirectory)
         }
-        removeIfEmpty(modelsDirectory)
+        SafeFileRemoval.removeEmptyDirectory(modelsDirectory, within: nil)
         return removed
-    }
-
-    private func removeIfEmpty(_ directory: URL) {
-        guard let items = try? fileManager.contentsOfDirectory(atPath: directory.path), items.isEmpty else { return }
-        try? fileManager.removeItem(at: directory)
     }
 
     /// 還沒安裝的模型（下載器只會下載這些）。

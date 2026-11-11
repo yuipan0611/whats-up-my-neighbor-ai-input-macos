@@ -76,8 +76,13 @@ extension MeetingStore {
         return MeetingDiarizationState(rawValue: value) ?? .notApplicable
     }
 
-    /// 啟動掃描：frontmatter 停在 `pending`／`running` 的會議，代表上次 App 在辨識途中結束或當機，
-    /// 一律改成 `interrupted`（終態），音檔不動。回傳被改的逐字稿，由新到舊。
+    /// 啟動掃描：frontmatter 停在 `pending`／`running`，而且**確定沒有人還在處理**的會議，改成 `interrupted`
+    /// （終態），音檔不動。回傳被改的逐字稿，由新到舊。
+    ///
+    /// 「沒有人還在處理」的判斷（`DiarizationOwnerLock.claimIfAbandoned`）：會議資料夾裡有擁有者檔，
+    /// 我們拿得到它的 flock（沒有任何行程持鎖），而且記錄的 pid 已經不存在（或 pid 被別的行程重用）。
+    /// 沒有擁有者檔、檔案壞掉、持鎖中、擁有者還活著，一律不動——寧可讓狀態停著，也不能把別人還在跑的工作
+    /// 改成終態（會提早放行摘要、重試與刪音檔）。
     @discardableResult
     func markInterruptedDiarizations() -> [URL] {
         var changed: [URL] = []
@@ -85,9 +90,13 @@ extension MeetingStore {
             let url = directory.appendingPathComponent(Self.transcriptFilename)
             let state = diarizationState(for: url)
             guard state == .pending || state == .running else { continue }
+            guard let claim = DiarizationOwnerLock.claimIfAbandoned(in: directory) else { continue }
             if (try? setFrontmatter([("diarization", MeetingDiarizationState.interrupted.rawValue),
                                      ("diarization_reason", "app-exit")], transcriptURL: url)) != nil {
                 changed.append(url)
+                claim.release(deleteFile: true)
+            } else {
+                claim.release(deleteFile: false)
             }
         }
         return changed
@@ -115,10 +124,12 @@ extension MeetingStore {
     }
 
     /// 這場會議資料夾裡的段檔（`chunk-NNN.m4a`），依檔名排序。
+    /// 只算一般檔案：同名的資料夾或 symlink 不是音檔。
     func chunkFiles(in directory: URL) -> [URL] {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
         return names.filter { $0.range(of: #"^chunk-\d{3,}\.m4a$"#, options: .regularExpression) != nil }
             .sorted().map { directory.appendingPathComponent($0) }
+            .filter { SafeFileRemoval.kind(of: $0) == .regularFile }
     }
 
     /// 寫 `manifest.json`（`meeting-diarizer --manifest` 的輸入）。只列檔案真的存在的段。
@@ -135,16 +146,105 @@ extension MeetingStore {
         try encoder.encode(manifest).write(to: directory.appendingPathComponent(Self.manifestFilename), options: .atomic)
     }
 
-    /// 刪除這場會議的音檔（段檔與 manifest）。只刪符合 `chunk-NNN.m4a` 命名的檔案與 `manifest.json`，
+    /// 刪除這場會議的音檔（段檔與 manifest）。只刪會議資料夾底下、符合 `chunk-NNN.m4a` 命名的**一般檔案**與
+    /// `manifest.json`；同名的資料夾、symlink、經過 symlink 的路徑一律不碰（見 `SafeFileRemoval`），
     /// 其他檔案（逐字稿、使用者放的東西）不動。回傳刪掉的檔案數。
     @discardableResult
     func deleteAudio(directory: URL) -> Int {
         var removed = 0
-        for url in chunkFiles(in: directory) where (try? FileManager.default.removeItem(at: url)) != nil { removed += 1 }
-        let manifest = directory.appendingPathComponent(Self.manifestFilename)
-        if (try? FileManager.default.removeItem(at: manifest)) != nil { removed += 1 }
+        for url in chunkFiles(in: directory) where SafeFileRemoval.removeRegularFile(url, within: directory) { removed += 1 }
+        if SafeFileRemoval.removeRegularFile(directory.appendingPathComponent(Self.manifestFilename), within: directory) { removed += 1 }
         return removed
     }
+}
+
+// MARK: 辨識工作的擁有者（跨實例安全）
+
+/// 行程身分：用 pid ＋ 啟動時間判斷「那個行程還在嗎」（pid 會被重用）。
+enum ProcessIdentity {
+    /// 行程啟動時間（秒）。查不到回傳 nil。
+    static func startTime(pid: Int32) -> Double? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        guard sysctl(&mib, UInt32(mib.count), &info, &size, nil, 0) == 0, size > 0 else { return nil }
+        let t = info.kp_proc.p_un.__p_starttime
+        return Double(t.tv_sec) + Double(t.tv_usec) / 1_000_000
+    }
+
+    /// pid 存在（`kill(pid, 0)` 成功或 EPERM），而且啟動時間與記錄相符（沒被別的行程重用）。
+    static func isSameProcessAlive(pid: Int32, recordedStart: Double?) -> Bool {
+        guard pid > 0 else { return false }
+        if kill(pid, 0) != 0 && errno == ESRCH { return false }
+        if let recordedStart, let now = startTime(pid: pid), abs(now - recordedStart) > 1 { return false }
+        return true
+    }
+}
+
+struct DiarizationOwnerRecord: Codable, Equatable {
+    let v: Int
+    let pid: Int32
+    let processStart: Double?
+    /// 這個 App 實例的 UUID（除錯用）。
+    let instance: String
+    let createdAt: Double
+}
+
+/// 會議資料夾裡的 `diarization.owner`：辨識工作開始（或排進佇列）時由該實例建立，記錄 pid、行程啟動時間、
+/// 實例 UUID，並對檔案持有 `flock(LOCK_EX)` 直到工作結束。行程死掉（含當機）時系統自動放鎖。
+/// 啟動掃描只有在「拿得到鎖、而且記錄的 pid 已經不存在」時才會把狀態標成 `interrupted`。
+final class DiarizationOwnerLock {
+    static let filename = "diarization.owner"
+
+    let directory: URL
+    private var fd: Int32
+
+    private init(directory: URL, fd: Int32) {
+        self.directory = directory
+        self.fd = fd
+    }
+
+    private static func path(_ directory: URL) -> String { directory.appendingPathComponent(filename).path }
+
+    /// 建立擁有者檔並持鎖。別的行程持鎖（同一場會議已有人在處理）或建不出來時回傳 nil。
+    static func acquire(in directory: URL, instance: String,
+                        pid: Int32 = getpid(), now: Date = Date()) -> DiarizationOwnerLock? {
+        let descriptor = open(path(directory), O_RDWR | O_CREAT | O_NOFOLLOW, 0o600)
+        guard descriptor >= 0 else { return nil }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { close(descriptor); return nil }
+        let record = DiarizationOwnerRecord(v: 1, pid: pid, processStart: ProcessIdentity.startTime(pid: pid),
+                                            instance: instance, createdAt: now.timeIntervalSince1970)
+        if let data = try? JSONEncoder().encode(record) {
+            ftruncate(descriptor, 0)
+            _ = data.withUnsafeBytes { pwrite(descriptor, $0.baseAddress, data.count, 0) }
+        }
+        return DiarizationOwnerLock(directory: directory, fd: descriptor)
+    }
+
+    /// 啟動掃描用：只有在擁有者檔存在、記錄可讀、拿得到鎖、而且擁有者行程已經不在時，回傳（持有鎖的）物件。
+    static func claimIfAbandoned(in directory: URL) -> DiarizationOwnerLock? {
+        let descriptor = open(path(directory), O_RDWR | O_NOFOLLOW)
+        guard descriptor >= 0 else { return nil }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { close(descriptor); return nil }   // 有人持鎖 = 還活著
+        let data = (try? Data(contentsOf: directory.appendingPathComponent(filename))) ?? Data()
+        guard let record = try? JSONDecoder().decode(DiarizationOwnerRecord.self, from: data),
+              !ProcessIdentity.isSameProcessAlive(pid: record.pid, recordedStart: record.processStart) else {
+            close(descriptor)
+            return nil
+        }
+        return DiarizationOwnerLock(directory: directory, fd: descriptor)
+    }
+
+    /// 放鎖。`deleteFile`：工作到終態時刪掉擁有者檔；佇列被丟掉時保留（記錄的 pid 之後會死，下次啟動掃描才能標成 interrupted）。
+    func release(deleteFile: Bool) {
+        guard fd >= 0 else { return }
+        if deleteFile { unlink(Self.path(directory)) }   // 先刪檔再放鎖，掃描不會看到「無鎖但檔案還在」的空窗
+        flock(fd, LOCK_UN)
+        close(fd)
+        fd = -1
+    }
+
+    deinit { release(deleteFile: false) }
 }
 
 /// `manifest.json` 的內容（與 Tools/MeetingDiarizer/MeetingManifest.swift 的 schema 相同：version 1）。

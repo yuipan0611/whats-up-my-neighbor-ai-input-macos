@@ -20,6 +20,7 @@ final class MeetingDiarizerDownloader: NSObject, URLSessionDataDelegate, @unchec
         case badArchive(model: String, detail: String)
         case installFailed(String)
         case insecureRedirect
+        case insecureURL(model: String)
         case alreadyRunning
         case cancelled
 
@@ -32,6 +33,7 @@ final class MeetingDiarizerDownloader: NSObject, URLSessionDataDelegate, @unchec
             case .badArchive(let model, let detail): return "「\(model)」的壓縮檔無法使用：\(detail)"
             case .installFailed(let message): return "無法安裝模型：\(message)"
             case .insecureRedirect: return "下載被導向非 https 的位置，已中止。"
+            case .insecureURL(let model): return "「\(model)」的下載網址不是 https，已中止。"
             case .alreadyRunning: return "已經在下載中。"
             case .cancelled: return "已取消下載。"
             }
@@ -150,6 +152,8 @@ final class MeetingDiarizerDownloader: NSObject, URLSessionDataDelegate, @unchec
     private func beginNextModel(_ run: Run) {
         guard !run.finished else { return }
         guard let model = run.models.first else { finish(run, failure: nil); return }
+        // 起始網址也必須是 https（轉址在 delegate 裡另外檢查）。
+        guard model.url.scheme?.lowercased() == "https" else { finish(run, failure: .insecureURL(model: model.name)); return }
         let partURL = run.staging.appendingPathComponent("download-\(run.models.count).part")
         do {
             fileManager.createFile(atPath: partURL.path, contents: nil)
@@ -234,7 +238,7 @@ final class MeetingDiarizerDownloader: NSObject, URLSessionDataDelegate, @unchec
         run.finished = true
         try? run.current?.handle.close()
         run.current = nil
-        try? fileManager.removeItem(at: run.staging)
+        SafeFileRemoval.removeOwnedStaging(run.staging, within: assets.modelsDirectory)
         run.session.invalidateAndCancel()
         self.run = nil
         let result: Result<Void, Failure> = failure.map { .failure($0) } ?? .success(())
@@ -251,8 +255,8 @@ final class MeetingDiarizerDownloader: NSObject, URLSessionDataDelegate, @unchec
 
     private func removeStaleStaging() {
         let names = (try? fileManager.contentsOfDirectory(atPath: assets.modelsDirectory.path)) ?? []
-        for name in names where name.hasPrefix(".download-") {
-            try? fileManager.removeItem(at: assets.modelsDirectory.appendingPathComponent(name))
+        for name in names where SafeFileRemoval.isStagingName(name) {
+            SafeFileRemoval.removeOwnedStaging(assets.modelsDirectory.appendingPathComponent(name), within: assets.modelsDirectory)
         }
     }
 
