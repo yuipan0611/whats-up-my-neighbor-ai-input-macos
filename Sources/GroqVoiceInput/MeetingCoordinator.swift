@@ -61,6 +61,7 @@ final class MeetingCoordinator {
     private let uptime: () -> TimeInterval
     private let schedule: (TimeInterval, @escaping () -> Void) -> Void
     private let chunkSeconds: TimeInterval
+    private let vocabularyTerms: () -> [String]
 
     private(set) var state: MeetingState = .idle
     private(set) var failedChunkCount = 0
@@ -90,6 +91,7 @@ final class MeetingCoordinator {
     init(
         recorder: DictationRecording, transcriber: MeetingTranscribing, store: MeetingStore,
         chunkSeconds: TimeInterval = MeetingCoordinator.defaultChunkSeconds,
+        vocabularyTerms: @escaping () -> [String] = { [] },
         now: @escaping () -> Date = Date.init,
         uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
         schedule: @escaping (TimeInterval, @escaping () -> Void) -> Void = { delay, action in
@@ -100,6 +102,7 @@ final class MeetingCoordinator {
         self.transcriber = transcriber
         self.store = store
         self.chunkSeconds = chunkSeconds
+        self.vocabularyTerms = vocabularyTerms
         self.now = now
         self.uptime = uptime
         self.schedule = schedule
@@ -291,7 +294,8 @@ final class MeetingCoordinator {
         case .success(let value):
             // 順序（設計文件附錄 A.2 規則 2）：先 segments.jsonl，再 transcript.md，最後才刪段檔。
             // 當機時旁路檔多一行比少一行好，逐字稿可以由它重新產生。
-            appendSidecar(MeetingSegments.records(chunk: chunk.index, offset: chunk.offset, result: value), session)
+            appendSidecar(MeetingSegments.records(chunk: chunk.index, offset: chunk.offset, result: value,
+                                                    clean: { [self] in clean($0) }), session)
             do {
                 try store.appendChunk(session, offset: chunk.offset, lines: lines(from: value, offset: chunk.offset))
                 try? FileManager.default.removeItem(at: chunk.url)
@@ -309,13 +313,23 @@ final class MeetingCoordinator {
         notify()
     }
 
+    /// 逐行寫入前，套用與聽寫相同的 `TextPostProcessor`，但固定用純逐字模式：
+    /// 簡轉繁、標點正規化、空白整理、詞庫大小寫修正；不刪語助詞（會議逐字稿要保留原話）。
+    /// 聽寫的「中文數字轉阿拉伯」是使用者設定，會議不套用，避免改動數字與日期。
+    private func clean(_ raw: String) -> String {
+        TextPostProcessor.process(
+            raw, mode: .verbatim, vocabulary: vocabularyTerms(),
+            applyChineseRules: language.primary.usesChineseTextRules,
+            convertChineseNumerals: false)
+    }
+
     private func lines(from result: TranscriptionResult, offset: TimeInterval) -> [MeetingLine] {
         let fromSegments = result.segments.compactMap { segment -> MeetingLine? in
-            let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = clean(segment.text)
             return text.isEmpty ? nil : MeetingLine(offset: offset + segment.start, text: text)
         }
         if !fromSegments.isEmpty { return fromSegments }
-        let whole = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let whole = clean(result.text)
         return whole.isEmpty ? [] : [MeetingLine(offset: offset, text: whole)]
     }
 
@@ -381,11 +395,14 @@ final class MeetingCoordinator {
 /// 不寫任何行；`chunk` 是段檔名 chunk-NNN.m4a 的 NNN；時間 = 段 offset ＋ 段內時間，四捨五入到毫秒。
 /// 字級時間（`words`）只在 Groq 真的回傳時才附上，`w` 原樣保留（包含 Whisper 的前導空白）。
 enum MeetingSegments {
-    static func records(chunk: Int, offset: TimeInterval, result: TranscriptionResult) -> [MeetingSegmentRecord] {
+    /// `clean`：和 transcript.md 同一個文字處理（簡轉繁、標點、詞庫）。`text` 存處理後的版本，
+    /// 讓人讀的兩份檔案一致；`words` 是 Groq 原始字級對齊資料，保持原樣。
+    static func records(chunk: Int, offset: TimeInterval, result: TranscriptionResult,
+                        clean: (String) -> String = { $0 }) -> [MeetingSegmentRecord] {
         let segments = result.segments
         var records: [MeetingSegmentRecord] = []
         for (position, segment) in segments.enumerated() {
-            let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = clean(segment.text.trimmingCharacters(in: .whitespacesAndNewlines))
             guard !text.isEmpty else { continue }
             let start = offset + segment.start
             records.append(MeetingSegmentRecord(
@@ -394,7 +411,7 @@ enum MeetingSegments {
         }
         if !records.isEmpty { return records }
         // 沒有 segment 但有全文：和逐字稿一樣當成單一一行。
-        let whole = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let whole = clean(result.text.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !whole.isEmpty else { return [] }
         let end = offset + max(0, result.duration ?? 0)
         return [MeetingSegmentRecord(v: 1, chunk: chunk, start: round3(offset), end: round3(end),
