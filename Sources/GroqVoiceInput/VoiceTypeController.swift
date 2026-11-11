@@ -34,6 +34,8 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     private var meetingTimer: Timer?
     /// 第一次需要時才建立；功能關閉時永遠是 nil。
     private var meetingDiarizationCoordinator: MeetingDiarizationCoordinator?
+    /// App 正在結束：不要再因為終態回呼啟動摘要、讀鑰匙圈或發通知。
+    private var isTerminating = false
     /// 第一次使用說話者辨識時的下載同意與進度視窗（Tom）。
     private lazy var diarizerDownload = MeetingDiarizerDownloadController()
     private let summaryTracker = MeetingSummaryTracker()
@@ -61,7 +63,9 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     }()
     private lazy var appUpdater = AppUpdateController { [weak self] in
         guard let self else { return true }
-        return self.dictation.state != .idle || self.micRecorder.isBusy || self.meeting.state != .idle || NSApp.modalWindow != nil || self.summaryTracker.isBusy
+        return self.dictation.state != .idle || self.micRecorder.isBusy || self.meeting.state != .idle || NSApp.modalWindow != nil
+            || (self.meetingDiarizationCoordinator?.isBusy ?? false) || self.diarizerDownload.isDownloading   // 更新重啟會中斷說話者辨識與模型下載
+            || self.summaryTracker.isBusy
     }
     private let vocabularyStore = MacVocabularyStore()
     private lazy var vocabularyLearning = VocabularyLearningStore(vocabulary: vocabularyStore)
@@ -223,7 +227,8 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         correctionMonitor.stop()
         dictation.shutdown()
         meeting.shutdown()
-        meetingDiarizationCoordinator?.cancel()
+        isTerminating = true
+        meetingDiarizationCoordinator?.cancel(notify: false)
         meetingTimer?.invalidate()
         summaryTracker.cancelAll()
         if let clipboardPermissionObserver {
@@ -1283,9 +1288,12 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             askSpeakerCount: { [weak self] last, completion in completion(self?.askSpeakerCount(last: last)) },
             loadLastChoice: { [weak self] in SpeakerCountChoice(stored: self?.settings.meetingDiarizationSpeakerCount) },
             saveLastChoice: { [weak self] in self?.settings.meetingDiarizationSpeakerCount = $0.stored })
-        coordinator.onPhaseChange = { [weak self] _ in self?.renderDiarizationStatus() }
+        coordinator.onPhaseChange = { [weak self] _ in
+            guard let self, !self.isTerminating else { return }
+            self.renderDiarizationStatus()
+        }
         coordinator.onFinished = { [weak self] transcriptURL, state in
-            guard let self else { return }
+            guard let self, !self.isTerminating else { return }
             self.renderDiarizationStatus()
             if self.settings.loadAutoMeetingSummary() && state.isTerminal {
                 self.requestMeetingSummary(for: transcriptURL, manualTrigger: false)
@@ -1329,6 +1337,8 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     /// 啟動時：上次停在 pending／running 的會議改成 interrupted（音檔保留），並把選單接回來。
     /// 沒有任何這類會議時什麼都不建立（功能沒用過就和以前完全一樣）。
     private func recoverMeetingDiarizationAfterLaunch() {
+        // 功能關閉時不掃描（預設關閉的使用者完全不會碰到這段）。開啟時也只會改「擁有者行程已經不在」的會議。
+        guard settings.meetingDiarizationEnabled else { return }
         meetingStore.markInterruptedDiarizations()
         guard meetingStore.latestRetryableDiarization() != nil else { return }
         diarizationCoordinator().restoreFromDisk()

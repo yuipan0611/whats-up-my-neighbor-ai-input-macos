@@ -179,7 +179,8 @@ enum MeetingDiarizerDownloaderTests {
         try testCancelStopsTheRequestAndCleansUp()
         try testBadArchiveAndWrongSizeAreRejected()
         try testExistingWrongSizedFileIsReplacedAtomically()
-        print("Meeting diarizer downloader tests passed (8 scenarios, fake HTTP, no real network)")
+        try testPlainHttpInitialUrlIsRejectedWithoutAnyRequest()
+        print("Meeting diarizer downloader tests passed (9 scenarios, fake HTTP, no real network)")
     }
 
     static func testDownloadsVerifiesAndInstallsBothModels() throws {
@@ -322,6 +323,25 @@ enum MeetingDiarizerDownloaderTests {
         let hashOutcome = run(MeetingDiarizerDownloader(assets: hashAssets, configuration: configuration))
         expect(isFailure(hashOutcome.result, .checksumMismatch(model: "fake-segmentation")), "extracted model hash is verified too: \(String(describing: hashOutcome.result))")
         expect(!hashAssets.isInstalled(wrongHash), "not installed")
+    }
+
+    // 起始網址不是 https：不發出任何請求（轉址另外檢查）。
+    static func testPlainHttpInitialUrlIsRejectedWithoutAnyRequest() throws {
+        FakeServer.reset()
+        let world = try makeWorld()
+        defer { try? FileManager.default.removeItem(at: world.root) }
+        var insecure = world.models[0]
+        insecure = MeetingDiarizerModel(
+            name: insecure.name, url: URL(string: "http://github.com/fake/releases/seg.tar.bz2")!, source: insecure.source,
+            downloadSHA256: insecure.downloadSHA256, downloadBytes: insecure.downloadBytes, installPath: insecure.installPath,
+            installedSHA256: insecure.installedSHA256, installedBytes: insecure.installedBytes, licenseNote: nil)
+        let assets = MeetingDiarizerAssets(modelsDirectory: world.assets.modelsDirectory, models: [insecure, world.models[1]])
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FakeServer.self]
+        serveAll(world)
+        let outcome = run(MeetingDiarizerDownloader(assets: assets, configuration: configuration))
+        expect(isFailure(outcome.result, .insecureURL(model: "fake-segmentation")), "http start URL rejected: \(String(describing: outcome.result))")
+        expect(!assets.isInstalled(insecure) && leftovers(world).isEmpty, "nothing installed, no leftovers")
     }
 
     // 目的地已經有一個大小不對的舊檔：驗證通過後原子替換。

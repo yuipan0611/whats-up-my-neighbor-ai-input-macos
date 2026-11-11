@@ -144,7 +144,19 @@ private final class Fixture {
 
 @main
 enum MeetingDiarizationTests {
+    /// 假的 pid：macOS 的 pid 上限是 99999，這個一定不存在（`kill(pid, 0)` 回 ESRCH）。
+    static let deadPID: Int32 = 1_999_999
+
     static func main() throws {
+        // 跨行程測試用：另一個行程持有擁有者鎖，直到被殺掉。
+        if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--hold-owner" {
+            guard let lock = DiarizationOwnerLock.acquire(in: URL(fileURLWithPath: CommandLine.arguments[2]), instance: "child") else {
+                print("FAILED-TO-LOCK"); exit(3)
+            }
+            print("READY"); fflush(stdout)
+            withExtendedLifetime(lock) { sleep(60) }
+            exit(0)
+        }
         testFrontmatterHelpers()
         testDiarizationStateReading()
         testReconcile()
@@ -164,9 +176,21 @@ enum MeetingDiarizationTests {
         testRetryAfterFailureAndInterruption()
         testRerunKeepsOriginalPlainBackup()
         testDeleteInstalledModels()
+        testModelDeletionNeverLeavesTheModelsFolder()
+        testAudioDeletionOnlyRemovesOwnedRegularFiles()
+        testStartupScanRespectsOwnership()
+        testStartupScanAcrossProcesses()
+        testCoordinatorHoldsAndReleasesTheOwnerLock()
+        testQuitCancelIsSilent()
         testDialogTexts()
         testRealProcessRunner()
-        print("MeetingDiarization tests passed (21 scenarios)")
+        print("MeetingDiarization tests passed (27 scenarios)")
+    }
+
+    /// 在會議資料夾寫一個擁有者檔但不持鎖（模擬「擁有者行程已經結束」或「別的行程」）。
+    static func plantOwner(in directory: URL, pid: Int32, start: Double? = nil) {
+        let record = DiarizationOwnerRecord(v: 1, pid: pid, processStart: start, instance: "test", createdAt: 0)
+        try! JSONEncoder().encode(record).write(to: directory.appendingPathComponent(DiarizationOwnerLock.filename))
     }
 
     // MARK: 純函式
@@ -441,6 +465,8 @@ enum MeetingDiarizationTests {
         expect(f.runner.calls.count == 1 && f.asked.count == 1, "the queued meeting never starts after cancel")
         expect(f.store.diarizationState(for: f.transcriptURL) == .cancelled, "running one cancelled")
         expect(f.store.diarizationState(for: second.transcriptURL) == .pending, "queued one left pending")
+        expect(f.store.markInterruptedDiarizations().isEmpty, "this process is still alive and owns the queued job's record: not touched")
+        plantOwner(in: second.directory, pid: deadPID)   // 模擬「上次的 App 已經結束」
         let changed = f.store.markInterruptedDiarizations()
         expect(changed == [second.transcriptURL], "next launch: only the pending one is marked: \(changed)")
         expect(f.store.diarizationState(for: second.transcriptURL) == .interrupted
@@ -456,6 +482,7 @@ enum MeetingDiarizationTests {
         try! f.store.setFrontmatter([("diarization", "running")], transcriptURL: f.transcriptURL)
         try! f.store.setFrontmatter([("diarization", "done")], transcriptURL: b.transcriptURL)
         let c = f.addMeeting()
+        plantOwner(in: f.directory, pid: deadPID)
         expect(f.store.markInterruptedDiarizations() == [f.transcriptURL], "only running/pending are changed")
         expect(f.store.diarizationState(for: f.transcriptURL) == .interrupted, "running → interrupted")
         expect(MeetingFrontmatter.value("diarization_reason", in: f.transcript) == "app-exit", "reason recorded")
@@ -527,15 +554,16 @@ enum MeetingDiarizationTests {
             try! FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try! Data([1]).write(to: url)
         }
-        try! FileManager.default.createDirectory(at: dir.appendingPathComponent(".download-123"), withIntermediateDirectories: true)
-        try! Data([1]).write(to: dir.appendingPathComponent(".download-123/x.part"))
+        let staleStaging = dir.appendingPathComponent(".download-\(UUID().uuidString)")
+        try! FileManager.default.createDirectory(at: staleStaging, withIntermediateDirectories: true)
+        try! Data([1]).write(to: staleStaging.appendingPathComponent("download-1.part"))
         try! Data("mine".utf8).write(to: dir.appendingPathComponent("keep.txt"))
         expect(assets.hasInstalledFiles, "installed files are seen")
         expect(!assets.canDeleteModels(featureEnabled: true, diarizationBusy: false), "cannot delete while the feature is on")
         expect(!assets.canDeleteModels(featureEnabled: false, diarizationBusy: true), "cannot delete while diarization runs")
         expect(assets.canDeleteModels(featureEnabled: false, diarizationBusy: false), "can delete once the feature is off and idle")
         expect(assets.deleteInstalledModels() == MeetingDiarizerModelCatalog.all.count, "both model files removed")
-        expect(!assets.hasInstalledFiles && !FileManager.default.fileExists(atPath: dir.appendingPathComponent(".download-123").path), "models and stale staging gone")
+        expect(!assets.hasInstalledFiles && !FileManager.default.fileExists(atPath: staleStaging.path), "models and stale staging gone")
         expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("keep.txt").path) && FileManager.default.fileExists(atPath: dir.path),
                "unrelated files (and so the folder) are left alone")
         expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("pyannote-segmentation").path), "emptied sub-folder removed")
@@ -565,6 +593,205 @@ enum MeetingDiarizationTests {
         expect(MeetingDiarizationDialogs.choice(from: MeetingDiarizationDialogs.speakerCountAlert(last: nil).popup) == .count(2), "default 2 people")
         let consent = MeetingDiarizerDownloadText.consentMessage(for: MeetingDiarizerModelCatalog.all, directory: URL(fileURLWithPath: "/tmp/m"))
         expect(consent.contains("\n\n存放位置") && consent.contains("\n\n說話者辨識本身") && consent.contains("刪除已下載的模型"), "consent: blank lines and deletion hint")
+    }
+
+    // MARK: 刪除的邊界（Codex 審查探針的回歸測試）
+
+    private static func tempDir(_ name: String) -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(name)-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+    private static func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
+    private static func write(_ url: URL, _ text: String = "x") {
+        try! FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try! Data(text.utf8).write(to: url)
+    }
+
+    static func testModelDeletionNeverLeavesTheModelsFolder() {
+        var skipped: [String] = []
+        SafeFileRemoval.onSkip = { skipped.append($0) }
+        defer { SafeFileRemoval.onSkip = { NSLog("[SafeFileRemoval] skipped: %@", $0) } }
+        let models = MeetingDiarizerModelCatalog.all
+        let segmentationPath = models[0].installPath      // pyannote-segmentation/model.onnx
+        let embeddingPath = models[1].installPath         // speaker-embedding.onnx
+
+        // 1. 與模型同名的「資料夾」，裡面有不相關的巢狀檔：整個保留，也不會被當成「已安裝」而顯示刪除選單。
+        let a = tempDir("ModelsA"); defer { try? FileManager.default.removeItem(at: a) }
+        let aAssets = MeetingDiarizerAssets(modelsDirectory: a)
+        let dirNamedLikeModel = a.appendingPathComponent(embeddingPath)
+        write(dirNamedLikeModel.appendingPathComponent("nested/precious.txt"), "keep")
+        expect(!aAssets.hasInstalledFiles && !aAssets.canDeleteModels(featureEnabled: false, diarizationBusy: false),
+               "a folder with a model's name is not an installed model, so no delete menu")
+        expect(aAssets.deleteInstalledModels() == 0, "nothing deleted")
+        expect(exists(dirNamedLikeModel.appendingPathComponent("nested/precious.txt")), "folder with the reserved name and its contents survive")
+        expect(!skipped.isEmpty, "the skip is recorded")
+
+        // 2. 上層是 symlink（導到 models 以外）：外部的模型檔不能被刪。
+        let b = tempDir("ModelsB"); let outside = tempDir("Outside")
+        defer { try? FileManager.default.removeItem(at: b); try? FileManager.default.removeItem(at: outside) }
+        write(outside.appendingPathComponent("model.onnx"), "external model")
+        try! FileManager.default.createSymbolicLink(at: b.appendingPathComponent("pyannote-segmentation"), withDestinationURL: outside)
+        let bAssets = MeetingDiarizerAssets(modelsDirectory: b)
+        expect(!bAssets.hasInstalledFiles, "a path through a symlinked parent is not counted")
+        expect(bAssets.deleteInstalledModels() == 0, "nothing deleted through the symlink")
+        expect(exists(outside.appendingPathComponent("model.onnx")), "external model file survives")
+        expect(exists(b.appendingPathComponent("pyannote-segmentation")), "the symlink itself is left alone")
+
+        // 3. models 資料夾本身是 symlink：什麼都不刪。
+        let c = tempDir("ModelsC"); let real = tempDir("RealModels")
+        defer { try? FileManager.default.removeItem(at: c); try? FileManager.default.removeItem(at: real) }
+        write(real.appendingPathComponent(segmentationPath)); write(real.appendingPathComponent(embeddingPath))
+        let link = c.appendingPathComponent("models")
+        try! FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        let cAssets = MeetingDiarizerAssets(modelsDirectory: link)
+        expect(!cAssets.hasInstalledFiles && cAssets.deleteInstalledModels() == 0, "symlinked models root: nothing counted or deleted")
+        expect(exists(real.appendingPathComponent(segmentationPath)) && exists(real.appendingPathComponent(embeddingPath)), "files behind the symlinked root survive")
+
+        // 4. 模型檔本身是 symlink（指到外部）：只當作不是我們的檔案，不刪連結也不刪目標。
+        let d = tempDir("ModelsD"); let target = tempDir("Target")
+        defer { try? FileManager.default.removeItem(at: d); try? FileManager.default.removeItem(at: target) }
+        write(target.appendingPathComponent("real.onnx"))
+        try! FileManager.default.createSymbolicLink(at: d.appendingPathComponent(embeddingPath), withDestinationURL: target.appendingPathComponent("real.onnx"))
+        expect(MeetingDiarizerAssets(modelsDirectory: d).deleteInstalledModels() == 0 && exists(target.appendingPathComponent("real.onnx")), "symlinked model file: target survives")
+
+        // 5. 暫存：名稱不符的 .download-* 資料夾、裡面有不認識東西的暫存資料夾都不能被刪。
+        let e = tempDir("ModelsE"); defer { try? FileManager.default.removeItem(at: e) }
+        let eAssets = MeetingDiarizerAssets(modelsDirectory: e)
+        write(e.appendingPathComponent(".download-mine/important.txt"), "keep")            // 不符合 UUID 命名
+        let uuidStaging = e.appendingPathComponent(".download-\(UUID().uuidString)")
+        write(uuidStaging.appendingPathComponent("download-1.part"))
+        write(uuidStaging.appendingPathComponent("unknown-dir/data.bin"), "keep")         // 不認識的子資料夾
+        let cleanStaging = e.appendingPathComponent(".download-\(UUID().uuidString)")
+        write(cleanStaging.appendingPathComponent("download-1.part"))
+        write(cleanStaging.appendingPathComponent("extract-\(UUID().uuidString)/pkg/model.onnx"))
+        write(e.appendingPathComponent(segmentationPath)); write(e.appendingPathComponent(embeddingPath))
+        expect(eAssets.deleteInstalledModels() == 2, "both owned model files removed")
+        expect(exists(e.appendingPathComponent(".download-mine/important.txt")), "non-UUID .download-* folder survives")
+        expect(exists(uuidStaging.appendingPathComponent("unknown-dir/data.bin")), "staging with an unknown sub-folder is left alone")
+        expect(!exists(uuidStaging.appendingPathComponent("download-1.part")), "its known .part file was removed")
+        expect(!exists(cleanStaging), "fully-owned staging folder is removed")
+        expect(exists(e), "models folder stays because it still holds other things")
+    }
+
+    static func testAudioDeletionOnlyRemovesOwnedRegularFiles() {
+        let f = Fixture()
+        let store = f.store
+        var skipped: [String] = []
+        SafeFileRemoval.onSkip = { skipped.append($0) }
+        defer { SafeFileRemoval.onSkip = { NSLog("[SafeFileRemoval] skipped: %@", $0) } }
+        let dir = f.directory
+        // 同名資料夾與 symlink：不是音檔。
+        try! FileManager.default.removeItem(at: dir.appendingPathComponent("chunk-002.m4a"))
+        write(dir.appendingPathComponent("chunk-002.m4a/precious.txt"), "keep")
+        let outside = tempDir("AudioOutside"); defer { try? FileManager.default.removeItem(at: outside) }
+        write(outside.appendingPathComponent("external.m4a"), "keep")
+        try! FileManager.default.createSymbolicLink(at: dir.appendingPathComponent("chunk-003.m4a"), withDestinationURL: outside.appendingPathComponent("external.m4a"))
+        try! FileManager.default.removeItem(at: dir.appendingPathComponent("manifest.json"))
+        write(dir.appendingPathComponent("manifest.json/inner.txt"), "keep")           // manifest 也被換成資料夾
+        expect(store.chunkFiles(in: dir).map(\.lastPathComponent) == ["chunk-001.m4a"], "only the regular file counts as a chunk")
+        expect(store.deleteAudio(directory: dir) == 1, "only the one real chunk file removed")
+        expect(!exists(dir.appendingPathComponent("chunk-001.m4a")), "real chunk removed")
+        expect(exists(dir.appendingPathComponent("chunk-002.m4a/precious.txt")), "folder named like a chunk survives with its contents")
+        expect(exists(outside.appendingPathComponent("external.m4a")), "symlink target outside survives")
+        expect(exists(dir.appendingPathComponent("manifest.json/inner.txt")), "folder named manifest.json survives")
+        expect(exists(f.transcriptURL) && exists(dir.appendingPathComponent("segments.jsonl")), "other files untouched")
+        expect(!skipped.isEmpty, "the manifest skip is recorded: \(skipped)")
+    }
+
+    // MARK: 啟動掃描的擁有權
+
+    static func testStartupScanRespectsOwnership() {
+        func fresh(_ label: String) -> Fixture {
+            let f = Fixture()
+            try! f.store.setFrontmatter([("diarization", "running")], transcriptURL: f.transcriptURL)
+            return f
+        }
+        // 沒有擁有者檔：不動（無法確定沒有人在處理）。
+        let none = fresh("none")
+        expect(none.store.markInterruptedDiarizations().isEmpty && none.store.diarizationState(for: none.transcriptURL) == .running, "no owner file: left alone")
+        // 擁有者行程還活著（pid 是自己，沒人持鎖）：不動。
+        let alive = fresh("alive")
+        plantOwner(in: alive.directory, pid: getpid(), start: ProcessIdentity.startTime(pid: getpid()))
+        expect(alive.store.markInterruptedDiarizations().isEmpty, "owner process is alive: left alone")
+        // 有人持鎖（同一行程另開一個 fd 也算）：不動。
+        let locked = fresh("locked")
+        let held = DiarizationOwnerLock.acquire(in: locked.directory, instance: "other")!
+        expect(locked.store.markInterruptedDiarizations().isEmpty && locked.store.diarizationState(for: locked.transcriptURL) == .running,
+               "owner holds the lock: left alone, state stays running")
+        held.release(deleteFile: true)
+        // 檔案壞掉：不動。
+        let corrupt = fresh("corrupt")
+        try! Data("not json".utf8).write(to: corrupt.directory.appendingPathComponent(DiarizationOwnerLock.filename))
+        expect(corrupt.store.markInterruptedDiarizations().isEmpty, "unreadable owner record: left alone")
+        // pid 已不存在：標 interrupted，並清掉擁有者檔。
+        let dead = fresh("dead")
+        plantOwner(in: dead.directory, pid: deadPID)
+        expect(dead.store.markInterruptedDiarizations() == [dead.transcriptURL] && dead.store.diarizationState(for: dead.transcriptURL) == .interrupted, "dead owner: interrupted")
+        expect(!exists(dead.directory.appendingPathComponent(DiarizationOwnerLock.filename)), "owner file removed once handled")
+        // pid 被別的行程重用（啟動時間不符）：視為已死。
+        let reused = fresh("reused")
+        plantOwner(in: reused.directory, pid: getpid(), start: (ProcessIdentity.startTime(pid: getpid()) ?? 0) - 100_000)
+        expect(reused.store.markInterruptedDiarizations() == [reused.transcriptURL], "reused pid counts as dead")
+        // 狀態不是 pending／running：即使擁有者已死也不動。
+        let done = Fixture()
+        try! done.store.setFrontmatter([("diarization", "done")], transcriptURL: done.transcriptURL)
+        plantOwner(in: done.directory, pid: deadPID)
+        expect(done.store.markInterruptedDiarizations().isEmpty, "terminal states are never rewritten")
+    }
+
+    /// 真的跨行程：另一個行程持鎖時掃描不改狀態；它被殺掉（鎖與 pid 都消失）之後才改。
+    static func testStartupScanAcrossProcesses() {
+        let f = Fixture()
+        try! f.store.setFrontmatter([("diarization", "running")], transcriptURL: f.transcriptURL)
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+        child.arguments = ["--hold-owner", f.directory.path]
+        let pipe = Pipe()
+        child.standardOutput = pipe
+        try! child.run()
+        let line = String(decoding: pipe.fileHandleForReading.availableData, as: UTF8.self)
+        expect(line.hasPrefix("READY"), "the other process took the lock: \(line)")
+        expect(f.store.markInterruptedDiarizations().isEmpty, "another live instance owns it: untouched")
+        expect(f.store.diarizationState(for: f.transcriptURL) == .running, "state unchanged")
+        expect(DiarizationOwnerLock.acquire(in: f.directory, instance: "me") == nil, "cannot take over a held job")
+        let coordinatorLike = f.coordinator.begin(transcriptURL: f.transcriptURL)
+        expect(!coordinatorLike && f.runner.calls.isEmpty, "a coordinator in this instance refuses a meeting another instance is processing")
+        expect(f.store.diarizationState(for: f.transcriptURL) == .running, "and does not touch its state")
+        child.terminate(); child.waitUntilExit()
+        expect(f.store.markInterruptedDiarizations() == [f.transcriptURL], "after the owner died: interrupted")
+    }
+
+    static func testCoordinatorHoldsAndReleasesTheOwnerLock() {
+        let f = Fixture()
+        let second = f.addMeeting()
+        let ownerFile = f.directory.appendingPathComponent(DiarizationOwnerLock.filename)
+        f.coordinator.begin(transcriptURL: f.transcriptURL)
+        expect(exists(ownerFile), "owner file exists while running")
+        expect(DiarizationOwnerLock.acquire(in: f.directory, instance: "x") == nil, "and the lock is held")
+        expect(f.store.markInterruptedDiarizations().isEmpty, "own live job is never marked by the scan")
+        f.coordinator.begin(transcriptURL: second.transcriptURL)
+        expect(exists(second.directory.appendingPathComponent(DiarizationOwnerLock.filename)), "queued job is owned too")
+        f.succeed(0)
+        expect(!exists(ownerFile), "finished job: owner file removed")
+        f.succeed(1)
+        expect(!exists(second.directory.appendingPathComponent(DiarizationOwnerLock.filename)), "second finished: owner file removed")
+    }
+
+    // App 結束：取消不發任何回呼（不啟動摘要、不更新選單），但狀態與音檔照寫照留。
+    static func testQuitCancelIsSilent() {
+        let f = Fixture()
+        let second = f.addMeeting()
+        f.coordinator.begin(transcriptURL: f.transcriptURL)
+        f.coordinator.begin(transcriptURL: second.transcriptURL)
+        let phasesBefore = f.phases.count
+        f.coordinator.cancel(notify: false)
+        expect(f.finished.isEmpty && f.phases.count == phasesBefore, "no terminal callback during quit")
+        expect(f.store.diarizationState(for: f.transcriptURL) == .cancelled, "state still written")
+        expect(!exists(f.directory.appendingPathComponent(DiarizationOwnerLock.filename)), "terminal job released its owner file")
+        expect(exists(second.directory.appendingPathComponent(DiarizationOwnerLock.filename)), "queued job keeps its (unlocked) owner file for the next launch")
+        expect(DiarizationOwnerLock.acquire(in: second.directory, instance: "next") != nil, "its lock was released")
+        expect(f.runner.calls[0].token.cancelCount == 1, "process cancelled")
     }
 
     // MARK: 真的 Process 執行器

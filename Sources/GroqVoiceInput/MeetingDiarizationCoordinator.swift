@@ -95,6 +95,11 @@ final class MeetingDiarizationCoordinator {
     private var originalTranscript: String?
     /// 辨識進行中又結束的會議，依序等待（App 結束時丟掉；它們的 frontmatter 是 pending，下次啟動會被標成 interrupted）。
     private var queue: [URL] = []
+    /// 這個 App 實例的 ID，寫進每場會議的擁有者檔。
+    private let instanceID = UUID().uuidString
+    /// 這個實例正在處理或排隊中的會議的擁有者鎖（key = transcript.md）。持鎖 = 「有人還在處理」，
+    /// 其他實例的啟動掃描因此不會把它們改成 interrupted。
+    private var ownerLocks: [URL: DiarizationOwnerLock] = [:]
 
     init(store: MeetingStore, locator: MeetingDiarizerLocator, runner: DiarizerProcessRunning,
          modelsDirectory: @escaping () -> URL?,
@@ -120,10 +125,13 @@ final class MeetingDiarizationCoordinator {
         dispatchPrecondition(condition: .onQueue(.main))
         guard phase == .idle else {
             if transcriptURL == job || queue.contains(transcriptURL) { return false }
+            // 排隊也要先拿到擁有者鎖（同一場會議已有別的實例在處理就拒絕）。
+            guard acquireOwnerLock(for: transcriptURL) else { return false }
             queue.append(transcriptURL)
             try? store.setFrontmatter([("diarization", MeetingDiarizationState.pending.rawValue)], transcriptURL: transcriptURL)
             return true
         }
+        guard acquireOwnerLock(for: transcriptURL) else { return false }
         generation += 1
         let mine = generation
         job = transcriptURL
@@ -274,7 +282,9 @@ final class MeetingDiarizationCoordinator {
 
     /// App 結束或使用者取消。進行中（含正在問人數）才有作用。
     /// 順序：世代加一、狀態改 idle（之後舊回呼全部無效）→ 寫一次 `cancelled` → 最後才通知執行器取消。
-    func cancel() {
+    /// `notify: false`：App 結束時使用，只做取消與寫狀態，不呼叫 `onPhaseChange`／`onFinished`
+    /// （結束過程中不要因為終態回呼而啟動摘要、讀鑰匙圈或發通知）。
+    func cancel(notify: Bool = true) {
         dispatchPrecondition(condition: .onQueue(.main))
         guard phase != .idle, let transcript = job else { return }
         generation += 1
@@ -284,11 +294,16 @@ final class MeetingDiarizationCoordinator {
         phase = .idle
         job = nil
         originalTranscript = nil
+        // 排隊中的：放鎖但保留擁有者檔（記錄的 pid 之後會死，下次啟動掃描才能把它們標成 interrupted）。
+        for queued in queue { releaseOwnerLock(for: queued, deleteFile: false) }
         queue = []
+        releaseOwnerLock(for: transcript, deleteFile: true)
         try? store.setFrontmatter([("diarization", MeetingDiarizationState.cancelled.rawValue)], transcriptURL: transcript)
         retainedAudio = store.chunkFiles(in: directory).isEmpty ? nil : (directory, .cancelled)
-        onPhaseChange?(.idle)
-        onFinished?(transcript, .cancelled)
+        if notify {
+            onPhaseChange?(.idle)
+            onFinished?(transcript, .cancelled)
+        }
         pending?.cancel()
     }
 
@@ -335,6 +350,7 @@ final class MeetingDiarizationCoordinator {
         originalTranscript = nil
         phase = .idle
         retainedAudio = state == .done || store.chunkFiles(in: directory).isEmpty ? nil : (directory, state)
+        releaseOwnerLock(for: transcript, deleteFile: true)
         onPhaseChange?(.idle)
         onFinished?(transcript, state)
         startNextInQueue()
@@ -343,6 +359,17 @@ final class MeetingDiarizationCoordinator {
     private func startNextInQueue() {
         guard phase == .idle, !queue.isEmpty else { return }
         begin(transcriptURL: queue.removeFirst())
+    }
+
+    private func acquireOwnerLock(for transcript: URL) -> Bool {
+        if ownerLocks[transcript] != nil { return true }   // 排隊時已經拿過
+        guard let lock = DiarizationOwnerLock.acquire(in: transcript.deletingLastPathComponent(), instance: instanceID) else { return false }
+        ownerLocks[transcript] = lock
+        return true
+    }
+
+    private func releaseOwnerLock(for transcript: URL, deleteFile: Bool) {
+        ownerLocks.removeValue(forKey: transcript)?.release(deleteFile: deleteFile)
     }
 
     private func setState(_ state: MeetingDiarizationState) {
