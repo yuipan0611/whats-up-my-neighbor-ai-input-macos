@@ -44,6 +44,8 @@ struct AlignedLine: Equatable {
     let text: String
     /// 非 nil 代表這是「這段辨識失敗」的標記行（沒有說話者、沒有文字）。
     var failureNote: String? = nil
+    /// 非 nil 代表「原樣輸出這一行」（`reconcile` 保留逐字稿裡對不上任何記錄的標記行用）。
+    var rawLine: String? = nil
 }
 
 enum SpeakerAligner {
@@ -94,8 +96,11 @@ enum SpeakerAligner {
 
     // MARK: 對齊
 
+    /// `clean`：對「用字級時間切出來的行」再處理一次文字（App 傳入與逐字稿相同的 TextPostProcessor：簡轉繁、
+    /// 標點、詞庫大小寫）。切出來的行文字來自 Groq 的原始 words（沒有經過處理），所以需要；單一說話者的行
+    /// 沿用已處理過的 segment 文字，不受影響。預設 nil＝不處理（CLI 與純函式測試），本身仍是純函式。
     static func align(segments: [TranscriptSegmentRecord], turns: [SpeakerTurn],
-                      options: Options = Options()) -> [AlignedLine] {
+                      options: Options = Options(), clean: ((String) -> String)? = nil) -> [AlignedLine] {
         let sortedTurns = turns.filter { $0.end > $0.start }.sorted { $0.start < $1.start }
         var lines: [AlignedLine] = []
         for segment in segments.sorted(by: { $0.start < $1.start }) {
@@ -106,7 +111,7 @@ enum SpeakerAligner {
             let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if let words = segment.words, !words.isEmpty {
                 lines.append(contentsOf: alignWords(segment: segment, text: text, words: words,
-                                                    turns: sortedTurns, options: options))
+                                                    turns: sortedTurns, options: options, clean: clean))
             } else {
                 // 沒有字級時間：整個 segment 取重疊最長的人，不切行（沒有字時間就無法切文字）。
                 guard !text.isEmpty else { continue }
@@ -120,7 +125,7 @@ enum SpeakerAligner {
 
     private static func alignWords(segment: TranscriptSegmentRecord, text: String,
                                    words: [TranscriptSegmentRecord.Word], turns: [SpeakerTurn],
-                                   options: Options) -> [AlignedLine] {
+                                   options: Options, clean: ((String) -> String)?) -> [AlignedLine] {
         // 1. 每個詞取重疊最長的說話者
         var speakers: [Int?] = words.map {
             dominantSpeaker(start: $0.s, end: $0.e, turns: turns, maxDistance: options.maxNearestDistance)
@@ -178,8 +183,9 @@ enum SpeakerAligner {
         }
         // 7. 多個人：用字級時間切行（這時文字來自詞，標點可能少）
         return runs.compactMap { run in
-            let joined = words[run.first...run.last].map(\.w).joined()
+            var joined = words[run.first...run.last].map(\.w).joined()
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let clean { joined = clean(joined).trimmingCharacters(in: .whitespacesAndNewlines) }
             guard !joined.isEmpty else { return nil }
             return AlignedLine(start: words[run.first].s, end: words[run.last].e, speaker: run.speaker, text: joined)
         }
@@ -216,6 +222,7 @@ enum SpeakerAligner {
 
     /// `names`：使用者改的名字，key 是 sherpa 的 speaker id（0 起算）。沒有就顯示 `Speaker N`（N = id + 1）。
     static func render(_ line: AlignedLine, names: [Int: String] = [:]) -> String {
+        if let raw = line.rawLine { return raw }
         if let reason = line.failureNote {
             let oneLineReason = reason.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty }.joined(separator: " ")
@@ -236,5 +243,91 @@ enum SpeakerAligner {
     static func timestamp(_ offset: TimeInterval) -> String {
         let total = offset.isFinite ? max(0, Int(offset)) : 0
         return String(format: "%02d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
+    }
+
+    // MARK: 對帳（設計文件附錄 A.2.1；只在 `segments: incomplete` 時使用）
+
+    /// 辨識前逐字稿（transcript.plain.md）裡的一行。
+    enum PlainLine: Equatable {
+        /// `[hh:mm:ss] 文字`
+        case spoken(seconds: Int, text: String)
+        /// 以 `>` 開頭的標記行（失敗／沒有內容）。`seconds` 取自行內第一個 `[hh:mm:ss]`，沒有就是 nil。
+        case marker(raw: String, seconds: Int?)
+    }
+
+    /// 解析逐字稿正文（不含 frontmatter）。標題、說明文字與空行略過。
+    static func parsePlainTranscript(_ body: String) -> [PlainLine] {
+        var result: [PlainLine] = []
+        for raw in body.split(separator: "\n", omittingEmptySubsequences: true) {
+            let line = String(raw).trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix(">") {
+                result.append(.marker(raw: line, seconds: firstTimestamp(in: line)))
+            } else if line.hasPrefix("["), let close = line.firstIndex(of: "]"),
+                      let seconds = seconds(fromTimestamp: String(line[line.index(after: line.startIndex)..<close])) {
+                let text = String(line[line.index(after: close)...]).trimmingCharacters(in: .whitespaces)
+                result.append(.spoken(seconds: seconds, text: text))
+            }
+        }
+        return result
+    }
+
+    /// 把逐字稿裡「沒有任何 `segments.jsonl` 記錄對應」的行補回結果，說話者標 `Speaker ?`。
+    ///
+    /// - 一行與某筆記錄對得上 ＝ 時間戳與 `floor(record.start)` 相差不超過 1 秒（記錄的時間已四捨五入到毫秒，
+    ///   59.9996 會變成 60.0，嚴格相等會誤判）且文字（折成單行、去頭尾空白）相同；每筆記錄只能對應一行。
+    /// - `>` 標記行：有對應的失敗記錄就不重複；其他原樣保留在原位。
+    /// - 結果依開始時間穩定排序；同一秒內維持「記錄在前、補回的行在後」。
+    static func reconcile(aligned: [AlignedLine], records: [TranscriptSegmentRecord],
+                          plain: [PlainLine]) -> [AlignedLine] {
+        var unusedText = records.filter { $0.failed == nil }.map { (record: $0, used: false) }
+        var unusedFailures = records.filter { $0.failed != nil }.map { (record: $0, used: false) }
+        var extras: [AlignedLine] = []
+        for line in plain {
+            switch line {
+            case let .spoken(seconds, text):
+                let normalized = oneLine(text)
+                if let index = unusedText.indices.first(where: {
+                    !unusedText[$0].used && abs(Int(unusedText[$0].record.start.rounded(.down)) - seconds) <= 1
+                        && oneLine(unusedText[$0].record.text) == normalized
+                }) {
+                    unusedText[index].used = true
+                } else if !normalized.isEmpty {
+                    extras.append(AlignedLine(start: Double(seconds), end: Double(seconds), speaker: nil, text: normalized))
+                }
+            case let .marker(raw, seconds):
+                if raw.hasPrefix("> ⚠️"), let seconds,
+                   let index = unusedFailures.indices.first(where: {
+                       !unusedFailures[$0].used && abs(Int(unusedFailures[$0].record.start.rounded(.down)) - seconds) <= 1
+                   }) {
+                    unusedFailures[index].used = true
+                } else {
+                    let start = Double(seconds ?? 0)
+                    extras.append(AlignedLine(start: start, end: start, speaker: nil, text: "", rawLine: raw))
+                }
+            }
+        }
+        let combined = aligned.map { ($0, 0) } + extras.map { ($0, 1) }
+        return combined.enumerated().sorted { lhs, rhs in
+            let a = lhs.element, b = rhs.element
+            if Int(a.0.start) != Int(b.0.start) { return Int(a.0.start) < Int(b.0.start) }
+            if a.1 != b.1 { return a.1 < b.1 }
+            return lhs.offset < rhs.offset
+        }.map { $0.element.0 }
+    }
+
+    private static func oneLine(_ text: String) -> String {
+        text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    private static func firstTimestamp(in line: String) -> Int? {
+        guard let open = line.firstIndex(of: "["), let close = line[open...].firstIndex(of: "]") else { return nil }
+        return seconds(fromTimestamp: String(line[line.index(after: open)..<close]))
+    }
+
+    private static func seconds(fromTimestamp value: String) -> Int? {
+        let parts = value.split(separator: ":")
+        guard parts.count == 3, let h = Int(parts[0]), let m = Int(parts[1]), let s = Int(parts[2]) else { return nil }
+        return h * 3600 + m * 60 + s
     }
 }

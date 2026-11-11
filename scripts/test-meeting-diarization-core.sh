@@ -11,7 +11,7 @@ swiftc \
   -swift-version 5 \
   "$ROOT/Tools/MeetingDiarizer/ChunkTimeline.swift" \
   "$ROOT/Tools/MeetingDiarizer/MeetingManifest.swift" \
-  "$ROOT/Tools/MeetingDiarizer/SpeakerAligner.swift" \
+  "$ROOT/Sources/GroqVoiceInput/SpeakerAligner.swift" \
   "$ROOT/Tests/MeetingDiarizationCoreTests.swift" \
   -o "$OUTPUT"
 

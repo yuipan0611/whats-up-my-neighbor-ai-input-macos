@@ -88,8 +88,9 @@ enum MeetingDiarizerLocatorTests {
         }
         // 兩個檔案要是 meeting-diarizer --models 目錄預期的位置（Tools/MeetingDiarizer/main.swift 的說明）。
         expect(models.map(\.installPath) == ["pyannote-segmentation/model.onnx", "speaker-embedding.onnx"], "layout expected by meeting-diarizer")
-        expect(models[0].licenseNote == nil, "segmentation model: MIT notice read in the tarball")
-        expect(models[1].licenseNote?.contains("發布前必須確認") == true, "CAM++ license is flagged as must-confirm-before-release")
+        expect(models[0].licenseNote?.hasPrefix("MIT") == true, "segmentation model: MIT notice read in the tarball")
+        expect(models[1].licenseNote?.hasPrefix("Apache License 2.0") == true, "CAM++ license confirmed via the ModelScope API")
+        expect(!models.contains { $0.licenseNote?.contains("必須確認") == true || $0.licenseNote?.contains("尚未") == true }, "no model is flagged as unconfirmed")
         expect(MeetingDiarizerModelCatalog.totalDownloadBytes == 35_239_608, "total download size shown to the user")
     }
 
@@ -109,11 +110,13 @@ enum MeetingDiarizerLocatorTests {
         expect(message.contains("pyannote-segmentation-3.0（約 7.0 MB）") && message.contains("CAM++ zh_en 16k（約 28.3 MB）"), "each file and its size")
         expect(message.contains("SHA256") && message.contains("github.com/k2-fsa/sherpa-onnx"), "source and verification")
         expect(message.contains("~/Library/Application Support/tw.panh.FreeVoiceType/models"), "location, abbreviated: \(message)")
-        expect(message.contains("發布前必須確認"), "the unconfirmed CAM++ license is shown to the tester")
-        let confirmed = MeetingDiarizerDownloadText.consentMessage(for: [MeetingDiarizerModelCatalog.all[0]], directory: directory)
-        expect(!confirmed.contains("⚠️"), "no warning when every license is confirmed")
-        expect(MeetingDiarizerDownloadText.progressLine(received: 12_300_000, total: 35_239_608, modelName: "x") == "已下載 12.3 MB / 35.2 MB（34%）· x", "progress line")
-        expect(MeetingDiarizerDownloadText.progressLine(received: 5, total: 0, modelName: "x").contains("100%"), "no division by zero")
+        expect(message.contains("授權：") && message.contains("pyannote-segmentation-3.0：MIT") && message.contains("CAM++ zh_en 16k：Apache License 2.0"),
+               "both licenses are listed: \(message)")
+        expect(!message.contains("⚠️") && !message.contains("尚未確認"), "no unconfirmed-license warning any more")
+        let only = MeetingDiarizerDownloadText.consentMessage(for: [MeetingDiarizerModelCatalog.all[0]], directory: directory)
+        expect(only.contains("MIT") && !only.contains("Apache"), "only the listed models' licenses are shown")
+        expect(MeetingDiarizerDownloadText.progressLine(received: 12_300_000, total: 35_239_608) == "已下載 12.3 MB / 35.2 MB（34%）", "progress line (model name is on its own line)")
+        expect(MeetingDiarizerDownloadText.progressLine(received: 5, total: 0).contains("100%"), "no division by zero")
         expect(MeetingDiarizerDownloadText.failureMessage(MeetingDiarizerDownloader.Failure.checksumMismatch(model: "m")).contains("重試只會下載缺少的部分"), "retry hint")
     }
 }

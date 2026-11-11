@@ -15,6 +15,7 @@ ditto "$ROOT/Resources/DesktopPet" "$OUTPUT/Contents/Resources/DesktopPet"
 ditto "$ROOT/Resources/VPSDesktop" "$OUTPUT/Contents/Resources/VPSDesktop"
 cp "$ROOT/cat.config.json" "$ROOT/CAT-CONFIG.md" "$OUTPUT/Contents/Resources/"
 cp "$SPARKLE_ROOT/LICENSE" "$OUTPUT/Contents/Resources/Sparkle-LICENSE.txt"
+cp "$ROOT/docs/THIRD-PARTY-MODELS.md" "$OUTPUT/Contents/Resources/THIRD-PARTY-MODELS.md"
 ditto "$SPARKLE_ROOT/Sparkle.framework" "$OUTPUT/Contents/Frameworks/Sparkle.framework"
 
 # CI supplies version metadata to the output bundle, never to tracked sources.

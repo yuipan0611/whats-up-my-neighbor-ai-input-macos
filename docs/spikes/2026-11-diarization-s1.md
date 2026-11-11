@@ -16,7 +16,7 @@ tags: [spike, diarization, meeting-notes, sherpa-onnx]
 |---|---|---|
 | 能接進 Swift App | 通過 | sherpa-onnx 有 C API 和官方 Swift 包裝檔，現有 `swiftc` 建置只要加幾個參數 |
 | 10 分鐘音檔 ≤ 3 分鐘 | **通過，但餘裕只有約 30%** | M1：實測 125–130 秒（另有一次 56 秒，見 §4.3）。Intel Mac 沒測 |
-| 授權允許使用 | 大致通過，**有 1 項發布前必須確認** | 切段模型 MIT、sherpa-onnx Apache-2.0；目前選用的聲紋模型 CAM++ 授權沒查到，備案（TitaNet CC-BY-4.0、WeSpeaker Apache-2.0）見 §3 |
+| 授權允許使用 | 通過（CAM++ 授權已確認）| 切段模型 MIT、sherpa-onnx Apache-2.0、聲紋模型 CAM++ Apache-2.0（ModelScope API 確認）；備案（TitaNet CC-BY-4.0、WeSpeaker Apache-2.0）見 §3 |
 | 說話者數正確 | **只有「事先告訴它人數」才正確** | 讓它自己判斷人數會嚴重切太多（4 人會議判成 55 人）|
 
 **必須處理的兩個條件**：
@@ -67,11 +67,11 @@ tags: [spike, diarization, meeting-notes, sherpa-onnx]
 | 用途 | 檔案 | 大小 | 授權 | 來源 |
 |---|---|---|---|---|
 | 切段（誰在說話的時間段）| `sherpa-onnx-pyannote-segmentation-3-0.tar.bz2`（內含 `model.onnx` 6.0 MB、`model.int8.onnx` 1.5 MB）| 6.6 MB | **MIT**（tarball 內 `LICENSE`，Copyright 2022 CNRS，我已讀到）| github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-segmentation-models |
-| 聲紋（分辨是誰）| `3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx` | 28.2 MB | **未完全查證**：3D-Speaker 程式庫是 Apache-2.0（我用 GitHub API 確認），但 sherpa 的 release 頁寫明「每個模型有自己的授權」，ModelScope 頁面我抓不到授權欄 | github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-recongition-models（網址拼字就是 recongition）|
+| 聲紋（分辨是誰）| `3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx` | 28.2 MB | **Apache License 2.0（已確認）**：ModelScope 官方 API `https://modelscope.cn/api/v1/models/iic/speech_campplus_sv_zh_en_16k-common_advanced` 的 License 欄位為 Apache License 2.0（README frontmatter 同，最後更新 2024-06-24）；3D-Speaker 主 repo 也是 Apache-2.0；sherpa-onnx 的 ONNX 檔由此模型轉換 | github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-recongition-models（網址拼字就是 recongition）|
 
 補充：
 - 原始的 pyannote segmentation-3.0 在 Hugging Face 是需要登入同意條款的受限模型。sherpa 轉出的版本在 GitHub 可直接下載，且附 MIT 授權，但這是「轉出版本的授權聲明」，不是我跟 pyannote 確認過的結論。
-- **發布前必須確認**：CAM++ zh_en 的授權。這是阻擋正式發布的事項，原型可以先用。
+- **授權已確認**（Emily 查證）：CAM++ zh_en 為 Apache License 2.0，證據見上表的 ModelScope API 網址；不再阻擋發布。完整第三方授權見 `docs/THIRD-PARTY-MODELS.md`。
 
 **授權明確的備案聲紋模型**（授權欄位取自 Hugging Face 模型卡；sherpa 的檔案是轉出版本）。同一份 AMI 10 分鐘、人數 = 4：
 
@@ -243,7 +243,7 @@ CAM++ 中英、不給人數、預設門檻：判成 4 人，耗時 3.7 秒，記
 ## 9. 下一步
 
 1. Emily 確認上面 §7 的保守決定。
-2. **發布前必須確認** 聲紋模型授權（CAM++ 未查證；備案見 §3）。
+2. ~~發布前必須確認聲紋模型授權~~ **已確認**：CAM++ zh_en 為 Apache License 2.0（ModelScope API，見 §3）；備案仍保留在 §3 供之後換模型參考。
 3. 決定會議錄音格式與錄音器改法（§4.6）。
 4. 確認 `release-macos.sh` 會重簽 `Contents/Frameworks` 的第三方 dylib（§2 第 3 點）。
 5. 補中文語料：AISHELL-4（CC BY-SA 4.0）取幾段會議，量準確度，並測中英混用。

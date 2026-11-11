@@ -23,7 +23,7 @@ for architecture in arm64; do
     -Xcc "-I$ASSETS/sherpa/include" \
     -L "$LIB" -lsherpa-onnx-c-api \
     -Xlinker -rpath -Xlinker @executable_path/../lib \
-    "$SRC"/*.swift "$ASSETS/SherpaOnnx.swift" \
+    "$SRC"/*.swift "$ROOT/Sources/GroqVoiceInput/SpeakerAligner.swift" "$ASSETS/SherpaOnnx.swift" \
     -o "$OUT/obj/meeting-diarizer-$architecture"
 done
 cp "$OUT/obj/meeting-diarizer-arm64" "$OUT/bin/meeting-diarizer"
