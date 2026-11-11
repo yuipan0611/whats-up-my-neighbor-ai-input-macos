@@ -81,6 +81,16 @@ final class ProcessDiarizerRunner: DiarizerProcessRunning {
             let data = output.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
             errors.fileHandleForReading.readabilityHandler = nil
+            let remaining = errors.fileHandleForReading.readDataToEndOfFile()
+            if !remaining.isEmpty {
+                for line in progressBuffer.append(remaining) {
+                    guard let progress = Self.parseProgress(line) else { continue }
+                    DispatchQueue.main.async {
+                        guard !self.isCancelled else { return }
+                        onProgress(progress.done, progress.total)
+                    }
+                }
+            }
             let tail = progressBuffer.tail
             deliver(.success(DiarizerRunResult(exitCode: process.terminationStatus, standardOutput: data,
                                                standardError: tail)), completion)

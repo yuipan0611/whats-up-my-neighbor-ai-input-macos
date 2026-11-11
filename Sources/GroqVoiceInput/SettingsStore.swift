@@ -38,6 +38,7 @@ final class SettingsStore {
         static let clipboardHotKeyModifiers = "clipboardHotKeyModifiers"
         static let preferredInputDeviceUID = "preferredInputDeviceUID"
         static let desktopPetReleased = "desktopPetReleased"
+        static let autoMeetingSummary = "autoMeetingSummary"
         static let meetingDiarizationEnabled = "meetingDiarizationEnabled"
         static let meetingDiarizationSpeakerCount = "meetingDiarizationSpeakerCount"
     }
@@ -46,6 +47,14 @@ final class SettingsStore {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+    }
+
+    func loadAutoMeetingSummary() -> Bool {
+        defaults.object(forKey: Keys.autoMeetingSummary) as? Bool ?? true
+    }
+
+    func saveAutoMeetingSummary(_ value: Bool) {
+        defaults.set(value, forKey: Keys.autoMeetingSummary)
     }
 
     func loadDesktopPetReleased() -> Bool { defaults.bool(forKey: Keys.desktopPetReleased) }
