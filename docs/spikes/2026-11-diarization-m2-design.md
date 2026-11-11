@@ -249,9 +249,9 @@ App 以 `Process` 呼叫（**進度提醒**：63 分鐘那次，工具開始處�
 | 使用者按取消 | 刪 `.part`，維持 `pending` |
 | 下載來源失效（GitHub release 被移除）| 見下 |
 
-**來源**：目前是 sherpa-onnx 的 GitHub release（`speaker-segmentation-models`、`speaker-recongition-models` 兩個 tag）。這兩個是**別人的 repo、可變的 tag**，雜湊寫死可以擋掉被改，但擋不住被刪。**備案**：在我們自己的 repo release 放一份鏡像（切段模型是 MIT，可以；聲紋模型要等 §S1 §3 的授權確認，CAM++ 授權沒確認前**不能**鏡像）。
+**來源**：目前是 sherpa-onnx 的 GitHub release（`speaker-segmentation-models`、`speaker-recongition-models` 兩個 tag）。這兩個是**別人的 repo、可變的 tag**，雜湊寫死可以擋掉被改，但擋不住被刪。**備案**：在我們自己的 repo release 放一份鏡像（切段模型是 MIT，可以；聲紋模型 CAM++ 授權已確認為 Apache License 2.0，鏡像時要一併附上授權文字，見 `docs/THIRD-PARTY-MODELS.md`）。
 
-**發布前必須確認**：聲紋模型授權（S1 §3）。這份設計假設最後選定的模型授權允許下載使用。
+**授權已確認**：聲紋模型 CAM++ zh_en 為 Apache License 2.0（證據：ModelScope 官方 API `https://modelscope.cn/api/v1/models/iic/speech_campplus_sv_zh_en_16k-common_advanced` 的 License 欄位；S1 §3），切段模型為 MIT。第三方授權清單見 `docs/THIRD-PARTY-MODELS.md`。
 
 ---
 

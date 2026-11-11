@@ -12,7 +12,7 @@ enum MeetingDiarizerDownloadText {
         String(format: "%.1f MB", Double(bytes) / 1_000_000)
     }
 
-    /// 第一次使用前的同意說明：要下載什麼、多大、從哪來、存哪裡、怎麼驗證，以及尚未確認的授權。
+    /// 第一次使用前的同意說明：要下載什麼、多大、從哪來、存哪裡、怎麼驗證，以及每個模型的授權。
     static func consentMessage(for models: [MeetingDiarizerModel], directory: URL) -> String {
         let total = models.reduce(Int64(0)) { $0 + $1.downloadBytes }
         var lines = ["會議說話者辨識需要下載 \(models.count) 個模型檔，共約 \(megabytes(total))："]
@@ -23,10 +23,11 @@ enum MeetingDiarizerDownloadText {
         lines.append("存放位置：\((directory.path as NSString).abbreviatingWithTildeInPath)")
         lines.append("")
         lines.append("說話者辨識本身在這台 Mac 上執行。下載只需要這一次；不下載就不能使用這個功能。之後可以在選單關閉這個功能，並刪除已下載的模型。")
-        let notes = models.compactMap(\.licenseNote)
-        if !notes.isEmpty {
+        let licensed = models.filter { $0.licenseNote != nil }
+        if !licensed.isEmpty {
             lines.append("")
-            lines.append("⚠️ 測試版注意：" + notes.joined(separator: "；") + "。")
+            lines.append("授權：")
+            for model in licensed { lines.append("• \(model.name)：\(model.licenseNote!)") }
         }
         return lines.joined(separator: "\n")
     }
