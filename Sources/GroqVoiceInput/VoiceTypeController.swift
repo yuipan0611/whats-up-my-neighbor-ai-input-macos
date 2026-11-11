@@ -1150,7 +1150,14 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         MeetingSummarizer.generateSummary(
             transcript: transcript,
             keychain: credentials,
-            job: job
+            job: job,
+            statusHandler: { [weak self] status in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    guard self.summaryTracker.validateCurrentJob(job: job) else { return }
+                    self.statusMenu.updateSummarizeLatestMeeting(title: status, enabled: false)
+                }
+            }
         ) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
