@@ -6,6 +6,7 @@ struct MeetingSession: Equatable {
     let startedAt: Date
     let language: String
     let chunkSeconds: Int
+    let audio: String
     var transcriptURL: URL { directory.appendingPathComponent(MeetingStore.transcriptFilename) }
 }
 
@@ -45,7 +46,8 @@ final class MeetingStore {
 
     // MARK: 開始／結束
 
-    func beginSession(startedAt: Date, language: String, chunkSeconds: Int) throws -> MeetingSession {
+    func beginSession(startedAt: Date, language: String, chunkSeconds: Int,
+                      audio: String = MeetingAudio.label) throws -> MeetingSession {
         try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
         let base = folderName(for: startedAt)
         var directory = root.appendingPathComponent(base, isDirectory: true)
@@ -57,7 +59,7 @@ final class MeetingStore {
         }
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: false)
         let session = MeetingSession(directory: directory, startedAt: startedAt,
-                                     language: language, chunkSeconds: chunkSeconds)
+                                     language: language, chunkSeconds: chunkSeconds, audio: audio)
         let text = frontmatter(session, ended: nil, chunks: 0, failed: 0, status: "recording")
             + "\n# 會議記錄 \(titleDate(startedAt))\n\n"
         try write(text, to: session.transcriptURL)
@@ -192,6 +194,7 @@ final class MeetingStore {
         chunks: \(chunks)
         failed_chunks: \(failed)
         chunk_seconds: \(session.chunkSeconds)
+        audio: \(session.audio)
         chunk_gap: 每段錄音之間會有約 0.3–0.5 秒沒有錄到（錄音器停止再重新啟動）
         timestamps: 每行時間為「整場會議的相對時間」，一行對應 Whisper 的一個 segment，不一定剛好是一句
         ---

@@ -34,7 +34,7 @@ final class PinnedMicrophoneRecorder: NSObject, DictationRecording {
 
     /// 錄音採用的編碼設定，與改用 `AVCaptureSession` 之前完全相同，
     /// 上傳給 Groq 的音檔格式因此不變。
-    private static let audioSettings: [String: Any] = [
+    static let defaultAudioSettings: [String: Any] = [
         AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
         AVSampleRateKey: 16_000,
         AVNumberOfChannelsKey: 1,
@@ -42,9 +42,10 @@ final class PinnedMicrophoneRecorder: NSObject, DictationRecording {
         AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
     ]
 
-    override init() {
+    /// 預設值就是聽寫一直在用的 32 kbps 設定；只有會議錄音會傳入不同的設定。
+    init(audioSettings: [String: Any] = PinnedMicrophoneRecorder.defaultAudioSettings) {
         super.init()
-        output.audioSettings = Self.audioSettings
+        output.audioSettings = audioSettings
     }
 
     /// 啟動、錄音及檔案收尾期間都忙碌；取消也必須等原錄音完成收尾。
