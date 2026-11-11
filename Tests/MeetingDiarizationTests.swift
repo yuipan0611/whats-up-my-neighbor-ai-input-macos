@@ -160,6 +160,7 @@ enum MeetingDiarizationTests {
         testFrontmatterHelpers()
         testDiarizationStateReading()
         testReconcile()
+        testSplitLinesAreCleanedLikeTheTranscript()
         testSuccessFlow()
         testFailureKeepsAudioAndOffersDeletion()
         testCancelDuringRunWritesNothingAfterwards()
@@ -186,7 +187,7 @@ enum MeetingDiarizationTests {
         testLockSurvivesReleaseSoAnOpenedDescriptorStillExcludesNewOwners()
         testDialogTexts()
         testRealProcessRunner()
-        print("MeetingDiarization tests passed (29 scenarios)")
+        print("MeetingDiarization tests passed (30 scenarios)")
     }
 
     /// 在會議資料夾寫一個擁有者檔但不持鎖（模擬「擁有者行程已經結束」或「別的行程」）。
@@ -275,6 +276,45 @@ enum MeetingDiarizationTests {
         // 記錄有、逐字稿沒有：仍然輸出（旁路檔是資料來源）。
         let onlyRecords = SpeakerAligner.reconcile(aligned: aligned, records: records, plain: [])
         expect(onlyRecords.count == aligned.count, "records without transcript lines are still output")
+    }
+
+    /// 多位說話者的 segment 用 Groq 原始 words 重新組句；這些行要和逐字稿一樣經過簡轉繁與詞庫大小寫。
+    static func testSplitLinesAreCleanedLikeTheTranscript() {
+        func word(_ w: String, _ s: Double, _ e: Double) -> TranscriptSegmentRecord.Word { .init(w: w, s: s, e: e) }
+        // 已處理過的 segment 文字（逐字稿那份）與未處理的 words（Groq 原樣：簡體、小寫）。
+        let record = TranscriptSegmentRecord(
+            chunk: 1, start: 0, end: 8, text: "開會我們，謝謝 Grokbot",
+            words: [word("开会", 0, 1.5), word("我们", 1.5, 3.5), word(" 谢谢", 5, 6), word(" grokbot", 6, 8)])
+        let turns = [SpeakerTurn(start: 0, end: 4, speaker: 0), SpeakerTurn(start: 4.5, end: 9, speaker: 1)]
+        let clean: (String) -> String = {
+            TextPostProcessor.process($0, mode: .verbatim, vocabulary: ["Grokbot"], applyChineseRules: true, convertChineseNumerals: false)
+        }
+        let raw = SpeakerAligner.align(segments: [record], turns: turns)
+        expect(raw.map(\.text) == ["开会我们", "谢谢 grokbot"], "without clean (CLI / pure default) the raw words are used: \(raw.map(\.text))")
+        let cleaned = SpeakerAligner.align(segments: [record], turns: turns, clean: clean)
+        expect(cleaned.map(\.text) == ["開會我們", "謝謝 Grokbot"], "split lines are traditional with vocabulary casing: \(cleaned.map(\.text))")
+        expect(cleaned.map(\.speaker) == [0, 1], "speakers unchanged")
+        // 單一說話者：沿用 segment 的已處理文字，clean 不會再動它。
+        let single = SpeakerAligner.align(segments: [record], turns: [SpeakerTurn(start: 0, end: 9, speaker: 0)], clean: { _ in "不該被用到" })
+        expect(single.map(\.text) == ["開會我們，謝謝 Grokbot"], "one speaker keeps the cleaned segment text")
+        // 經過協調器：App 傳入的 cleanText 會收到會議語言代碼。
+        let stored = MeetingSegmentRecord(v: 1, chunk: 1, start: 0, end: 8, text: record.text,
+                                          words: record.words!.map { .init(w: $0.w, s: $0.s, e: $0.e) }, failed: nil)
+        let f = Fixture(sidecar: [stored])
+        var languages: [String?] = []
+        let coordinator = MeetingDiarizationCoordinator(
+            store: f.store, locator: FakeLocator(), runner: f.runner, modelsDirectory: { URL(fileURLWithPath: "/fake/models") },
+            askSpeakerCount: { _, completion in completion(.count(2)) },
+            cleanText: { text, code in languages.append(code); return clean(text) })
+        coordinator.begin(transcriptURL: f.transcriptURL)
+        f.succeed(0, output: """
+        {"durationSeconds":9,"numSpeakers":2,"numSpeakersMode":"fixed","processingSeconds":1,"warnings":[],
+         "segments":[{"start":0,"end":4,"speaker":0,"label":"Speaker 1"},{"start":4.5,"end":9,"speaker":1,"label":"Speaker 2"}]}
+        """)
+        let text = f.transcript
+        expect(text.contains("[00:00:00] Speaker 1：開會我們") && text.contains("[00:00:05] Speaker 2：謝謝 Grokbot"), "transcript.md split lines cleaned:\n\(text)")
+        expect(!text.contains("开会") && !text.contains("grokbot"), "no raw word text leaks")
+        expect(languages.allSatisfy { $0 == "zh" } && !languages.isEmpty, "the meeting language reaches the cleaner: \(languages)")
     }
 
     // MARK: 協調器

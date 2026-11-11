@@ -80,6 +80,9 @@ final class MeetingDiarizationCoordinator {
     private let askSpeakerCount: (_ last: SpeakerCountChoice?, _ completion: @escaping (SpeakerCountChoice?) -> Void) -> Void
     private let loadLastChoice: () -> SpeakerCountChoice?
     private let saveLastChoice: (SpeakerCountChoice) -> Void
+    /// 對「依說話者切出來的行」再處理文字（參數：文字、會議語言代碼）。App 傳入與逐字稿同一個
+    /// `TextPostProcessor`（verbatim、同一份詞庫）；預設不處理。
+    private let cleanText: (_ text: String, _ languageCode: String?) -> String
 
     private(set) var phase: MeetingDiarizationPhase = .idle
     /// 最近一場「辨識沒有成功、音檔還在」的會議（失敗／略過／取消）。選單據此提供「刪除這場會議的音檔」。
@@ -105,7 +108,9 @@ final class MeetingDiarizationCoordinator {
          modelsDirectory: @escaping () -> URL?,
          askSpeakerCount: @escaping (SpeakerCountChoice?, @escaping (SpeakerCountChoice?) -> Void) -> Void,
          loadLastChoice: @escaping () -> SpeakerCountChoice? = { nil },
-         saveLastChoice: @escaping (SpeakerCountChoice) -> Void = { _ in }) {
+         saveLastChoice: @escaping (SpeakerCountChoice) -> Void = { _ in },
+         cleanText: @escaping (String, String?) -> String = { text, _ in text }) {
+        self.cleanText = cleanText
         self.store = store
         self.locator = locator
         self.runner = runner
@@ -249,7 +254,9 @@ final class MeetingDiarizationCoordinator {
         let body = MeetingStore.bodyAfterFrontmatter(original)
         let incomplete = MeetingFrontmatter.value("segments", in: original) != "complete"
 
-        var aligned = SpeakerAligner.align(segments: records, turns: output.segments)
+        let languageCode = MeetingFrontmatter.value("language", in: original)
+        var aligned = SpeakerAligner.align(segments: records, turns: output.segments,
+                                           clean: { [cleanText] in cleanText($0, languageCode) })
         if incomplete {
             aligned = SpeakerAligner.reconcile(aligned: aligned, records: records,
                                                plain: SpeakerAligner.parsePlainTranscript(body))

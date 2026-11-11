@@ -105,14 +105,15 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             transcriber: MeetingGroqTranscriber(
                 readAPIKey: { [weak self] in self?.credentials.readAPIKey() },
                 makePrompt: { [weak self] language in
-                    let base = language.primary.transcriptionPrompt
+                    let base = MeetingGroqTranscriber.basePrompt(for: language.primary)
                     return self?.vocabularyLearning.prompt(base: base) ?? base
                 }),
             store: meetingStore,
             retainAudio: { [weak self] in
                 guard let self else { return false }
                 return self.settings.meetingDiarizationEnabled && MeetingDiarizerSupport.isAppleSilicon
-            })
+            },
+            vocabularyTerms: { [weak self] in self?.vocabularyStore.entries.filter(\.isEnabled).map(\.term) ?? [] })
         coordinator.onStatusChange = { [weak self] status in self?.renderMeetingStatus(status) }
         coordinator.onError = { [weak self] message in self?.showMeetingError(message) }
         coordinator.onFinished = { [weak self] url, failed in self?.meetingFinished(url, failedChunks: failed) }
@@ -1287,7 +1288,15 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             modelsDirectory: { MeetingDiarizerAssets().modelsDirectory },
             askSpeakerCount: { [weak self] last, completion in completion(self?.askSpeakerCount(last: last)) },
             loadLastChoice: { [weak self] in SpeakerCountChoice(stored: self?.settings.meetingDiarizationSpeakerCount) },
-            saveLastChoice: { [weak self] in self?.settings.meetingDiarizationSpeakerCount = $0.stored })
+            saveLastChoice: { [weak self] in self?.settings.meetingDiarizationSpeakerCount = $0.stored },
+            // 切出來的行與逐字稿同一套文字處理（verbatim、同一份詞庫、不轉中文數字），與 MeetingCoordinator 一致。
+            cleanText: { [weak self] text, languageCode in
+                let terms = self?.vocabularyStore.entries.filter(\.isEnabled).map(\.term) ?? []
+                return TextPostProcessor.process(
+                    text, mode: .verbatim, vocabulary: terms,
+                    applyChineseRules: LanguageOption(rawValue: languageCode ?? "")?.usesChineseTextRules ?? false,
+                    convertChineseNumerals: false)
+            })
         coordinator.onPhaseChange = { [weak self] _ in
             guard let self, !self.isTerminating else { return }
             self.renderDiarizationStatus()

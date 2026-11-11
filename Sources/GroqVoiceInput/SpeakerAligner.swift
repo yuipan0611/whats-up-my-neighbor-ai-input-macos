@@ -96,8 +96,11 @@ enum SpeakerAligner {
 
     // MARK: 對齊
 
+    /// `clean`：對「用字級時間切出來的行」再處理一次文字（App 傳入與逐字稿相同的 TextPostProcessor：簡轉繁、
+    /// 標點、詞庫大小寫）。切出來的行文字來自 Groq 的原始 words（沒有經過處理），所以需要；單一說話者的行
+    /// 沿用已處理過的 segment 文字，不受影響。預設 nil＝不處理（CLI 與純函式測試），本身仍是純函式。
     static func align(segments: [TranscriptSegmentRecord], turns: [SpeakerTurn],
-                      options: Options = Options()) -> [AlignedLine] {
+                      options: Options = Options(), clean: ((String) -> String)? = nil) -> [AlignedLine] {
         let sortedTurns = turns.filter { $0.end > $0.start }.sorted { $0.start < $1.start }
         var lines: [AlignedLine] = []
         for segment in segments.sorted(by: { $0.start < $1.start }) {
@@ -108,7 +111,7 @@ enum SpeakerAligner {
             let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if let words = segment.words, !words.isEmpty {
                 lines.append(contentsOf: alignWords(segment: segment, text: text, words: words,
-                                                    turns: sortedTurns, options: options))
+                                                    turns: sortedTurns, options: options, clean: clean))
             } else {
                 // 沒有字級時間：整個 segment 取重疊最長的人，不切行（沒有字時間就無法切文字）。
                 guard !text.isEmpty else { continue }
@@ -122,7 +125,7 @@ enum SpeakerAligner {
 
     private static func alignWords(segment: TranscriptSegmentRecord, text: String,
                                    words: [TranscriptSegmentRecord.Word], turns: [SpeakerTurn],
-                                   options: Options) -> [AlignedLine] {
+                                   options: Options, clean: ((String) -> String)?) -> [AlignedLine] {
         // 1. 每個詞取重疊最長的說話者
         var speakers: [Int?] = words.map {
             dominantSpeaker(start: $0.s, end: $0.e, turns: turns, maxDistance: options.maxNearestDistance)
@@ -180,8 +183,9 @@ enum SpeakerAligner {
         }
         // 7. 多個人：用字級時間切行（這時文字來自詞，標點可能少）
         return runs.compactMap { run in
-            let joined = words[run.first...run.last].map(\.w).joined()
+            var joined = words[run.first...run.last].map(\.w).joined()
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let clean { joined = clean(joined).trimmingCharacters(in: .whitespacesAndNewlines) }
             guard !joined.isEmpty else { return nil }
             return AlignedLine(start: words[run.first].s, end: words[run.last].e, speaker: run.speaker, text: joined)
         }
