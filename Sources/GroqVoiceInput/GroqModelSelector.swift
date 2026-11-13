@@ -54,11 +54,12 @@ enum GroqModelSelector {
             throw VoiceTypeError.message("Groq 未提供任何可用的對話語言模型。")
         }
 
-        let modelMap = Dictionary(uniqueKeysWithValues: chatModels.map { ($0.id, $0) })
+        // Membership does not require unique model records; /models may repeat an id.
+        let availableIDs = Set(chatModels.map(\.id))
 
         // 1. 依偏好清單依序挑選
         for candidate in preferredOrder {
-            if modelMap[candidate] != nil {
+            if availableIDs.contains(candidate) {
                 return candidate
             }
         }

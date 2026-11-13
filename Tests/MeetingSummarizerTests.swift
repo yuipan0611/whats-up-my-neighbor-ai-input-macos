@@ -130,6 +130,7 @@ enum MeetingSummarizerTests {
         testModelSelectionFallbackToSecondPreference()
         testModelSelectionFallbackToMaxContextWindow()
         testModelSelectionExcludesNonChatModels()
+        testModelSelectionToleratesDuplicateIDs()
         testChatRequestAssembly()
         testChatResponseParsingAndFrontmatter()
         testEndToEndOfflineSummaryGeneration()
@@ -157,11 +158,14 @@ enum MeetingSummarizerTests {
         testGptOssModelParameters()
         testFinishReasonValidationAndPreservesPriorSummary()
         testRateLimitHeaderParsing()
+        testRateLimitTimeParsingRejectsNonFiniteAndOverflow()
         testRateLimit429RetrySuccess()
         testRateLimit429RetryCancellation()
+        testOversizedRateLimitStopsBeforeSchedulingAndPreservesSummary()
+        testRateLimitFallbackAndUpperBoundaryStayBounded()
         testChunkThresholdReducedTo3500()
         testSystemPromptConstraints()
-        print("Meeting summarizer tests passed (36 suites)")
+        print("Meeting summarizer tests passed (40 suites)")
     }
 
     // MARK: - 模型解析與挑選測試
@@ -227,6 +231,17 @@ enum MeetingSummarizerTests {
             failed = true
         }
         expectTrue(failed, "當清單僅有音訊與守衛模型時應拋出錯誤")
+    }
+
+    static func testModelSelectionToleratesDuplicateIDs() {
+        let json = #"{"data":[{"id":"openai/gpt-oss-120b","context_window":4096},{"id":"openai/gpt-oss-120b","context_window":131072},{"id":"custom-chat","context_window":65536}]}"#
+        let models = try! GroqModelSelector.parseModels(from: Data(json.utf8))
+        expect(try! GroqModelSelector.selectModel(from: models), "openai/gpt-oss-120b")
+        expect(try! GroqModelSelector.selectModel(from: models, preferredOrder: []), "openai/gpt-oss-120b")
+        let filtered = [GroqModelInfo(id: "duplicate", contextWindow: 1000000, active: false),
+                        GroqModelInfo(id: "duplicate", contextWindow: 4096, active: true),
+                        GroqModelInfo(id: "other-chat", contextWindow: 8192, active: true)]
+        expect(try! GroqModelSelector.selectModel(from: filtered, preferredOrder: []), "other-chat")
     }
 
     // MARK: - 提示詞與請求組裝測試
@@ -1414,6 +1429,17 @@ enum MeetingSummarizerTests {
         expectTrue(MeetingSummarizer.parseRateLimitWaitInterval(from: respNone) == nil, "無標頭時應回傳 nil")
     }
 
+    static func testRateLimitTimeParsingRejectsNonFiniteAndOverflow() {
+        let overflowingHours = String(repeating: "9", count: 307) + "h"
+        let overflowingSum = String(repeating: "9", count: 308) + "s" + String(repeating: "9", count: 308) + "s"
+        for raw in ["inf", "Infinity", "+inf", "NaN", "1e309", overflowingHours, overflowingSum] {
+            expectTrue(MeetingSummarizer.parseTimeString(raw) == nil, "Nonfinite/overflow wait must be rejected: \(raw.prefix(16))")
+        }
+        let response = HTTPURLResponse(url: URL(string: "https://api.groq.com")!, statusCode: 429, httpVersion: nil,
+                                       headerFields: ["Retry-After":"Infinity", "x-ratelimit-remaining-tokens":"0", "x-ratelimit-reset-tokens":"12s"])!
+        expect(MeetingSummarizer.parseRateLimitWaitInterval(from: response), 12.0)
+    }
+
     /// 驗證收到 429 帶 Retry-After 時，進入等待、通知選單狀態，並在重試後成功
     static func testRateLimit429RetrySuccess() {
         let config = URLSessionConfiguration.ephemeral
@@ -1534,6 +1560,74 @@ enum MeetingSummarizerTests {
         expectTrue(job.isCancelled, "job 應標記為已取消")
         expectTrue(job.pendingWorkItem == nil, "cancel 後 pendingWorkItem 應被清理")
         expectTrue(!didExecuteWorkItem, "已取消的等待項目絕不可被執行")
+    }
+
+    static func testOversizedRateLimitStopsBeforeSchedulingAndPreservesSummary() {
+        for headers in [["Retry-After":"1e100"],
+                        ["Retry-After":"300.001"],
+                        ["x-ratelimit-remaining-tokens":"0", "x-ratelimit-reset-tokens":"1e100"],
+                        ["x-ratelimit-remaining-requests":"0", "x-ratelimit-reset-requests":"1e100"]] {
+            let config = URLSessionConfiguration.ephemeral
+            config.protocolClasses = [OfflineMeetingProtocol.self]
+            let session = URLSession(configuration: config)
+            defer { session.invalidateAndCancel() }
+            OfflineMeetingProtocol.reset(
+                modelsJSON: #"{"data":[{"id":"openai/gpt-oss-120b","context_window":131072}]}"#,
+                chatResponses: [#"{"error":{"message":"Rate limit reached"}}"#],
+                statusCodes: [429], headerFieldsSequence: [headers])
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try! FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let summary = directory.appendingPathComponent("summary.md")
+            try! "PRIOR_GOOD_SUMMARY".write(to: summary, atomically: true, encoding: .utf8)
+            let semaphore = DispatchSemaphore(value: 0)
+            var scheduled = false
+            var capturedError: Error?
+            MeetingSummarizer.generateSummary(transcript: "[00:00:00] 合成測試。", apiKey: "mock-key", session: session,
+                delayScheduler: { _, block in scheduled = true; return DispatchWorkItem(block: block) }) { result in
+                    switch result {
+                    case .success(let markdown): try! markdown.write(to: summary, atomically: true, encoding: .utf8)
+                    case .failure(let error): capturedError = error
+                    }
+                    semaphore.signal()
+                }
+            expect(semaphore.wait(timeout: .now() + 5), .success)
+            expectTrue(capturedError != nil, "Oversized wait must finish with an error")
+            expectTrue(!scheduled, "Oversized wait must not reach delay scheduler")
+            expect(OfflineMeetingProtocol.capturedRequests.filter { $0.url?.path.hasSuffix("/chat/completions") == true }.count, 1)
+            expect(try! String(contentsOf: summary, encoding: .utf8), "PRIOR_GOOD_SUMMARY")
+        }
+    }
+
+    static func testRateLimitFallbackAndUpperBoundaryStayBounded() {
+        for raw in ["Infinity", "NaN", "1e309", String(repeating: "9", count: 307) + "h", "300"] {
+            let config = URLSessionConfiguration.ephemeral
+            config.protocolClasses = [OfflineMeetingProtocol.self]
+            let session = URLSession(configuration: config)
+            defer { session.invalidateAndCancel() }
+            OfflineMeetingProtocol.reset(
+                modelsJSON: #"{"data":[{"id":"openai/gpt-oss-120b","context_window":131072}]}"#,
+                chatJSON: #"{"error":{"message":"Rate limit reached"}}"#,
+                statusCodes: [429, 429, 429, 429],
+                headerFieldsSequence: Array(repeating: ["Retry-After":raw], count: 4))
+            var delays: [TimeInterval] = []
+            var didFail = false
+            let semaphore = DispatchSemaphore(value: 0)
+            MeetingSummarizer.generateSummary(transcript: "[00:00:00] 合成測試。", apiKey: "mock-key", session: session,
+                delayScheduler: { delay, block in
+                    delays.append(delay)
+                    let item = DispatchWorkItem(block: block)
+                    DispatchQueue.global().async(execute: item)
+                    return item
+                }) { result in
+                    if case .failure = result { didFail = true }
+                    semaphore.signal()
+                }
+            expect(semaphore.wait(timeout: .now() + 5), .success)
+            expectTrue(didFail, "Repeated 429 must eventually finish with an error")
+            expect(delays, Array(repeating: raw == "300" ? 300.0 : 5.0, count: 3))
+            expect(OfflineMeetingProtocol.capturedRequests.filter { $0.url?.path.hasSuffix("/chat/completions") == true }.count, 4)
+        }
     }
 
     /// 驗證長會議分段門檻已調降為 3,500 字元
