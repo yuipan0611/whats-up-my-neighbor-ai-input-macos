@@ -685,8 +685,8 @@ enum MeetingSummarizer {
         guard !trimmed.isEmpty else { return nil }
 
         // 純數字（視為秒數）
-        if let directSeconds = Double(trimmed), directSeconds >= 0 {
-            return directSeconds
+        if let directSeconds = Double(trimmed) {
+            return directSeconds.isFinite && directSeconds >= 0 ? directSeconds : nil
         }
 
         // 依序比對 (數值, 單位)，單位支援 h, m (分), s, ms (毫秒)
@@ -704,7 +704,7 @@ enum MeetingSummarizer {
             guard match.numberOfRanges == 3 else { return nil }
             let numStr = nsString.substring(with: match.range(at: 1))
             let unitStr = nsString.substring(with: match.range(at: 2)).lowercased()
-            guard let val = Double(numStr) else { return nil }
+            guard let val = Double(numStr), val.isFinite else { return nil }
 
             switch unitStr {
             case "h":
@@ -718,6 +718,8 @@ enum MeetingSummarizer {
             default:
                 return nil
             }
+            // Finite components can still overflow during unit scaling or addition.
+            guard totalSeconds.isFinite else { return nil }
             matchedLength += match.range.length
         }
 
@@ -752,6 +754,9 @@ enum MeetingSummarizer {
     }
 
     static let maxRateLimitRetries: Int = 3
+    // A desktop summary must not park indefinitely on an untrusted header.
+    // Longer valid waits fail with the existing 429 error; never retry earlier.
+    static let maxAutomaticRateLimitWait: TimeInterval = 300
 
     /// 執行單次 Chat Completion 呼叫（綁定 MeetingSummaryJob，支援取消、429 等待重試與選單狀態更新）
     static func executeChatCompletion(
@@ -788,6 +793,11 @@ enum MeetingSummarizer {
                 // 遇到 429 速率限制且未超過重試上限：讀取 header 等待後重發
                 if http.statusCode == 429 && retryCount < maxRetries {
                     let waitInterval = parseRateLimitWaitInterval(from: http) ?? 5.0
+                    guard waitInterval.isFinite, waitInterval >= 0,
+                          waitInterval <= maxAutomaticRateLimitWait else {
+                        completion(.failure(self.error(from: data, statusCode: http.statusCode)))
+                        return
+                    }
                     let waitSeconds = max(0.5, waitInterval)
                     let displaySeconds = max(1, Int(ceil(waitSeconds)))
                     statusHandler?("等待 Groq 額度，約 \(displaySeconds) 秒")
