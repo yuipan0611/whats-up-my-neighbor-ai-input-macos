@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+.env.*
+.dev.vars*
+credentials*.json
+downloaded-results/
+local-results/
+.dependencies/
+.validation/
+pilot-results/
+gha-creds-*.json
