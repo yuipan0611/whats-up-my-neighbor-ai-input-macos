@@ -12,12 +12,21 @@ struct PreviewTests {
             precondition(condition(), message)
         }
 
-        // The desktop is a two-dimensional roaming area, including negative
-        // monitor origins and a narrow display that permits only vertical travel.
-        for roamArea in [CGRect(x: -1800, y: -200, width: 1800, height: 1100),
-                         CGRect(x: 0, y: 0, width: 128, height: 728)] {
+        // Cover negative origins, vertical-only travel, and corners shared
+        // with a display that appears earlier in the display list.
+        let negativeDisplay = CGRect(x: -1800, y: -200, width: 1800, height: 1100)
+        let narrowDisplay = CGRect(x: 0, y: 0, width: 128, height: 728)
+        let primaryDisplay = CGRect(x: 0, y: 0, width: 1440, height: 850)
+        let rightDisplay = CGRect(x: 1440, y: 0, width: 1024, height: 768)
+        let upperDisplay = CGRect(x: 0, y: 850, width: 1024, height: 768)
+        for (roamArea, displays) in [(negativeDisplay, [negativeDisplay]),
+                                     (narrowDisplay, [narrowDisplay]),
+                                     (rightDisplay, [primaryDisplay, rightDisplay]),
+                                     (upperDisplay, [primaryDisplay, upperDisplay])] {
             var roaming = DesktopPetModel(seed: 42)
-            let roamWorld = DesktopPetWorld(areas: [roamArea], idleSeconds: 30)
+            let roamWorld = DesktopPetWorld(areas: displays,
+                                            cursor: CGPoint(x: roamArea.midX, y: roamArea.midY),
+                                            idleSeconds: 30)
             roaming.setReleased(true, now: 0, world: roamWorld)
             var corners = Set<Int>(), diagonal = false, vertical = false
             for tick in 0...24000 {

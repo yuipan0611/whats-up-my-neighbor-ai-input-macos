@@ -300,7 +300,10 @@ struct DesktopPetModel {
             lastTick = now
             return
         }
-        let area = areas.first(where: { $0.insetBy(dx: -1, dy: -1).contains(frame.origin) })
+        // A corner on a shared edge can match both expanded display frames.
+        let petFrame = frame
+        let area = areas.first(where: { $0.contains(petFrame) })
+            ?? areas.first(where: { $0.insetBy(dx: -1, dy: -1).contains(petFrame.origin) })
             ?? areas.min(by: { distance($0.center, origin) < distance($1.center, origin) })!
         origin = Self.clamp(origin, to: area)
         if let id = perchID, !world.perches.contains(where: { $0.id == id }) {
