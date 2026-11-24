@@ -72,6 +72,20 @@ What's up my neighbor は、軽量なネイティブ macOS メニューバー音
 
 猫のメニューで「檢查更新…」（アップデートを確認）を選ぶと、**1.4.7（build 1014）** をインストールして、デスクトップでこの 2 機能を試せます。[更新とデスクトップ QA の手順（繁体字中国語）](docs/QA_CLIPBOARD_CAT.md)。
 
+## 9 種類の毛色から、お気に入りの一匹を
+
+メニューバーの「選擇貓咪花色」（猫の毛色を選ぶ）から変更できます。デスクトップ猫と録音オーバーレイに同じ毛色が反映され、選択は保存されます。
+
+<p align="center">
+  <img src="docs/media/screenshots/desktop-cat-coats.png" alt="9 種類のデスクトップ猫：オリジナル黒猫、黒猫、白猫、グレー、茶トラ、ハチワレ、三毛、サビ、ポイントカラー" width="780"><br>
+  <sub>オリジナル黒猫 · 黒猫 · 白猫 · グレー · 茶トラ · ハチワレ · 三毛 · サビ · ポイントカラー</sub>
+</p>
+
+<p align="center">
+  <img src="docs/media/screenshots/recording-cat-coats.png" alt="9 種類の毛色の Mac 録音オーバーレイ" width="820"><br>
+  <sub>録音オーバーレイにも同じ 9 種類の毛色が反映されます。</sub>
+</p>
+
 ## スクリーンショット
 
 <p align="center">

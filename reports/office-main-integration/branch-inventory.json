@@ -1,0 +1,34 @@
+{
+  "claude/agent-hands-prd": {
+    "sha": "a2da60868465dcb39870e3d96057e62cf3cbeb13",
+    "included_in_history": true
+  },
+  "codex/vscode-agent-workbench": {
+    "sha": "fc96b91379bce1affc3fe2dec3af37ff5998e8af",
+    "included_in_history": true
+  },
+  "origin/codex/vps-browser-session-foundation": {
+    "sha": "515f9eeaea161e021eb26a9076b60a253d62f649",
+    "included_in_history": true
+  },
+  "origin/codex/vps-browser-viewer-takeover": {
+    "sha": "57fbdbf17ab89a7bf3198432edcf6025f82035a4",
+    "included_in_history": true
+  },
+  "origin/codex/office-tracing-step1": {
+    "sha": "af3f40e455aa2916eb37d70a5c253bb54e803ca7",
+    "included_in_history": true
+  },
+  "origin/codex/office-portable-observability": {
+    "sha": "0421639b21d05df60380d47de52260c2fccc0e17",
+    "included_in_history": true
+  },
+  "origin/codex/office-portability-step1b": {
+    "sha": "8d86405c078f3779c6aef957b1a7cad4072fefea",
+    "included_in_history": true
+  },
+  "codex/neighbor-office-v1": {
+    "sha": "4080a3befb1f5521e82af13581a25119b17b9ad1",
+    "included_in_history": true
+  }
+}

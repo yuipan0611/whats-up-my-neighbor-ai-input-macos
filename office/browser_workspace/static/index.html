@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <meta name="referrer" content="no-referrer">
+  <title>工作瀏覽器 · 貓咪辦公室</title>
+  <link rel="stylesheet" href="/browser/viewer.css">
+  <script type="module" src="/browser/viewer.js"></script>
+</head>
+<body>
+  <main id="browser-app" data-mode="unknown" data-connection="idle" data-stream-mode="none" data-private="false">
+    <header class="page-header">
+      <div>
+        <a class="back-link" href="/">← 返回辦公室</a>
+        <p class="eyebrow">貓咪辦公室</p>
+        <h1>工作瀏覽器</h1>
+        <p class="intro">在同一個遠端 Chrome 裡觀看、接手，再交還控制權。</p>
+      </div>
+      <div id="connection-status" class="connection-badge" role="status" aria-live="polite">正在確認連線</div>
+    </header>
+
+    <section class="control-card" aria-labelledby="state-title">
+      <div class="state-heading">
+        <div class="state-copy">
+          <p class="eyebrow">瀏覽器控制權</p>
+          <h2 id="state-title">正在讀取狀態</h2>
+          <p id="state-summary">確認這台裝置的辦公室配對後，會載入畫面。</p>
+        </div>
+        <span id="privacy-badge" class="privacy-badge" hidden>私人接管</span>
+      </div>
+      <div class="main-actions" aria-label="瀏覽器控制">
+        <button id="takeover" type="button" data-action="takeover" aria-controls="rfb-screen" disabled>接管</button>
+        <button id="release" class="secondary" type="button" data-action="release" aria-controls="rfb-screen" disabled>交還 Agent</button>
+        <button id="reconnect" class="secondary reconnect" type="button" data-action="reconnect" disabled>重新連線</button>
+      </div>
+      <p id="notice" class="notice" role="status" aria-live="polite"></p>
+      <a id="pairing-link" class="pairing-link" href="/" hidden>返回辦公室配對這台裝置 →</a>
+    </section>
+
+    <section class="screen-card" aria-labelledby="screen-title">
+      <div class="screen-toolbar">
+        <h2 id="screen-title">遠端畫面</h2>
+        <span id="interaction-label" class="interaction-label">尚未連線</span>
+        <button id="keyboard-toggle" class="keyboard-toggle" type="button" aria-label="開啟手機鍵盤" aria-pressed="false" aria-controls="keyboard-input" disabled>鍵盤</button>
+      </div>
+      <div class="screen-stage">
+        <div id="rfb-screen" role="region" aria-label="遠端 Chrome 畫面"></div>
+        <div id="viewer-placeholder" class="viewer-placeholder">
+          <svg class="window-symbol" viewBox="0 0 64 48" aria-hidden="true"><rect x="2" y="2" width="60" height="44" rx="8"></rect><path d="M3 14h58M12 8h1m6 0h1m6 0h1"></path><path d="m24 25-5 5 5 5m16-10 5 5-5 5"></path></svg>
+          <strong id="placeholder-title">準備遠端畫面</strong>
+          <p id="placeholder-detail">瀏覽器會留在 VPS，這個頁面只負責觀看與接管。</p>
+        </div>
+        <label class="sr-only" for="keyboard-input">遠端鍵盤輸入，文字會即時傳送到接管中的瀏覽器</label>
+        <textarea id="keyboard-input" class="keyboard-input" inputmode="text" enterkeyhint="enter" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" tabindex="-1" rows="1" disabled></textarea>
+      </div>
+      <div id="keyboard-tools" class="keyboard-tools" aria-label="遠端快捷鍵" hidden>
+        <span>輸入到遠端瀏覽器</span>
+        <button type="button" data-key="Tab">Tab</button>
+        <button type="button" data-key="Escape">Esc</button>
+        <button type="button" data-key="Backspace" aria-label="退格">⌫</button>
+        <button type="button" data-key="Enter" aria-label="Enter 換行或確認">↵ Enter</button>
+      </div>
+      <p id="screen-hint" class="screen-hint">先觀看；需要輸入或登入時，按「接管」。手機可轉橫向取得更大的畫面。</p>
+    </section>
+
+    <footer class="page-footer">
+      <p>關閉此頁不會關閉遠端 Chrome。接管途中斷線會保持暫停，需明確交還控制權。</p>
+      <p>這裡顯示瀏覽器的控制權；任務進度請回辦公室查看。</p>
+      <p><a href="/browser/notices.txt">開源元件授權</a></p>
+    </footer>
+    <noscript><p class="noscript-note">工作瀏覽器需要啟用 JavaScript。你可以先返回辦公室查看任務。</p></noscript>
+  </main>
+</body>
+</html>

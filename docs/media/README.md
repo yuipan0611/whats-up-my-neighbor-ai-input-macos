@@ -42,3 +42,12 @@ README 與 [完整使用指南](../GUIDE.md) 用的圖片。
 | `desktop-pet-walking-card.gif` | 本資料夾的 `../desktop-pet-walking.gif` | 300×300，四邊各留 22px |
 
 App 改版讓畫面不同時，網站與這裡一起更新；原圖更新後，重新產生加底卡版本。
+
+## README 九色展示（2026-11-11）
+
+以本 repo `9126c02` 執行 `scripts/test-cat-appearance.sh`，1,074 項檢查通過；以下兩圖由產品原生 renderer 直接輸出，原檔複製，並未以生成模型改畫貓咪。桌面圖也複製至 Windows README 以展示同源花色。
+
+| 檔案 | 原生輸出 | SHA-256 |
+|---|---|---|
+| `screenshots/desktop-cat-coats.png` | `build/appearance/natural-coats.png` | `cfb6113ec4c25f47ada97148b93d53fb29439f624a0fb97a65540498109791ff` |
+| `screenshots/recording-cat-coats.png` | `build/appearance/recording-coats.png` | `01e812c23c95409b85397b7f01badfa464673da6393f4bb7da394e74f9a476b7` |

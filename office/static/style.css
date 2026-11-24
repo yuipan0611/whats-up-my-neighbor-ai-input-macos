@@ -20,8 +20,8 @@ h1{display:flex;align-items:center;gap:14px}.mascot{object-fit:contain;flex-shri
   .mobile-icon-button img,.mobile-model-button img,.mobile-attach-menu img,.mobile-process img,.mobile-attachment-chip img{width:21px;height:21px;object-fit:contain}
   .mobile-icon-button:active,.mobile-topbar .mobile-icon-button:hover{background:#f3f3f4}
   .mobile-menu-panel{position:absolute;right:12px;top:56px;min-width:180px;background:#fff;border:1px solid #e7e8ea;border-radius:17px;padding:6px;box-shadow:0 14px 40px #151a231e;z-index:10}
-  .mobile-menu-panel button{display:block;width:100%;text-align:left;background:transparent;border:0;color:#17181a;font-size:14px;padding:12px;border-radius:10px}
-  .mobile-menu-panel button:hover{background:#f4f4f5}
+  .mobile-menu-panel button,.mobile-menu-panel a{display:block;width:100%;box-sizing:border-box;text-align:left;background:transparent;border:0;color:#17181a;font-size:14px;padding:12px;border-radius:10px;text-decoration:none}
+  .mobile-menu-panel button:hover,.mobile-menu-panel a:hover{background:#f4f4f5}
   .mobile-thread,.mobile-task-list{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:16px 20px 12px}
   .mobile-thread{scrollbar-width:none}.mobile-thread::-webkit-scrollbar{display:none}
   .mobile-turn{max-width:640px;margin:0 auto 20px}

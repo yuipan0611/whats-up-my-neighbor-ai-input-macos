@@ -14,7 +14,8 @@ enum PasteDiagnosticsTests {
         try testDisabledDoesNotWrite(directory)
         try testBoundedPrivateReport(directory)
         try testServicesDoNotRecordContent(directory)
-        print("PasteDiagnosticsTests passed: opt-in only, private bounded JSON, typed metadata, no transcript or destination identity")
+        try testFailureSurvivesNextCapture(directory)
+        print("PasteDiagnosticsTests passed: opt-in only, private bounded JSON, typed metadata, retained last failure, no transcript or destination identity")
     }
 
     private static func testDisabledDoesNotWrite(_ directory: URL) throws {
@@ -70,6 +71,40 @@ enum PasteDiagnosticsTests {
         let leftoverTemporaryFiles = try FileManager.default.contentsOfDirectory(atPath: directory.path)
             .filter { $0.hasPrefix(".neighbor-paste-") }
         precondition(leftoverTemporaryFiles.isEmpty)
+    }
+
+    private static func testFailureSurvivesNextCapture(_ directory: URL) throws {
+        let output = directory.appendingPathComponent("last-failure.json")
+        let environment = [PasteDiagnostics.environmentKey: output.path]
+        let logger = PasteDiagnostics(environment: environment)
+        logger.record(.init(tag: .capture, trusted: true), beginCapture: true)
+        logger.record(.init(tag: .recordingStop, stopMethod: .hudButton))
+        logger.record(.init(tag: .validation, elementMatches: false, windowMatches: true))
+        logger.record(.init(tag: .insertionResult, failure: .targetChanged, copySucceeded: true))
+        let failure = try readReport(output)["lastFailure"] as! [[String: Any]]
+        precondition(failure.count == 4 && failure.last?["failure"] as? String == "targetChanged")
+        logger.record(.init(tag: .capture, trusted: true), beginCapture: true)
+        logger.record(.init(tag: .recordingStop, stopMethod: .shortcut))
+        logger.record(.init(tag: .insertionResult, copySucceeded: true, postEventReturned: true))
+        for _ in 0..<50 { logger.record(.init(tag: .stateChange, state: .idle)) }
+        let report = try readReport(output)
+        precondition(report["schemaVersion"] as? Int == 2)
+        precondition((report["events"] as! [[String: Any]]).count == 40)
+        let saved = report["lastFailure"] as! [[String: Any]]
+        precondition(NSArray(array: saved).isEqual(to: failure), "A later success must not erase a failure")
+        precondition(saved[1]["stopMethod"] as? String == "hudButton")
+
+        let relaunched = PasteDiagnostics(environment: environment)
+        relaunched.record(.init(tag: .startup))
+        let restored = try readReport(output)["lastFailure"] as! [[String: Any]]
+        precondition(NSArray(array: restored).isEqual(to: failure),
+                     "Relaunching the same opt-in diagnostic session preserves its failure")
+        relaunched.record(.init(tag: .capture), beginCapture: true)
+        relaunched.record(.init(tag: .insertionResult, failure: .accessibilityDenied, copySucceeded: true))
+        let latest = try readReport(output)["lastFailure"] as! [[String: Any]]
+        precondition(latest.count == 2 && latest.last?["failure"] as? String == "accessibilityDenied")
+        let mode = try FileManager.default.attributesOfItem(atPath: output.path)[.posixPermissions] as! NSNumber
+        precondition(mode.intValue == 0o600)
     }
 
     private static func testServicesDoNotRecordContent(_ directory: URL) throws {

@@ -1,0 +1,23 @@
+[Unit]
+Description=Persistent VPS Chrome with private Office viewer and human takeover
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+WorkingDirectory=%h/neighbor-office/current
+ExecStart=%h/.local/share/nekonode-browser-venv/bin/python -I %h/neighbor-office/current/browser_service.py --profile-root %h/.local/share/nekonode-browser-profiles --profile-id personal --runtime-dir %t/neighbor-browser
+RuntimeDirectory=neighbor-browser
+RuntimeDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=50
+KillMode=control-group
+MemoryHigh=1500M
+MemoryMax=2500M
+CPUQuota=150%
+
+[Install]
+WantedBy=default.target

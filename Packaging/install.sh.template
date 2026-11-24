@@ -27,7 +27,7 @@ main() {
   }
   ditto -x -k "$work/package.zip" "$work/package"
   # The bundled installer keeps the existing location, signature identity,
-  # backup/rollback and login item. Detach stdin so it never reads this script.
+  # transactional rollback, successful-install cleanup and login item. Detach stdin so it never reads this script.
   zsh "$work/package/Groq-AI語音輸入-v$version/安裝.command" </dev/null
 }
 

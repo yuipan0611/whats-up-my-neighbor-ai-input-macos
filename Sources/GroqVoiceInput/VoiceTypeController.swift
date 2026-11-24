@@ -170,6 +170,11 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
                 self.showAPIKeyDialog(firstRun: true)
             }
         }
+        // QA uses the existing in-app viewer, so a stale standalone preview cannot mask acceptance.
+        if Bundle.main.object(forInfoDictionaryKey: "NekoDevelopmentRevision") != nil,
+           ProcessInfo.processInfo.environment["NEKO_QA_OPEN_VPS"] == "1" {
+            DispatchQueue.main.async { [weak self] in self?.showVPSDesktop() }
+        }
     }
 
     // 應用程式即將關閉：
@@ -181,6 +186,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         clipboardHistoryStore.flush()
         nekoHUD.hide()
         catOverlay.dispose()
+        vpsDesktopWindow?.shutdown()
         desktopPet.dispose()
         correctionMonitor.stop()
         dictation.shutdown()
@@ -190,7 +196,6 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
         clipboardPasteGesture.stop()
         hotKeys.unregisterAll()
         remoteBridge.stop()
-        vpsDesktopWindow?.shutdown()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -202,6 +207,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     private func configureStatusItem() {
         statusMenu.configure(target: self, toggleTitle: toggleMenuTitle(), relayTitle: relayMenuTitle(), clipboardMenu: clipboardHistoryMenu.menu, actions: [
             "openCatSettings": #selector(openCatSettings),
+            "openOfficialWebsite": #selector(openOfficialWebsite),
             "selectCatCoat": #selector(selectCatCoat(_:)),
             "showVocabularyWindow": #selector(showVocabularyWindow),
             "showNekoPreview": #selector(showNekoPreview),
@@ -313,7 +319,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     /// Connect presentation only; the coordinator owns recorder and network callbacks.
     private func configureDictation() {
         nekoHUD.onCancel = { [weak self] in self?.dictation.cancel() }
-        nekoHUD.onFinish = { [weak self] in self?.dictation.stop() }
+        nekoHUD.onFinish = { [weak self] in self?.finishDictation(method: .hudButton) }
         nekoHUD.onStart = { [weak self] in self?.toggleRecording() }
         dictation.onStateChange = { [weak self] state in self?.renderDictationState(state) }
         dictation.onError = { [weak self] message in self?.showError(message) }
@@ -692,7 +698,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
 
     @MainActor @objc private func showVPSDesktop() {
         guard VPSDesktopAvailability.isAvailable() else { return }
-        if vpsDesktopWindow == nil { vpsDesktopWindow = VPSDesktopWindowController() }
+        if vpsDesktopWindow == nil { vpsDesktopWindow = VPSDesktopWindowController(pet: desktopPet) }
         vpsDesktopWindow?.present()
     }
 
@@ -733,7 +739,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleFromMenu() {
-        toggleRecording()
+        toggleRecording(stopMethod: .menu)
     }
 
     @objc private func showClipboardPicker() {
@@ -762,7 +768,13 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
     // 1. 若當前正在錄音，立即結束錄音並轉入轉錄階段（dictation.stop）。
     // 2. 若為閒置，依序檢查：狀態機能否啟動、API 金鑰是否存在、麥克風隱私權限、音訊輸入硬體裝置。
     // 3. 在啟動錄音的「同一瞬間」立即快照目前的焦點文字輸入框（captureTarget），避免使用者在錄音期間切換視窗。
-    func toggleRecording(useAlternateMode: Bool = false) {
+    private func finishDictation(method: PasteDiagnostics.StopMethod) {
+        guard dictation.state == .recording else { return }
+        PasteDiagnostics.shared.record(.init(tag: .recordingStop, stopMethod: method))
+        dictation.stop()
+    }
+
+    func toggleRecording(useAlternateMode: Bool = false, stopMethod: PasteDiagnostics.StopMethod = .shortcut) {
         clipboardPasteGesture.cancelPending()
         clipboardPicker.dismiss()
         if PasteDiagnostics.shared.isEnabled {
@@ -773,7 +785,7 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             PasteDiagnostics.shared.record(event)
         }
         if dictation.state == .recording {
-            dictation.stop()
+            finishDictation(method: stopMethod)
             return
         }
         guard dictation.canStart else { NSSound.beep(); return }
@@ -970,6 +982,12 @@ final class VoiceTypeController: NSObject, NSApplicationDelegate {
             } catch {
                 showError("無法把金鑰存入鑰匙圈：\(error.localizedDescription)")
             }
+        }
+    }
+
+    @objc private func openOfficialWebsite() {
+        if let url = URL(string: "https://nekonode.cloud") {
+            NSWorkspace.shared.open(url)
         }
     }
 

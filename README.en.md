@@ -72,6 +72,20 @@ What's up my neighbor is a lightweight, native macOS menu bar dictation app. Pre
 
 Choose “檢查更新…” (Check for Updates) from the cat menu to install **1.4.7 (build 1014)** and try both features directly on your desktop. [Update and desktop QA steps (Traditional Chinese)](docs/QA_CLIPBOARD_CAT.md).
 
+## Nine coats. Pick your companion.
+
+Choose a coat from 「選擇貓咪花色」 (Choose cat coat) in the menu bar. Your desktop cat and recording overlay change together, and your choice is saved.
+
+<p align="center">
+  <img src="docs/media/screenshots/desktop-cat-coats.png" alt="Nine built-in desktop cat coats: original black, black, white, gray, orange tabby, tuxedo, calico, tortoiseshell and colorpoint" width="780"><br>
+  <sub>Original black · Black · White · Gray · Orange tabby · Tuxedo · Calico · Tortoiseshell · Colorpoint</sub>
+</p>
+
+<p align="center">
+  <img src="docs/media/screenshots/recording-cat-coats.png" alt="Mac recording overlays in all nine coats" width="820"><br>
+  <sub>The same nine coats also appear in the recording overlay.</sub>
+</p>
+
 ## Screenshots
 
 <p align="center">

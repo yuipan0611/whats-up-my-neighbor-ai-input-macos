@@ -160,6 +160,34 @@ struct DesktopPetModel {
     var frame: CGRect { CGRect(origin: origin, size: Self.size) }
     var isTravelling: Bool { journey != nil }
 
+    /// Move the one desktop cat between its saved home position and the VPS
+    /// window without changing the current pickup or landing drawing.
+    mutating func relocateForTransfer(to point: CGPoint, now: TimeInterval, world: DesktopPetWorld) {
+        guard released, point.x.isFinite, point.y.isFinite, now.isFinite,
+              let area = validAreas(world).first(where: { $0.contains(point) })
+                ?? validAreas(world).min(by: { distance($0.center, point) < distance($1.center, point) }) else { return }
+        origin = Self.clamp(point, to: area)
+        journey = nil
+        perchID = nil
+        lastTick = now
+        wasPaused = false
+    }
+
+    /// The return button changes location immediately, then uses the approved
+    /// held-to-seated 400ms frames at the original native size.
+    mutating func arriveFromTransfer(at point: CGPoint, now: TimeInterval, world: DesktopPetWorld) {
+        guard released else { return }
+        relocateForTransfer(to: point, now: now, world: world)
+        cancelPointer(now: now)
+        let held = DesktopPetLift(shoulder: 1, hip: 1, paws: 1, spriteFrame: DesktopPetLift.carryFrame)
+        liftStart = held
+        lift = world.reduceMotion ? DesktopPetLift(spriteFrame: DesktopPetLift.lastFrame) : held
+        isSettling = !world.reduceMotion
+        setPose(.sitting, now: now, duration: 2)
+        interactionUntil = now + 2
+        lastTick = now
+    }
+
     mutating func setReleased(_ value: Bool, now: TimeInterval, world: DesktopPetWorld) {
         released = value
         cancelPointer(now: now)
